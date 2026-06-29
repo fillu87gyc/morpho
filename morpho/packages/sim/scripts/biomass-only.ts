@@ -28,7 +28,7 @@ env.placeFood({ x: 20, y: 80 }, 7, 1.0);
 env.placeStone({ x: 50, y: 55 }, 5);
 
 const membrane = new Membrane(WORLD, FIELD, rng);
-const sources = [{ pos: { x: 50, y: 30 }, rate: 1.0 }];
+const sources = [{ pos: { x: 50, y: 30 } }];
 
 function blend(png: PNG, x: number, y: number, r: number, g: number, b: number, a: number) {
   if (x < 0 || y < 0 || x >= W || y >= H) return;
@@ -68,10 +68,10 @@ function renderFrame(tick: number) {
     }
   }
 
-  // 膜本体: A をバイリニアで滑らかに描く
+  // 膜本体: B をバイリニアで滑らかに描く
   let maxV = 0;
   for (let i = 0; i < FIELD * FIELD; i++) {
-    const v = membrane.A.data[i] ?? 0;
+    const v = membrane.B.data[i] ?? 0;
     if (v > maxV) maxV = v;
   }
   maxV = Math.max(maxV, 0.3);
@@ -82,10 +82,10 @@ function renderFrame(tick: number) {
       const fx0 = Math.floor(fxF), fy0 = Math.floor(fyF);
       const fx1 = Math.min(FIELD - 1, fx0 + 1), fy1 = Math.min(FIELD - 1, fy0 + 1);
       const tx = fxF - fx0, ty = fyF - fy0;
-      const v00 = membrane.A.data[fy0 * FIELD + fx0] ?? 0;
-      const v10 = membrane.A.data[fy0 * FIELD + fx1] ?? 0;
-      const v01 = membrane.A.data[fy1 * FIELD + fx0] ?? 0;
-      const v11 = membrane.A.data[fy1 * FIELD + fx1] ?? 0;
+      const v00 = membrane.B.data[fy0 * FIELD + fx0] ?? 0;
+      const v10 = membrane.B.data[fy0 * FIELD + fx1] ?? 0;
+      const v01 = membrane.B.data[fy1 * FIELD + fx0] ?? 0;
+      const v11 = membrane.B.data[fy1 * FIELD + fx1] ?? 0;
       const v = ((v00 * (1 - tx) + v10 * tx) * (1 - ty) +
                  (v01 * (1 - tx) + v11 * tx) * ty) / maxV;
       if (v < 0.015) continue;
@@ -110,9 +110,7 @@ function renderFrame(tick: number) {
 
   const path = resolve(OUT, `frame-${String(tick).padStart(4, '0')}.png`);
   writeFileSync(path, PNG.sync.write(png));
-  let total = 0;
-  for (let i = 0; i < FIELD * FIELD; i++) total += membrane.A.data[i] ?? 0;
-  console.log(`tick=${tick} maxA=${maxV.toFixed(2)} totalA=${total.toFixed(1)}`);
+  console.log(`tick=${tick} maxB=${maxV.toFixed(2)} totalB=${membrane.totalMass().toFixed(1)}`);
 }
 
 const SNAP_AT = [40, 100, 180, 280, 400, 550, 720, 900, 1100, 1300];
