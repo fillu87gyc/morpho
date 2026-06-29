@@ -75,13 +75,20 @@ function renderFrameRGBA(): Uint8Array {
     }
   }
 
-  // 膜
-  let maxV = 0;
+  // 膜本体 + 前縁グロー + 呼吸オーバーレイ。
+  // - B: 厚みそのもの (黄→白寄り)
+  // - flowMag: いま流れ込んでいる前線。ハイライトで「進行中の側」を見せる
+  // - phase + noise: 体内をゆっくり走る呼吸の波。彩度ではなく明度の微振動として乗せる
+  let maxV = 0, maxF = 0;
   for (let i = 0; i < FIELD * FIELD; i++) {
     const v = membrane.B.data[i] ?? 0;
     if (v > maxV) maxV = v;
+    const f = membrane.flowMag.data[i] ?? 0;
+    if (f > maxF) maxF = f;
   }
   maxV = Math.max(maxV, 0.3);
+  maxF = Math.max(maxF, 1e-4);
+  const phase = membrane.phase;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const fxF = x / TILE, fyF = y / TILE;
@@ -95,11 +102,26 @@ function renderFrameRGBA(): Uint8Array {
       const v = ((v00 * (1 - tx) + v10 * tx) * (1 - ty) +
                  (v01 * (1 - tx) + v11 * tx) * ty) / maxV;
       if (v < 0.02) continue;
-      const k = Math.pow(Math.min(1, v), 0.55);
-      const r = 240;
-      const g = Math.floor(180 + 60 * Math.max(0, k - 0.5) * 2);
-      const b = Math.floor(60 + 150 * Math.max(0, k - 0.7) * 3);
-      const a = Math.min(0.92, 0.18 + k * 0.75);
+
+      // 前縁シグナル (隣接 4 セルから補間)
+      const f00 = membrane.flowMag.data[fy0 * FIELD + fx0] ?? 0;
+      const f10 = membrane.flowMag.data[fy0 * FIELD + fx1] ?? 0;
+      const f01 = membrane.flowMag.data[fy1 * FIELD + fx0] ?? 0;
+      const f11 = membrane.flowMag.data[fy1 * FIELD + fx1] ?? 0;
+      const fNorm = ((f00 * (1 - tx) + f10 * tx) * (1 - ty) +
+                     (f01 * (1 - tx) + f11 * tx) * ty) / maxF;
+      const front = Math.min(1, fNorm * 1.6);
+
+      // 呼吸: 位相 + セル毎のノイズで遅い波が体内を走る
+      const n = membrane.noise.data[fy0 * FIELD + fx0] ?? 0;
+      const breath = 1 + 0.08 * Math.sin(phase + n * 1.5);
+
+      const k = Math.pow(Math.min(1, v), 0.55) * breath;
+      // 前縁ほど白く: G・B を持ち上げる
+      const r = Math.min(255, 240 + front * 12);
+      const g = Math.min(255, 180 + 60 * Math.max(0, k - 0.5) * 2 + front * 50);
+      const b = Math.min(255, 60 + 150 * Math.max(0, k - 0.7) * 3 + front * 90);
+      const a = Math.min(0.95, 0.18 + k * 0.75 + front * 0.10);
       const idx = (y * W + x) * 4;
       const inv = 1 - a;
       rgba[idx] = (rgba[idx] ?? 0) * inv + r * a;

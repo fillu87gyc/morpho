@@ -47,6 +47,11 @@ export interface MembraneParams {
   flowRate: number;         // B の advection 強さ
   maxOutflow: number;       // 1 step で 1 cell から出せる B の割合 (CFL 的安全弁)
   viscosity: number;        // B 自体の僅かな拡散 (べたつき) — 0.0–0.05 程度
+  // 表面張力: 境界バンドだけに効くマス保存スムージング。
+  // 全体を平らにする viscosity と違い、輪郭の高曲率部だけを内側に引き戻すため、
+  // 「インクの染み」→「丸い膜」へと外観が変わる。
+  surfaceTension: number;        // 0.0–0.30 程度。0 で無効
+  surfaceTensionBand: number;    // バンドのピーク位置 (B のスケール)。0.3-0.6 程度
   // 呼吸
   pulsePeriod: number;
   // 餌食い: 食料に乗っている膜は栄養を消費し、自分は微増する
@@ -66,6 +71,8 @@ export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   flowRate: 0.15,
   maxOutflow: 0.28,
   viscosity: 0.025,
+  surfaceTension: 0.18,       // 輪郭のギザを内側に引き戻す力
+  surfaceTensionBand: 0.45,   // B≈0.45 を境界とみなして集中して効かせる
   pulsePeriod: 130,
   consumeRate: 0.012,   // B=10 が乗ると 0.12/tick で食料減る → 中規模食料は 100tick程度で枯渇
   feedingRate: 0.10,    // 消費した栄養の 10% が肉に変わる (緩やかな成長)
@@ -76,9 +83,17 @@ export class Membrane {
   size: number;
   B: FieldGrid;          // 肉
   P: FieldGrid;          // 圧力
+  // 1 tick あたり「このセルを通った B の量」。観測専用 (描画で前縁を光らせる)。
+  // 物理には影響しない。advection 中に流出/流入の絶対量を貯め、毎 tick 緩く減衰する。
+  flowMag: FieldGrid;
+  // 描画から参照する呼吸の位相情報。simulation 側の真実を一箇所に固める。
+  phase = 0;
+  tick = 0;
+  // 体内ノイズ (位相オフセット)。波が一様にならないようにする。renderer が読む。
+  noise: FieldGrid;
   private Pbuf: FieldGrid;
   private Bbuf: FieldGrid;
-  private noise: FieldGrid;
+  private flowBuf: Float32Array;
   private initialized = false;
   totalInitialMass = 0;
 
@@ -87,8 +102,10 @@ export class Membrane {
     this.size = size;
     this.B = makeField(size);
     this.P = makeField(size);
+    this.flowMag = makeField(size);
     this.Pbuf = makeField(size);
     this.Bbuf = makeField(size);
+    this.flowBuf = new Float32Array(size * size);
     this.noise = makeField(size);
     for (let i = 0; i < size * size; i++) {
       this.noise.data[i] = (rng.next() - 0.5) * 2 * Math.PI;
@@ -117,6 +134,10 @@ export class Membrane {
     const ob = env.obstacle.data;
     const phase = (2 * Math.PI * tick) / p.pulsePeriod;
     const globalBreath = Math.sin(phase); // [-1, +1]
+    this.tick = tick;
+    this.phase = phase;
+    // 前縁可視化用アキュムレータをリセット
+    this.flowBuf.fill(0);
 
     // ── (1) Pressure 更新 ─────────────────────────────────
     // 食料: 一定の引力。源: 呼吸する pump (正負に振れる)。
@@ -176,6 +197,8 @@ export class Membrane {
           const share = moveTotal * (dp / totalDp);
           this.Bbuf.data[i] = (this.Bbuf.data[i] ?? 0) - share;
           this.Bbuf.data[j] = (this.Bbuf.data[j] ?? 0) + share;
+          // 受け取った側を「前線」として記録 (送り出す側は塊の中心になりがち)
+          this.flowBuf[j] = (this.flowBuf[j] ?? 0) + share;
         }
       }
     }
@@ -186,6 +209,65 @@ export class Membrane {
     if (p.viscosity > 0) {
       diffuse(this.B, this.Bbuf, W, p.viscosity);
       [this.B.data, this.Bbuf.data] = [this.Bbuf.data, this.B.data];
+    }
+
+    // ── (3b) 表面張力: 境界バンド限定の質量保存スムージング ──
+    // 通常の拡散は塊の中身まで均してしまうが、
+    // ここでは「B が境界帯にある cell どうしの間でのみ」フラックスを許す。
+    // 凸の出っ張りは隣の凹みへ流れ、輪郭が滑らかになる。
+    // ペアごとに対称交換するので質量は厳密に保存。
+    if (p.surfaceTension > 0) {
+      const src = this.B.data, dst = this.Bbuf.data;
+      for (let i = 0; i < N; i++) dst[i] = src[i] ?? 0;
+      const band = p.surfaceTensionBand;
+      const sigma = p.surfaceTension;
+      for (let y = 0; y < W; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          if ((ob[i] ?? 0) > 0.5) continue;
+          const bi = src[i] ?? 0;
+          const ki = boundaryKernel(bi, band);
+          if (ki < 0.02) continue;
+          // 右と下の neighbor だけ見れば全ペアを一度ずつ訪問できる
+          if (x + 1 < W) {
+            const j = i + 1;
+            if ((ob[j] ?? 0) <= 0.5) {
+              const bj = src[j] ?? 0;
+              const kj = boundaryKernel(bj, band);
+              const w = Math.sqrt(ki * kj);
+              if (w > 0.02) {
+                const flux = sigma * w * (bj - bi);
+                dst[i] = (dst[i] ?? 0) + flux;
+                dst[j] = (dst[j] ?? 0) - flux;
+              }
+            }
+          }
+          if (y + 1 < W) {
+            const j = i + W;
+            if ((ob[j] ?? 0) <= 0.5) {
+              const bj = src[j] ?? 0;
+              const kj = boundaryKernel(bj, band);
+              const w = Math.sqrt(ki * kj);
+              if (w > 0.02) {
+                const flux = sigma * w * (bj - bi);
+                dst[i] = (dst[i] ?? 0) + flux;
+                dst[j] = (dst[j] ?? 0) - flux;
+              }
+            }
+          }
+        }
+      }
+      [this.B.data, this.Bbuf.data] = [this.Bbuf.data, this.B.data];
+    }
+
+    // ── (3c) 前縁シグナルの時間平滑化 ─────────────────
+    // 1tick 分の生フラックスは細切れになるため、緩やかに移動平均して
+    // 「いま伸びている前縁」が連続的に光るようにする。
+    {
+      const m = this.flowMag.data, acc = this.flowBuf;
+      for (let i = 0; i < N; i++) {
+        m[i] = (m[i] ?? 0) * 0.78 + (acc[i] ?? 0) * 0.22;
+      }
     }
 
     // ── (4) 餌食い: 膜が乗っている食料は減り、膜は微増する ──
@@ -236,6 +318,15 @@ export class Membrane {
       }
     }
   }
+}
+
+// バンドカーネル: B=peak で 1、B=0 や B≫peak でゼロに落ちる山型関数。
+// 「いまここは膜の輪郭ですか」を 0–1 で答える。
+// x*e^(1-x) は x=1 で 1、x→∞ で速やかに 0、x=0 で 0。連続なので fluxが暴れない。
+function boundaryKernel(b: number, peak: number): number {
+  if (b <= 0 || peak <= 0) return 0;
+  const x = b / peak;
+  return x * Math.exp(1 - x);
 }
 
 function diffuse(src: FieldGrid, dst: FieldGrid, size: number, D: number): void {
