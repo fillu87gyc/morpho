@@ -25,11 +25,12 @@ mkdirSync(OUT, { recursive: true });
 const rng = createRNG(7);
 const env = new GridEnvironment({ worldSize: WORLD, fieldSize: FIELD });
 // 完全な格子配置だと膜が対称に4分岐して退屈な十字になる。
-// 各食料を不揃いの方向にずらし、サイズも少し変えて、自然なばらつきを作る。
-env.placeFood({ x: 17, y: 22 }, 7.5, 1.0);  // 左上やや外
-env.placeFood({ x: 83, y: 28 }, 6.5, 0.9);  // 右上やや内・控えめ
-env.placeFood({ x: 76, y: 84 }, 8.0, 1.1);  // 右下大きめ
-env.placeFood({ x: 24, y: 77 }, 6.0, 1.0);  // 左下やや内
+// 各食料を不揃いの方向・サイズ・量にして、膜の探索戦略が見えるようにする。
+// 大きい食料ほど引力が強く長く保たれ、小さい食料は素早く食べ尽くされる。
+env.placeFood({ x: 17, y: 22 }, 10.0, 1.3);  // 左上 大: ごちそう
+env.placeFood({ x: 83, y: 28 },  4.5, 0.8);  // 右上 小: つまみ
+env.placeFood({ x: 76, y: 84 },  8.0, 1.1);  // 右下 中
+env.placeFood({ x: 24, y: 77 },  6.0, 0.6);  // 左下 中サイズ・薄い
 env.placeStone({ x: 48, y: 57 }, 5);        // 中央障害物も少しオフセット
 
 const membrane = new Membrane(WORLD, FIELD, rng);
