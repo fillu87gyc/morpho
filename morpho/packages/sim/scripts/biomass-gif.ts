@@ -77,10 +77,9 @@ function renderFrameRGBA(): Uint8Array {
     }
   }
 
-  // 膜本体 + 前縁グロー + 呼吸オーバーレイ。
-  // - B: 厚みそのもの (黄→白寄り)
-  // - flowMag: いま流れ込んでいる前線。ハイライトで「進行中の側」を見せる
-  // - phase + noise: 体内をゆっくり走る呼吸の波。彩度ではなく明度の微振動として乗せる
+  // 膜本体 + 前縁グロー。両方とも物理量 (B, |v|·B) から派生。
+  // 以前あった brightness *= sin(phase) の演出オーバーレイは撤廃。
+  // 呼吸が見えるかどうかは physics (P の振動 → 膜の伸縮) に任せる。
   let maxV = 0, maxF = 0;
   for (let i = 0; i < FIELD * FIELD; i++) {
     const v = membrane.B.data[i] ?? 0;
@@ -90,7 +89,6 @@ function renderFrameRGBA(): Uint8Array {
   }
   maxV = Math.max(maxV, 0.3);
   maxF = Math.max(maxF, 1e-4);
-  const phase = membrane.phase;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const fxF = x / TILE, fyF = y / TILE;
@@ -114,14 +112,10 @@ function renderFrameRGBA(): Uint8Array {
                      (f01 * (1 - tx) + f11 * tx) * ty) / maxF;
       const front = Math.min(1, fNorm * 1.6);
 
-      // 呼吸: 位相 + セル毎のノイズで遅い波が体内を走る
-      const n = membrane.noise.data[fy0 * FIELD + fx0] ?? 0;
-      const breath = 1 + 0.08 * Math.sin(phase + n * 1.5);
-
       // 密度カーブを steeper にしてコア (B>0.5) は十分明るく、
       // エッジ (B<0.3) は強く減衰する。これで内部の厚みの違いが見える。
       const vN = Math.min(1, v);
-      const k = Math.pow(vN, 0.85) * breath;
+      const k = Math.pow(vN, 0.85);
       // 前縁ほど白く: G・B を持ち上げる
       const r = Math.min(255, 230 + front * 22);
       const g = Math.min(255, 160 + 90 * Math.max(0, k - 0.45) * 1.8 + front * 60);

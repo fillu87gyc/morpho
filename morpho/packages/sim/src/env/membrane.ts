@@ -1,27 +1,29 @@
-// Membrane (Flow 版): 「肉は流れる」を一次原理に据えたモデル。
+// Membrane (Minimal Flow v3): Pressure → Velocity → Biomass advection → Surface tension.
 //
-// 前バージョン (reaction-diffusion) の根本的な違和感:
-//   - 肉が「増殖」する → 均一に膨らんで「インフレする泡」になる
-//   - 全周が同じ速度で広がる → 「内部流が膜を押す」感じが出ない
-//   - 単調増加なので「呼吸」しない
+// 前バージョン (v2) は違和感を1つずつ潰すうちに、仮足生成・コア凝集・前縁ブースト・
+// 張力呼吸・brightness 演出と補正項が積み上がった。理屈は通っていたが、
+// 「Physarum を最小法則で書く」という当初の目標から離れ始めていた。
 //
-// このバージョンの設計:
-//   B[x,y]: 質量 (= biomass) — *保存量*。初期に source から一定量を置き、
-//           以降は基本的に総和を変えない。流れるだけ。
-//   P[x,y]: 圧力 (= 引力場の potential)。源と食料が pump し、拡散・減衰する。
+// この版では明示的に4則だけに絞る:
+//   P[x,y]     : 圧力ポテンシャル (源と食料が pump、拡散・減衰)
+//   v = ∇P × k : 速度場 (cell 中心の vector を明示保持)
+//   B[x,y]     : 質量、v に沿って upwind 移流 (面通量で質量厳密保存)
+//   surface T  : 境界バンドだけに効くスムージング (格子離散化の数値ノイズ抑え)
 //
-// 毎 tick:
-//   1. 食料は P に正圧を載せる (静的なアトラクタ)
-//   2. 源は呼吸する pump: sin(t) で正←→負を振る
-//        - 正の半: 源は P を持ち上げ、膜を外へ押す
-//        - 負の半: 源は P を下げ、膜が源に引き戻される
-//   3. P を速く拡散する (情報は早く伝わる)
-//   4. 障害物は P=0 で遮蔽
-//   5. B は ∇P の高い方へ流れる (質量保存の advection)
-//      流量は B × dP の積で決まる: 既に薄い所からは少ししか動かない
+// 残った非自明な機構:
+//   - bodyPulse: B 比例の per-cell 圧力振動。空間ノイズ phase で
+//     全身が一律にならず、ここから非対称な押し出しと引き戻しが生まれる。
+//     これは「源 pump + 食料 pump だけだと膜が単純な丸になる」のを
+//     体内の力で打ち破る、唯一の追加 driver。
 //
-// 結果: 「膨らむ→止まる→引っ込む→別方向に膨らむ」が自発的に出る (はず)。
-//       源は外殻ではなく内部圧力の心臓として振る舞う。
+// 削ったもの (v2 にあった補正項):
+//   - 仮足の explicit spawn: 体内 pulse + 食料配置の非対称で代用させる
+//   - コア凝集 (B-self pressure): 源が継続 pump しているので不要
+//   - 前縁ブースト: |v|·B 自体が前縁シグナル、boost を上乗せする物理理由がない
+//   - 張力呼吸: surfaceTension は定数。膜の伸縮は P の振動から出る
+//   - renderer の breath brightness: 物理量を演出で増幅するのは反則
+//
+// flowMag は |v|·B の time-smoothed 量。描画専用、物理にはフィードバックしない。
 
 import type { Vec2 } from '../types.js';
 import { makeField, type FieldGrid } from './field.js';
@@ -32,141 +34,86 @@ export interface MembraneSource {
   pos: Vec2;
 }
 
-// 仮足: 境界沿いに有限寿命で出現する局所圧力スパイク。
-// 「全体は呼吸している」だけだと膜が一つの丸になるので、
-// 部分的に外へ膨らんで引っ込む非対称性をここで足す。
-// 位置は field 座標、速度は cell/tick。寿命の half-sine 包絡で出入りする。
-interface PressureBurst {
-  x: number;
-  y: number;
-  amp: number;
-  vx: number;
-  vy: number;
-  age: number;
-  life: number;
-}
-
 export interface MembraneParams {
   // 初期質量 (source の周りに置く)
   initialMass: number;
   initialRadius: number;
-  // 圧力
-  foodPressure: number;     // 食料が出す静的引力の強さ
+  // 圧力ソース
+  foodPressure: number;     // 食料が出す静的引力
   sourcePump: number;       // 源が出す呼吸圧の振幅 (±)
-  bodyPulseAmp: number;     // 肉自体が出す呼吸圧の振幅 (B 比例、±)
-  pressureDiff: number;     // P の拡散 (情報伝達なので速め)
+  bodyPulseAmp: number;     // 体内 pulse: B 比例、per-cell noise phase で非同期
+  pulsePeriod: number;      // 全体呼吸の周期
+  // 圧力ダイナミクス
+  pressureDiff: number;     // P の拡散
   pressureDecay: number;    // P の自然減衰
-  pressureMax: number;      // P のクランプ (片側): 食料圧の累積を抑える
-  // 流量
-  flowRate: number;         // B の advection 強さ
-  maxOutflow: number;       // 1 step で 1 cell から出せる B の割合 (CFL 的安全弁)
-  viscosity: number;        // B 自体の僅かな拡散 (べたつき) — 0.0–0.05 程度
-  // 表面張力: 境界バンドだけに効くマス保存スムージング。
-  // 全体を平らにする viscosity と違い、輪郭の高曲率部だけを内側に引き戻すため、
-  // 「インクの染み」→「丸い膜」へと外観が変わる。
-  surfaceTension: number;        // 0.0–0.30 程度。0 で無効
-  surfaceTensionBand: number;    // バンドのピーク位置 (B のスケール)。0.3-0.6 程度
-  // 呼吸
-  pulsePeriod: number;
-  // 仮足 (動く境界): 境界に局所バーストを撒く。
-  // 全体呼吸が無いと膜は静かな丸になりがちなので、ここで非対称な凹凸を継続供給する。
-  burstRate: number;             // tick あたり新規生成確率 (0-1)
-  burstAmp: number;              // 圧力のピーク
-  burstLife: number;             // 平均寿命 (tick)
-  burstRadius: number;           // 影響半径 (field cell)
-  burstDrift: number;            // 境界の接線方向の drift (cell/tick)
-  burstMax: number;              // 同時最大数。多すぎると境界がノイズに溶ける
-  // コア凝集: B が高いセルは自己圧力で周囲を引き寄せ、エッジは薄く中心は厚くなる。
-  // target に近づくと頭打ちにして runaway を防ぐ (cell が無限に重くならない)。
-  bodyConsolidation: number;     // 強度 (0 で無効)
-  bodyConsolidationCap: number;  // この B を超えると消える (上限)
-  // 前縁加速: flowMag が高いセルは flowRate に小さなブーストが乗る。
-  // 一度立った前線が自走する。maxOutflow で物理的上限が守られる。
-  frontBoost: number;            // 0-1.5
-  frontBoostRef: number;         // flowMag/Ref を 0-1 に正規化する基準値
-  // 表面張力の呼吸変調: 締まる/緩むで膜全体が周期的にサイズを変える。
-  // 0 で固定、1 で sin に完全追従。源 pump の反対位相になるように適用される。
-  tensionBreathAmp: number;
-  // 餌食い: 食料に乗っている膜は栄養を消費し、自分は微増する
-  consumeRate: number;  // 食料が減る速さ (B 比例)
-  feedingRate: number;  // 消費分のうち B 自身に取り込まれる係数
+  pressureMax: number;      // P のクランプ
+  // 速度・移流
+  flowRate: number;         // v = flowRate × ∇P
+  maxFlux: number;          // CFL: |v| の片側クランプ (cell/tick)
+  viscosity: number;        // B のサブグリッド粘性 (数値安定化)
+  // 表面張力
+  surfaceTension: number;        // 境界の高曲率を内側へ流す
+  surfaceTensionBand: number;    // バンドのピーク位置 (B のスケール)
+  // 摂食
+  consumeRate: number;
+  feedingRate: number;
 }
 
 export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   initialMass: 22.0,
   initialRadius: 4.0,
-  foodPressure: 0.18,   // 控えめ + pressureMax で頭打ち
-  sourcePump: 2.6,      // 源の呼吸
-  bodyPulseAmp: 0.35,   // 肉自身が脈打つ: 局所ノイズで波が走る
-  pressureDiff: 0.55,
-  pressureDecay: 0.07,  // 遅め — 信号が遠くまで届くようにする
-  pressureMax: 4.0,     // 食料圧の暴走を抑え、源の負圧と拮抗できる範囲に
-  flowRate: 0.15,
-  maxOutflow: 0.28,
-  viscosity: 0.025,
-  surfaceTension: 0.18,       // 輪郭のギザを内側に引き戻す力
-  surfaceTensionBand: 0.45,   // B≈0.45 を境界とみなして集中して効かせる
+  foodPressure: 0.18,
+  sourcePump: 2.6,
+  bodyPulseAmp: 0.45,         // v2 (0.35) より少し強め: 仮足 explicit を抜いた分を補う
   pulsePeriod: 130,
-  // 仮足
-  burstRate: 0.22,            // 平均 4-5 tick に 1 つ。多すぎると境界がノイズに溶ける
-  burstAmp: 2.2,              // 食料圧 (foodPressure * nutrient = 0.18) を局所的に上回る程度
-  burstLife: 45,
-  burstRadius: 2.4,
-  burstDrift: 0.18,           // ゆっくり輪郭に沿って這う
-  burstMax: 6,
-  // コア凝集: 強すぎると膜が広がれず食料に届かないので控えめにする。
-  // それでも内部の B プロファイルには明確な傾斜が出る。
-  bodyConsolidation: 0.18,    // 内側へ集まろうとする力 (弱)
-  bodyConsolidationCap: 1.0,  // この厚みに達したらそれ以上は引き寄せない
-  // 前縁加速
-  frontBoost: 0.55,
-  frontBoostRef: 0.06,        // typical flowMag のスケール
-  // 張力呼吸: 強すぎると周期的に収縮しすぎて食料へ届かない
-  tensionBreathAmp: 0.35,
-  consumeRate: 0.012,   // B=10 が乗ると 0.12/tick で食料減る → 中規模食料は 100tick程度で枯渇
-  feedingRate: 0.10,    // 消費した栄養の 10% が肉に変わる (緩やかな成長)
+  pressureDiff: 0.55,
+  pressureDecay: 0.07,
+  pressureMax: 4.0,
+  flowRate: 0.18,             // v2 (0.15) より若干高め: front boost を抜いた分を補う
+  maxFlux: 0.22,              // 1 cell 1 tick あたり片側の最大速度
+  viscosity: 0.025,
+  surfaceTension: 0.18,
+  surfaceTensionBand: 0.45,
+  consumeRate: 0.012,
+  feedingRate: 0.10,
 };
 
 export class Membrane {
   worldSize: number;
   size: number;
-  B: FieldGrid;          // 肉
+  B: FieldGrid;          // 質量
   P: FieldGrid;          // 圧力
-  // 1 tick あたり「このセルを通った B の量」。観測専用 (描画で前縁を光らせる)。
-  // 物理には影響しない。advection 中に流出/流入の絶対量を貯め、毎 tick 緩く減衰する。
+  vx: FieldGrid;         // 速度場 x (cell 中心)
+  vy: FieldGrid;         // 速度場 y (cell 中心)
+  // |v|·B の time-smoothed。観測専用、物理に戻さない。
   flowMag: FieldGrid;
-  // 描画から参照する呼吸の位相情報。simulation 側の真実を一箇所に固める。
+  // 描画から参照する呼吸の真実
   phase = 0;
   tick = 0;
-  // 体内ノイズ (位相オフセット)。波が一様にならないようにする。renderer が読む。
+  // 体内ノイズ (位相オフセット)。空間的に非対称な脈動を生む。renderer は使わない。
   noise: FieldGrid;
   private Pbuf: FieldGrid;
   private Bbuf: FieldGrid;
-  private flowBuf: Float32Array;
   private initialized = false;
   totalInitialMass = 0;
-  // 仮足リスト。step ごとに増減する。観測用に public で出しておくが、
-  // 描画は B / flowMag があれば十分なので普通は触る必要はない。
-  bursts: PressureBurst[] = [];
-  private rng: SeededRNG;
 
   constructor(worldSize: number, size: number, rng: SeededRNG) {
     this.worldSize = worldSize;
     this.size = size;
-    this.rng = rng;
     this.B = makeField(size);
     this.P = makeField(size);
+    this.vx = makeField(size);
+    this.vy = makeField(size);
     this.flowMag = makeField(size);
     this.Pbuf = makeField(size);
     this.Bbuf = makeField(size);
-    this.flowBuf = new Float32Array(size * size);
     this.noise = makeField(size);
     for (let i = 0; i < size * size; i++) {
       this.noise.data[i] = (rng.next() - 0.5) * 2 * Math.PI;
     }
   }
 
-  // 初期質量を source の周りに置く。総和はここで決まり、以降変わらない (feedingを除く)。
+  // 初期質量を source の周りに置く。総和はここで決まり、以降変わらない (feeding を除く)。
   seed(sources: MembraneSource[], p: MembraneParams): void {
     for (const s of sources) {
       this.stamp(this.B, s.pos, p.initialMass, p.initialRadius);
@@ -187,48 +134,28 @@ export class Membrane {
     const nut = env.nutrients.data;
     const ob = env.obstacle.data;
     const phase = (2 * Math.PI * tick) / p.pulsePeriod;
-    const globalBreath = Math.sin(phase); // [-1, +1]
+    const globalBreath = Math.sin(phase);
     this.tick = tick;
     this.phase = phase;
-    // 前縁可視化用アキュムレータをリセット
-    this.flowBuf.fill(0);
 
-    // ── (0) 仮足の生成・老化・移動 ────────────────────
-    this.updateBursts(p, ob);
-
-    // ── (1) Pressure 更新 ─────────────────────────────────
-    // 食料: 一定の引力。源: 呼吸する pump (正負に振れる)。
-    // bodyConsolidation: B の高いセル自身が小さな正圧を出す → コアに質量が集まる。
-    //                    cap 付きなので runaway しない。
+    // ── (1) Pressure 更新 ──────────────────────────────
+    // 食料の静的引力 + 体内 pulse + 前 tick の P の減衰。
     for (let i = 0; i < N; i++) {
       const o = ob[i] ?? 0;
       if (o > 0.5) { this.Pbuf.data[i] = 0; continue; }
       const n = nut[i] ?? 0;
+      // 体内 pulse は per-cell に位相がずれる: localBreath は -1..+1 をうろつく。
+      // ここが膜の非対称な押し出しを生む唯一の体内 driver。
       const localBreath = 0.7 * globalBreath + 0.3 * Math.sin(phase + (this.noise.data[i] ?? 0));
-      // 食料の静的引力 (常に正)
       const foodAttract = n * p.foodPressure;
-      const bv = this.B.data[i] ?? 0;
-      // 体に乗っている所は呼吸の影響を受ける (肉自身がリズミカルに圧を作る)
-      // localBreath の符号で押し出し/吸い込みが反転する → 全身を波が走る
-      const bodyPulse = bv * p.bodyPulseAmp * localBreath;
-      // コア凝集: cap を超えると 0 になり安定化する
-      const consol = p.bodyConsolidation * Math.min(bv, p.bodyConsolidationCap);
-      // 既存の P は減衰
+      const bodyPulse = (this.B.data[i] ?? 0) * p.bodyPulseAmp * localBreath;
       const decayed = (this.P.data[i] ?? 0) * (1 - p.pressureDecay);
-      this.Pbuf.data[i] = decayed + foodAttract + bodyPulse + consol;
+      this.Pbuf.data[i] = decayed + foodAttract + bodyPulse;
     }
-    // 源は呼吸する pump (±)
+    // 源は呼吸する pump。これが全体の周期的伸縮を駆動する。
     for (const s of sources) {
       this.stamp(this.Pbuf, s.pos, p.sourcePump * globalBreath, 2.5);
     }
-    // 仮足の局所バーストを Pbuf に焼き込む (half-sine 包絡)
-    for (const b of this.bursts) {
-      const t = b.age / b.life;
-      const env_ = Math.sin(t * Math.PI); // 0→1→0
-      if (env_ < 0.04) continue;
-      this.stampField(this.Pbuf, b.x, b.y, b.amp * env_, p.burstRadius);
-    }
-    // P を拡散
     diffuse(this.Pbuf, this.P, W, p.pressureDiff);
     // クランプ + 障害物
     for (let i = 0; i < N; i++) {
@@ -239,64 +166,77 @@ export class Membrane {
       this.P.data[i] = v;
     }
 
-    // ── (2) Biomass advection (mass-conserving) ──────────
-    // 各セルから、より P が高い隣接セル群へ B を比例配分。
-    // 全部 Bbuf 上で書き込み: 出した分だけ消え、受けた分だけ増える → 総和保存。
-    for (let i = 0; i < N; i++) this.Bbuf.data[i] = this.B.data[i] ?? 0;
-
-    for (let y = 1; y < W - 1; y++) {
-      for (let x = 1; x < W - 1; x++) {
+    // ── (2) Velocity = flowRate × ∇P (中心差分) ───────
+    // 障害物の隣では片側差分で代用 (障害物セルへ漏れない)。
+    // P が高い方へ流れる convention: v = +∇P。
+    const VMAX = p.maxFlux;
+    for (let y = 0; y < W; y++) {
+      for (let x = 0; x < W; x++) {
         const i = y * W + x;
-        const b = this.B.data[i] ?? 0;
-        if (b < 1e-5) continue;
-        if ((ob[i] ?? 0) > 0.5) continue;
+        if ((ob[i] ?? 0) > 0.5) { this.vx.data[i] = 0; this.vy.data[i] = 0; continue; }
         const pSelf = this.P.data[i] ?? 0;
-        const neigh: number[] = [i - 1, i + 1, i - W, i + W];
-        let totalDp = 0;
-        const diffs: [number, number][] = [];
-        for (const j of neigh) {
-          if ((ob[j] ?? 0) > 0.5) continue;
-          const dp = (this.P.data[j] ?? 0) - pSelf;
-          if (dp > 0) { diffs.push([j, dp]); totalDp += dp; }
+        const pL = (x > 0 && (ob[i - 1] ?? 0) <= 0.5) ? (this.P.data[i - 1] ?? 0) : pSelf;
+        const pR = (x < W - 1 && (ob[i + 1] ?? 0) <= 0.5) ? (this.P.data[i + 1] ?? 0) : pSelf;
+        const pU = (y > 0 && (ob[i - W] ?? 0) <= 0.5) ? (this.P.data[i - W] ?? 0) : pSelf;
+        const pD = (y < W - 1 && (ob[i + W] ?? 0) <= 0.5) ? (this.P.data[i + W] ?? 0) : pSelf;
+        let vx = (pR - pL) * 0.5 * p.flowRate;
+        let vy = (pD - pU) * 0.5 * p.flowRate;
+        if (vx > VMAX) vx = VMAX; else if (vx < -VMAX) vx = -VMAX;
+        if (vy > VMAX) vy = VMAX; else if (vy < -VMAX) vy = -VMAX;
+        this.vx.data[i] = vx;
+        this.vy.data[i] = vy;
+      }
+    }
+
+    // ── (3) Biomass advection (面通量・upwind) ────────
+    // 面ごとに 1 回計算 → 質量厳密保存。upwind: source cell は v の符号で決まる。
+    // x+ と y+ 面だけ走査すれば全ペアを 1 回ずつ訪問できる。
+    for (let i = 0; i < N; i++) this.Bbuf.data[i] = this.B.data[i] ?? 0;
+    for (let y = 0; y < W; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const oi = ob[i] ?? 0;
+        if (oi > 0.5) continue;
+        if (x + 1 < W) {
+          const j = i + 1;
+          if ((ob[j] ?? 0) <= 0.5) {
+            const vf = ((this.vx.data[i] ?? 0) + (this.vx.data[j] ?? 0)) * 0.5;
+            if (vf !== 0) {
+              const srcIdx = vf >= 0 ? i : j;
+              const flux = (this.B.data[srcIdx] ?? 0) * vf;
+              this.Bbuf.data[i] = (this.Bbuf.data[i] ?? 0) - flux;
+              this.Bbuf.data[j] = (this.Bbuf.data[j] ?? 0) + flux;
+            }
+          }
         }
-        if (totalDp <= 0) continue;
-        // 前縁加速: 既に流れているセルは flowRate に小さなブーストが乗る。
-        // maxOutflow が物理的上限なので runaway しない。
-        const fm = this.flowMag.data[i] ?? 0;
-        const boost = 1 + p.frontBoost * Math.min(1, fm / Math.max(1e-6, p.frontBoostRef));
-        // 出す総量: B * flowRate * dP合計、ただし maxOutflow で頭打ち
-        const moveTotal = Math.min(b * p.flowRate * boost * totalDp, b * p.maxOutflow);
-        for (const [j, dp] of diffs) {
-          const share = moveTotal * (dp / totalDp);
-          this.Bbuf.data[i] = (this.Bbuf.data[i] ?? 0) - share;
-          this.Bbuf.data[j] = (this.Bbuf.data[j] ?? 0) + share;
-          // 受け取った側を「前線」として記録 (送り出す側は塊の中心になりがち)
-          this.flowBuf[j] = (this.flowBuf[j] ?? 0) + share;
+        if (y + 1 < W) {
+          const j = i + W;
+          if ((ob[j] ?? 0) <= 0.5) {
+            const vf = ((this.vy.data[i] ?? 0) + (this.vy.data[j] ?? 0)) * 0.5;
+            if (vf !== 0) {
+              const srcIdx = vf >= 0 ? i : j;
+              const flux = (this.B.data[srcIdx] ?? 0) * vf;
+              this.Bbuf.data[i] = (this.Bbuf.data[i] ?? 0) - flux;
+              this.Bbuf.data[j] = (this.Bbuf.data[j] ?? 0) + flux;
+            }
+          }
         }
       }
     }
-    // swap
     [this.B.data, this.Bbuf.data] = [this.Bbuf.data, this.B.data];
 
-    // ── (3) 粘性 (薄い拡散): 流体としての滑らかさ ────────
+    // ── (4) 粘性 (薄い拡散): 数値ノイズ抑え ────────────
     if (p.viscosity > 0) {
       diffuse(this.B, this.Bbuf, W, p.viscosity);
       [this.B.data, this.Bbuf.data] = [this.Bbuf.data, this.B.data];
     }
 
-    // ── (3b) 表面張力: 境界バンド限定の質量保存スムージング ──
-    // 通常の拡散は塊の中身まで均してしまうが、
-    // ここでは「B が境界帯にある cell どうしの間でのみ」フラックスを許す。
-    // 凸の出っ張りは隣の凹みへ流れ、輪郭が滑らかになる。
-    // ペアごとに対称交換するので質量は厳密に保存。
+    // ── (5) 表面張力: 境界バンド限定の質量保存スムージング ──
     if (p.surfaceTension > 0) {
       const src = this.B.data, dst = this.Bbuf.data;
       for (let i = 0; i < N; i++) dst[i] = src[i] ?? 0;
       const band = p.surfaceTensionBand;
-      // 張力呼吸: source pump が外向き (globalBreath > 0) のとき張力を緩めて膜が膨らみやすくする。
-      // 源が吸い込む (< 0) ときは張力を強めて収縮を補助する。これで全体サイズが見える周期で揺れる。
-      const tensionMod = Math.max(0.05, 1 - p.tensionBreathAmp * globalBreath);
-      const sigma = p.surfaceTension * tensionMod;
+      const sigma = p.surfaceTension;
       for (let y = 0; y < W; y++) {
         for (let x = 0; x < W; x++) {
           const i = y * W + x;
@@ -304,7 +244,6 @@ export class Membrane {
           const bi = src[i] ?? 0;
           const ki = boundaryKernel(bi, band);
           if (ki < 0.02) continue;
-          // 右と下の neighbor だけ見れば全ペアを一度ずつ訪問できる
           if (x + 1 < W) {
             const j = i + 1;
             if ((ob[j] ?? 0) <= 0.5) {
@@ -336,19 +275,17 @@ export class Membrane {
       [this.B.data, this.Bbuf.data] = [this.Bbuf.data, this.B.data];
     }
 
-    // ── (3c) 前縁シグナルの時間平滑化 ─────────────────
-    // 1tick 分の生フラックスは細切れになるため、緩やかに移動平均して
-    // 「いま伸びている前縁」が連続的に光るようにする。
+    // ── (6) flowMag: |v|·B を time-smooth (描画用) ───
     {
-      const m = this.flowMag.data, acc = this.flowBuf;
+      const m = this.flowMag.data;
       for (let i = 0; i < N; i++) {
-        m[i] = (m[i] ?? 0) * 0.78 + (acc[i] ?? 0) * 0.22;
+        const speed = Math.hypot(this.vx.data[i] ?? 0, this.vy.data[i] ?? 0);
+        const inst = speed * (this.B.data[i] ?? 0);
+        m[i] = (m[i] ?? 0) * 0.78 + inst * 0.22;
       }
     }
 
-    // ── (4) 餌食い: 膜が乗っている食料は減り、膜は微増する ──
-    // これがないと食料圧が永続して膜が食料に「貼り付く」。
-    // 食料が枯れると圧が消え、膜は次の食料へ流れる (= 粘菌の探索パターン)。
+    // ── (7) 餌食い ───────────────────────────────────
     if (p.consumeRate > 0) {
       for (let i = 0; i < N; i++) {
         const n = nut[i] ?? 0;
@@ -361,7 +298,7 @@ export class Membrane {
       }
     }
 
-    // ── (5) 障害物・負値のクリーンアップ ─────────────────
+    // ── (8) 障害物・負値クリーンアップ ────────────────
     for (let i = 0; i < N; i++) {
       if ((ob[i] ?? 0) > 0.5) this.B.data[i] = 0;
       else if ((this.B.data[i] ?? 0) < 0) this.B.data[i] = 0;
@@ -372,77 +309,6 @@ export class Membrane {
     let t = 0;
     for (let i = 0; i < this.size * this.size; i++) t += this.B.data[i] ?? 0;
     return t;
-  }
-
-  // 仮足の生成 + 老化 + drift。境界バンドにあるセルだけが種になり、
-  // 一度生まれたら接線方向に流れて寿命まで動く。粘菌の pseudopod 的振る舞い。
-  private updateBursts(p: MembraneParams, ob: Float32Array): void {
-    const W = this.size;
-    // 老化 + drift + 範囲外/障害物に入ったら除去
-    const alive: PressureBurst[] = [];
-    for (const b of this.bursts) {
-      b.age++;
-      if (b.age >= b.life) continue;
-      b.x += b.vx;
-      b.y += b.vy;
-      if (b.x < 1 || b.y < 1 || b.x >= W - 1 || b.y >= W - 1) continue;
-      const ix = Math.floor(b.x), iy = Math.floor(b.y);
-      if ((ob[iy * W + ix] ?? 0) > 0.5) continue;
-      alive.push(b);
-    }
-    this.bursts = alive;
-
-    // 生成: 境界バンドにあるセルを乱択し、tangent (= ∇B に直交) 方向の drift を与える
-    if (this.bursts.length < p.burstMax && this.rng.next() < p.burstRate) {
-      for (let attempt = 0; attempt < 24; attempt++) {
-        const cx = 1 + this.rng.next() * (W - 2);
-        const cy = 1 + this.rng.next() * (W - 2);
-        const ix = Math.floor(cx), iy = Math.floor(cy);
-        if ((ob[iy * W + ix] ?? 0) > 0.5) continue;
-        const bv = this.B.data[iy * W + ix] ?? 0;
-        if (boundaryKernel(bv, p.surfaceTensionBand) < 0.5) continue;
-        // 中心差分で ∇B、その perpendicular を取る
-        const Bdata = this.B.data;
-        const ixR = Math.min(W - 1, ix + 1), ixL = Math.max(0, ix - 1);
-        const iyD = Math.min(W - 1, iy + 1), iyU = Math.max(0, iy - 1);
-        const gx = ((Bdata[iy * W + ixR] ?? 0) - (Bdata[iy * W + ixL] ?? 0)) * 0.5;
-        const gy = ((Bdata[iyD * W + ix] ?? 0) - (Bdata[iyU * W + ix] ?? 0)) * 0.5;
-        const gm = Math.hypot(gx, gy);
-        let vx = 0, vy = 0;
-        if (gm > 1e-4) {
-          const sign = this.rng.next() < 0.5 ? 1 : -1;
-          vx = (-gy / gm) * sign * p.burstDrift;
-          vy = (gx / gm) * sign * p.burstDrift;
-        }
-        this.bursts.push({
-          x: cx, y: cy,
-          amp: p.burstAmp * (0.6 + this.rng.next() * 0.8),
-          vx, vy,
-          age: 0,
-          life: Math.max(8, p.burstLife * (0.6 + this.rng.next() * 0.8)),
-        });
-        break;
-      }
-    }
-  }
-
-  // field 座標で disk を加算 (世界座標を取る private stamp と対をなす)
-  private stampField(target: FieldGrid, cx: number, cy: number, amount: number, radius: number): void {
-    const r2 = radius * radius;
-    const x0 = Math.max(0, Math.floor(cx - radius));
-    const x1 = Math.min(this.size - 1, Math.ceil(cx + radius));
-    const y0 = Math.max(0, Math.floor(cy - radius));
-    const y1 = Math.min(this.size - 1, Math.ceil(cy + radius));
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const dx = x - cx, dy = y - cy;
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= r2) {
-          const w = 1 - Math.sqrt(d2) / radius;
-          target.data[y * this.size + x] = (target.data[y * this.size + x] ?? 0) + amount * w;
-        }
-      }
-    }
   }
 
   private stamp(target: FieldGrid, pos: Vec2, amount: number, radius: number): void {
@@ -467,9 +333,8 @@ export class Membrane {
   }
 }
 
-// バンドカーネル: B=peak で 1、B=0 や B≫peak でゼロに落ちる山型関数。
-// 「いまここは膜の輪郭ですか」を 0–1 で答える。
-// x*e^(1-x) は x=1 で 1、x→∞ で速やかに 0、x=0 で 0。連続なので fluxが暴れない。
+// 境界バンドカーネル: B = peak で 1、B = 0 や B ≫ peak で 0。
+// 「ここは膜の輪郭ですか」を 0–1 で答える連続関数。
 function boundaryKernel(b: number, peak: number): number {
   if (b <= 0 || peak <= 0) return 0;
   const x = b / peak;
