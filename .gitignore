@@ -5,3 +5,4 @@ renders-biomass/
 renders-gif/
 .DS_Store
 *.log
+pnpm-lock.yaml
