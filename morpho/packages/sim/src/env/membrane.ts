@@ -32,6 +32,20 @@ export interface MembraneSource {
   pos: Vec2;
 }
 
+// 仮足: 境界沿いに有限寿命で出現する局所圧力スパイク。
+// 「全体は呼吸している」だけだと膜が一つの丸になるので、
+// 部分的に外へ膨らんで引っ込む非対称性をここで足す。
+// 位置は field 座標、速度は cell/tick。寿命の half-sine 包絡で出入りする。
+interface PressureBurst {
+  x: number;
+  y: number;
+  amp: number;
+  vx: number;
+  vy: number;
+  age: number;
+  life: number;
+}
+
 export interface MembraneParams {
   // 初期質量 (source の周りに置く)
   initialMass: number;
@@ -54,6 +68,25 @@ export interface MembraneParams {
   surfaceTensionBand: number;    // バンドのピーク位置 (B のスケール)。0.3-0.6 程度
   // 呼吸
   pulsePeriod: number;
+  // 仮足 (動く境界): 境界に局所バーストを撒く。
+  // 全体呼吸が無いと膜は静かな丸になりがちなので、ここで非対称な凹凸を継続供給する。
+  burstRate: number;             // tick あたり新規生成確率 (0-1)
+  burstAmp: number;              // 圧力のピーク
+  burstLife: number;             // 平均寿命 (tick)
+  burstRadius: number;           // 影響半径 (field cell)
+  burstDrift: number;            // 境界の接線方向の drift (cell/tick)
+  burstMax: number;              // 同時最大数。多すぎると境界がノイズに溶ける
+  // コア凝集: B が高いセルは自己圧力で周囲を引き寄せ、エッジは薄く中心は厚くなる。
+  // target に近づくと頭打ちにして runaway を防ぐ (cell が無限に重くならない)。
+  bodyConsolidation: number;     // 強度 (0 で無効)
+  bodyConsolidationCap: number;  // この B を超えると消える (上限)
+  // 前縁加速: flowMag が高いセルは flowRate に小さなブーストが乗る。
+  // 一度立った前線が自走する。maxOutflow で物理的上限が守られる。
+  frontBoost: number;            // 0-1.5
+  frontBoostRef: number;         // flowMag/Ref を 0-1 に正規化する基準値
+  // 表面張力の呼吸変調: 締まる/緩むで膜全体が周期的にサイズを変える。
+  // 0 で固定、1 で sin に完全追従。源 pump の反対位相になるように適用される。
+  tensionBreathAmp: number;
   // 餌食い: 食料に乗っている膜は栄養を消費し、自分は微増する
   consumeRate: number;  // 食料が減る速さ (B 比例)
   feedingRate: number;  // 消費分のうち B 自身に取り込まれる係数
@@ -74,6 +107,22 @@ export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   surfaceTension: 0.18,       // 輪郭のギザを内側に引き戻す力
   surfaceTensionBand: 0.45,   // B≈0.45 を境界とみなして集中して効かせる
   pulsePeriod: 130,
+  // 仮足
+  burstRate: 0.22,            // 平均 4-5 tick に 1 つ。多すぎると境界がノイズに溶ける
+  burstAmp: 2.2,              // 食料圧 (foodPressure * nutrient = 0.18) を局所的に上回る程度
+  burstLife: 45,
+  burstRadius: 2.4,
+  burstDrift: 0.18,           // ゆっくり輪郭に沿って這う
+  burstMax: 6,
+  // コア凝集: 強すぎると膜が広がれず食料に届かないので控えめにする。
+  // それでも内部の B プロファイルには明確な傾斜が出る。
+  bodyConsolidation: 0.18,    // 内側へ集まろうとする力 (弱)
+  bodyConsolidationCap: 1.0,  // この厚みに達したらそれ以上は引き寄せない
+  // 前縁加速
+  frontBoost: 0.55,
+  frontBoostRef: 0.06,        // typical flowMag のスケール
+  // 張力呼吸: 強すぎると周期的に収縮しすぎて食料へ届かない
+  tensionBreathAmp: 0.35,
   consumeRate: 0.012,   // B=10 が乗ると 0.12/tick で食料減る → 中規模食料は 100tick程度で枯渇
   feedingRate: 0.10,    // 消費した栄養の 10% が肉に変わる (緩やかな成長)
 };
@@ -96,10 +145,15 @@ export class Membrane {
   private flowBuf: Float32Array;
   private initialized = false;
   totalInitialMass = 0;
+  // 仮足リスト。step ごとに増減する。観測用に public で出しておくが、
+  // 描画は B / flowMag があれば十分なので普通は触る必要はない。
+  bursts: PressureBurst[] = [];
+  private rng: SeededRNG;
 
   constructor(worldSize: number, size: number, rng: SeededRNG) {
     this.worldSize = worldSize;
     this.size = size;
+    this.rng = rng;
     this.B = makeField(size);
     this.P = makeField(size);
     this.flowMag = makeField(size);
@@ -139,8 +193,13 @@ export class Membrane {
     // 前縁可視化用アキュムレータをリセット
     this.flowBuf.fill(0);
 
+    // ── (0) 仮足の生成・老化・移動 ────────────────────
+    this.updateBursts(p, ob);
+
     // ── (1) Pressure 更新 ─────────────────────────────────
     // 食料: 一定の引力。源: 呼吸する pump (正負に振れる)。
+    // bodyConsolidation: B の高いセル自身が小さな正圧を出す → コアに質量が集まる。
+    //                    cap 付きなので runaway しない。
     for (let i = 0; i < N; i++) {
       const o = ob[i] ?? 0;
       if (o > 0.5) { this.Pbuf.data[i] = 0; continue; }
@@ -148,16 +207,26 @@ export class Membrane {
       const localBreath = 0.7 * globalBreath + 0.3 * Math.sin(phase + (this.noise.data[i] ?? 0));
       // 食料の静的引力 (常に正)
       const foodAttract = n * p.foodPressure;
+      const bv = this.B.data[i] ?? 0;
       // 体に乗っている所は呼吸の影響を受ける (肉自身がリズミカルに圧を作る)
       // localBreath の符号で押し出し/吸い込みが反転する → 全身を波が走る
-      const bodyPulse = (this.B.data[i] ?? 0) * p.bodyPulseAmp * localBreath;
+      const bodyPulse = bv * p.bodyPulseAmp * localBreath;
+      // コア凝集: cap を超えると 0 になり安定化する
+      const consol = p.bodyConsolidation * Math.min(bv, p.bodyConsolidationCap);
       // 既存の P は減衰
       const decayed = (this.P.data[i] ?? 0) * (1 - p.pressureDecay);
-      this.Pbuf.data[i] = decayed + foodAttract + bodyPulse;
+      this.Pbuf.data[i] = decayed + foodAttract + bodyPulse + consol;
     }
     // 源は呼吸する pump (±)
     for (const s of sources) {
       this.stamp(this.Pbuf, s.pos, p.sourcePump * globalBreath, 2.5);
+    }
+    // 仮足の局所バーストを Pbuf に焼き込む (half-sine 包絡)
+    for (const b of this.bursts) {
+      const t = b.age / b.life;
+      const env_ = Math.sin(t * Math.PI); // 0→1→0
+      if (env_ < 0.04) continue;
+      this.stampField(this.Pbuf, b.x, b.y, b.amp * env_, p.burstRadius);
     }
     // P を拡散
     diffuse(this.Pbuf, this.P, W, p.pressureDiff);
@@ -191,8 +260,12 @@ export class Membrane {
           if (dp > 0) { diffs.push([j, dp]); totalDp += dp; }
         }
         if (totalDp <= 0) continue;
+        // 前縁加速: 既に流れているセルは flowRate に小さなブーストが乗る。
+        // maxOutflow が物理的上限なので runaway しない。
+        const fm = this.flowMag.data[i] ?? 0;
+        const boost = 1 + p.frontBoost * Math.min(1, fm / Math.max(1e-6, p.frontBoostRef));
         // 出す総量: B * flowRate * dP合計、ただし maxOutflow で頭打ち
-        const moveTotal = Math.min(b * p.flowRate * totalDp, b * p.maxOutflow);
+        const moveTotal = Math.min(b * p.flowRate * boost * totalDp, b * p.maxOutflow);
         for (const [j, dp] of diffs) {
           const share = moveTotal * (dp / totalDp);
           this.Bbuf.data[i] = (this.Bbuf.data[i] ?? 0) - share;
@@ -220,7 +293,10 @@ export class Membrane {
       const src = this.B.data, dst = this.Bbuf.data;
       for (let i = 0; i < N; i++) dst[i] = src[i] ?? 0;
       const band = p.surfaceTensionBand;
-      const sigma = p.surfaceTension;
+      // 張力呼吸: source pump が外向き (globalBreath > 0) のとき張力を緩めて膜が膨らみやすくする。
+      // 源が吸い込む (< 0) ときは張力を強めて収縮を補助する。これで全体サイズが見える周期で揺れる。
+      const tensionMod = Math.max(0.05, 1 - p.tensionBreathAmp * globalBreath);
+      const sigma = p.surfaceTension * tensionMod;
       for (let y = 0; y < W; y++) {
         for (let x = 0; x < W; x++) {
           const i = y * W + x;
@@ -296,6 +372,77 @@ export class Membrane {
     let t = 0;
     for (let i = 0; i < this.size * this.size; i++) t += this.B.data[i] ?? 0;
     return t;
+  }
+
+  // 仮足の生成 + 老化 + drift。境界バンドにあるセルだけが種になり、
+  // 一度生まれたら接線方向に流れて寿命まで動く。粘菌の pseudopod 的振る舞い。
+  private updateBursts(p: MembraneParams, ob: Float32Array): void {
+    const W = this.size;
+    // 老化 + drift + 範囲外/障害物に入ったら除去
+    const alive: PressureBurst[] = [];
+    for (const b of this.bursts) {
+      b.age++;
+      if (b.age >= b.life) continue;
+      b.x += b.vx;
+      b.y += b.vy;
+      if (b.x < 1 || b.y < 1 || b.x >= W - 1 || b.y >= W - 1) continue;
+      const ix = Math.floor(b.x), iy = Math.floor(b.y);
+      if ((ob[iy * W + ix] ?? 0) > 0.5) continue;
+      alive.push(b);
+    }
+    this.bursts = alive;
+
+    // 生成: 境界バンドにあるセルを乱択し、tangent (= ∇B に直交) 方向の drift を与える
+    if (this.bursts.length < p.burstMax && this.rng.next() < p.burstRate) {
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const cx = 1 + this.rng.next() * (W - 2);
+        const cy = 1 + this.rng.next() * (W - 2);
+        const ix = Math.floor(cx), iy = Math.floor(cy);
+        if ((ob[iy * W + ix] ?? 0) > 0.5) continue;
+        const bv = this.B.data[iy * W + ix] ?? 0;
+        if (boundaryKernel(bv, p.surfaceTensionBand) < 0.5) continue;
+        // 中心差分で ∇B、その perpendicular を取る
+        const Bdata = this.B.data;
+        const ixR = Math.min(W - 1, ix + 1), ixL = Math.max(0, ix - 1);
+        const iyD = Math.min(W - 1, iy + 1), iyU = Math.max(0, iy - 1);
+        const gx = ((Bdata[iy * W + ixR] ?? 0) - (Bdata[iy * W + ixL] ?? 0)) * 0.5;
+        const gy = ((Bdata[iyD * W + ix] ?? 0) - (Bdata[iyU * W + ix] ?? 0)) * 0.5;
+        const gm = Math.hypot(gx, gy);
+        let vx = 0, vy = 0;
+        if (gm > 1e-4) {
+          const sign = this.rng.next() < 0.5 ? 1 : -1;
+          vx = (-gy / gm) * sign * p.burstDrift;
+          vy = (gx / gm) * sign * p.burstDrift;
+        }
+        this.bursts.push({
+          x: cx, y: cy,
+          amp: p.burstAmp * (0.6 + this.rng.next() * 0.8),
+          vx, vy,
+          age: 0,
+          life: Math.max(8, p.burstLife * (0.6 + this.rng.next() * 0.8)),
+        });
+        break;
+      }
+    }
+  }
+
+  // field 座標で disk を加算 (世界座標を取る private stamp と対をなす)
+  private stampField(target: FieldGrid, cx: number, cy: number, amount: number, radius: number): void {
+    const r2 = radius * radius;
+    const x0 = Math.max(0, Math.floor(cx - radius));
+    const x1 = Math.min(this.size - 1, Math.ceil(cx + radius));
+    const y0 = Math.max(0, Math.floor(cy - radius));
+    const y1 = Math.min(this.size - 1, Math.ceil(cy + radius));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx, dy = y - cy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= r2) {
+          const w = 1 - Math.sqrt(d2) / radius;
+          target.data[y * this.size + x] = (target.data[y * this.size + x] ?? 0) + amount * w;
+        }
+      }
+    }
   }
 
   private stamp(target: FieldGrid, pos: Vec2, amount: number, radius: number): void {

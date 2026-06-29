@@ -24,11 +24,13 @@ mkdirSync(OUT, { recursive: true });
 
 const rng = createRNG(7);
 const env = new GridEnvironment({ worldSize: WORLD, fieldSize: FIELD });
-env.placeFood({ x: 20, y: 25 }, 7, 1.0);
-env.placeFood({ x: 80, y: 25 }, 7, 1.0);
-env.placeFood({ x: 80, y: 80 }, 7, 1.0);
-env.placeFood({ x: 20, y: 80 }, 7, 1.0);
-env.placeStone({ x: 50, y: 55 }, 5);
+// 完全な格子配置だと膜が対称に4分岐して退屈な十字になる。
+// 各食料を不揃いの方向にずらし、サイズも少し変えて、自然なばらつきを作る。
+env.placeFood({ x: 17, y: 22 }, 7.5, 1.0);  // 左上やや外
+env.placeFood({ x: 83, y: 28 }, 6.5, 0.9);  // 右上やや内・控えめ
+env.placeFood({ x: 76, y: 84 }, 8.0, 1.1);  // 右下大きめ
+env.placeFood({ x: 24, y: 77 }, 6.0, 1.0);  // 左下やや内
+env.placeStone({ x: 48, y: 57 }, 5);        // 中央障害物も少しオフセット
 
 const membrane = new Membrane(WORLD, FIELD, rng);
 const sources = [{ pos: { x: 50, y: 30 } }];
@@ -116,12 +118,16 @@ function renderFrameRGBA(): Uint8Array {
       const n = membrane.noise.data[fy0 * FIELD + fx0] ?? 0;
       const breath = 1 + 0.08 * Math.sin(phase + n * 1.5);
 
-      const k = Math.pow(Math.min(1, v), 0.55) * breath;
+      // 密度カーブを steeper にしてコア (B>0.5) は十分明るく、
+      // エッジ (B<0.3) は強く減衰する。これで内部の厚みの違いが見える。
+      const vN = Math.min(1, v);
+      const k = Math.pow(vN, 0.85) * breath;
       // 前縁ほど白く: G・B を持ち上げる
-      const r = Math.min(255, 240 + front * 12);
-      const g = Math.min(255, 180 + 60 * Math.max(0, k - 0.5) * 2 + front * 50);
-      const b = Math.min(255, 60 + 150 * Math.max(0, k - 0.7) * 3 + front * 90);
-      const a = Math.min(0.95, 0.18 + k * 0.75 + front * 0.10);
+      const r = Math.min(255, 230 + front * 22);
+      const g = Math.min(255, 160 + 90 * Math.max(0, k - 0.45) * 1.8 + front * 60);
+      const b = Math.min(255, 40 + 180 * Math.max(0, k - 0.65) * 3 + front * 100);
+      // α もコア優位に: 縁は透けて消えるが、芯は重く乗る
+      const a = Math.min(0.96, Math.pow(vN, 0.6) * 0.85 + front * 0.12);
       const idx = (y * W + x) * 4;
       const inv = 1 - a;
       rgba[idx] = (rgba[idx] ?? 0) * inv + r * a;
