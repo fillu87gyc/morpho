@@ -1,6 +1,7 @@
 import type { SimState, SimNode, SimEdge, Vec2, NodeId } from '../types.js';
 import type { Environment, GrowthContext } from '../env/field.js';
 import type { ActivityField } from '../env/activity-field.js';
+import type { BiomassField } from '../env/biomass-field.js';
 import type { SeededRNG } from '../rng.js';
 import { EventBus } from '../events/bus.js';
 
@@ -45,6 +46,13 @@ export interface SimParams {
   wActivityField: number;
   activityFieldDecay: number;
   activityFieldDiffusion: number;
+  biomassDeposit: number;
+  biomassRadius: number;
+  biomassDecay: number;
+  biomassDiffusion: number;
+  wBiomassGradient: number;
+  lateralBudBiomassThreshold: number;
+  lateralBudProbability: number;
 }
 
 export const DEFAULT_PARAMS: SimParams = {
@@ -86,6 +94,13 @@ export const DEFAULT_PARAMS: SimParams = {
   wActivityField: 0.35,
   activityFieldDecay: 0.04,
   activityFieldDiffusion: 0.18,
+  biomassDeposit: 0.18,
+  biomassRadius: 2.6,
+  biomassDecay: 0.012,
+  biomassDiffusion: 0.05,
+  wBiomassGradient: 0.55,
+  lateralBudBiomassThreshold: 0.9,
+  lateralBudProbability: 0.18,
 };
 
 // ── インデックス ──────────────────────────────────────
@@ -208,6 +223,27 @@ function updateActivity(
   }
 }
 
+// ── (2b) Biomass: 各エッジが自分の体を場に滲ませる ──
+//
+// 「枝が伸びる」から「膜が広がる」に見せるための核となる処理。
+// エッジの中点に一発落とすのではなく、線分全体に沿ってディスクを重ねる。
+// 結果として隣接する複数のエッジの biomass は互いに重なり合い、
+// 観測時には一本の線ではなく「面」として見える。
+
+function updateBiomass(
+  state: SimState, bioField: BiomassField, params: SimParams, idx: NodeIndex,
+): void {
+  for (const e of state.edges) {
+    const a = idx.byId.get(e.from), b = idx.byId.get(e.to);
+    if (!a || !b) continue;
+    // activity と太さの両方が乗ることで、活きた幹は厚く、瀕死の細枝は薄く。
+    const amount = params.biomassDeposit * (0.25 + e.activity) * (0.5 + Math.min(2, e.radius));
+    const r = params.biomassRadius + Math.min(1.8, e.radius * 0.6);
+    bioField.depositSegment(a.pos, b.pos, amount, r);
+  }
+  bioField.diffuse(params.biomassDecay, params.biomassDiffusion);
+}
+
 // ── (3) 太さ: activity * flux で太る、fatigue で細る ─
 
 function updateRadius(state: SimState, params: SimParams, bus: EventBus): void {
@@ -265,7 +301,7 @@ function findMergeTarget(nodes: SimNode[], pos: Vec2, radius: number, excludeId:
 }
 
 function growFromTip(
-  state: SimState, env: Environment, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
   tip: SimNode, parentEdge: SimEdge | null,
   parentActivity: number, parentStress: number,
@@ -278,6 +314,10 @@ function growFromTip(
 
   const spread = params.candidateSpreadBase * (1 + parentStress * 0.8);
   const baseDir = chooseBaseDirection(tip, ctx, rng, idx);
+  // 自分自身の biomass は前進方向の指針にはならない（既に居る場所）。
+  // 候補先の biomass の高さは「膜の前線にいる」ことを意味するので、
+  // そこへ揃えて伸ばすと「集団で前進する」ように見える。
+  const tipBio = bioField.sample(tip.pos);
   let bestScore = -Infinity, bestCtx: GrowthContext | null = null, bestEnd: Vec2 | null = null;
   let rejected = 0;
 
@@ -294,10 +334,15 @@ function growFromTip(
     }
     const ec = env.sampleGrowthContext(end);
     if (ec.obstacle > 0.7) { rejected++; continue; }
+    // 候補先と現在地点の biomass 差。正なら「膜が既に滲んでいる方向」、
+    // すなわち隣の枝と肩を並べて前進する方向。これが「面」感の鍵。
+    const endBio = bioField.sample(end);
+    const biomassPull = (endBio - tipBio) * params.wBiomassGradient;
     const score =
       ec.nutrients * params.nutrientBias + ec.moisture * params.moistureBias -
       ec.brightness * params.brightnessPenalty - ec.obstacle * params.obstaclePenalty +
       (dir.x * ec.preferredDirection.x + dir.y * ec.preferredDirection.y) * params.gradientBias +
+      biomassPull +
       rng.next() * params.noiseAmount;
     if (score > bestScore) { bestScore = score; bestCtx = ec; bestEnd = end; }
   }
@@ -359,7 +404,7 @@ function growFromTip(
 }
 
 function growthStep(
-  state: SimState, env: Environment, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
 ): void {
   // 端点からの伸長
@@ -371,12 +416,20 @@ function growthStep(
       const eff = Math.max(avgAct, 0.6);
       if (eff > params.growthActivityThreshold && rng.next() < params.growthProbability * eff) {
         const pe = adj.length > 0 ? adj.reduce((a, b) => a.activity > b.activity ? a : b) : null;
-        growFromTip(state, env, params, rng, bus, idx, tip, pe, eff, avgStr);
+        growFromTip(state, env, bioField, params, rng, bus, idx, tip, pe, eff, avgStr);
       }
     } else {
       const pe = adj[0];
       if (pe && pe.activity > params.growthActivityThreshold && rng.next() < params.growthProbability * pe.activity) {
-        growFromTip(state, env, params, rng, bus, idx, tip, pe, pe.activity, pe.stress);
+        growFromTip(state, env, bioField, params, rng, bus, idx, tip, pe, pe.activity, pe.stress);
+        // 横方向の出芽: biomass が厚い場所ほど膜は「横にも」広がりたい。
+        // これが見た目を「線」から「面の前線」へ寄せる第二の機構。
+        const bio = bioField.sample(tip.pos);
+        if (bio > params.lateralBudBiomassThreshold &&
+            (idx.adjacency.get(tip.id)?.length ?? 0) < params.maxDegree &&
+            rng.next() < params.lateralBudProbability * pe.activity) {
+          lateralBud(state, env, bioField, params, rng, bus, idx, tip, pe);
+        }
       }
     }
   }
@@ -391,11 +444,57 @@ function growthStep(
       if (!node || node.type === 'sink') continue;
       const adj = idx.adjacency.get(nodeId);
       if (adj && adj.length >= params.maxDegree) continue;
-      if (growFromTip(state, env, params, rng, bus, idx, node, e, e.activity, e.stress)) {
+      if (growFromTip(state, env, bioField, params, rng, bus, idx, node, e, e.activity, e.stress)) {
         e.stress *= (1 - params.stressRelief);
       }
     }
   }
+}
+
+// 横方向出芽: 親エッジの方向に対して左右どちらかへ垂直に短いエッジを生やす。
+// 「枝分かれ」と違うのは、目的が「面を太くする」だけで、前進ではない点。
+function lateralBud(
+  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
+  rng: SeededRNG, bus: EventBus, idx: NodeIndex,
+  tip: SimNode, parentEdge: SimEdge,
+): boolean {
+  const other = idx.byId.get(parentEdge.from === tip.id ? parentEdge.to : parentEdge.from);
+  if (!other) return false;
+  const dx = tip.pos.x - other.pos.x, dy = tip.pos.y - other.pos.y;
+  const m = Math.hypot(dx, dy);
+  if (m < 1e-6) return false;
+  const side = rng.next() < 0.5 ? 1 : -1;
+  // 親方向に対し垂直
+  const nx = -dy / m * side, ny = dx / m * side;
+  const stepLen = params.growthStep * 0.6;
+  const end: Vec2 = { x: tip.pos.x + nx * stepLen, y: tip.pos.y + ny * stepLen };
+  if (end.x < params.worldMargin || end.y < params.worldMargin ||
+      end.x >= state.worldSize - params.worldMargin || end.y >= state.worldSize - params.worldMargin) return false;
+  const ec = env.sampleGrowthContext(end);
+  if (ec.obstacle > 0.6) return false;
+
+  const newNode: SimNode = {
+    id: state.nextNodeId++, pos: end, type: 'relay', bornAt: state.tick,
+  };
+  state.nodes.push(newNode);
+  const newEdge: SimEdge = {
+    id: state.nextEdgeId++, from: tip.id, to: newNode.id,
+    radius: params.initialRadius * 0.85, flux: 0,
+    length: stepLen, bornAt: state.tick,
+    // 横芽は伸びる気が薄い。初期 activity を低めにして
+    // すぐに前進競争には入らないようにする。
+    activity: parentEdge.activity * 0.5, fatigue: 0, stress: 0,
+  };
+  state.edges.push(newEdge);
+  idx.byId.set(newNode.id, newNode);
+  idx.adjacency.set(newNode.id, [newEdge]);
+  idx.adjacency.get(tip.id)?.push(newEdge);
+  idx.neighbors.set(newNode.id, new Set([tip.id]));
+  idx.neighbors.get(tip.id)?.add(newNode.id);
+  // 周囲に強めの biomass を即時滲ませる: 描画上「膜が膨らんだ」ように見える。
+  bioField.deposit(end, params.biomassDeposit * 2, params.biomassRadius + 0.8);
+  bus.emit({ type: 'NewBranch', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
+  return true;
 }
 
 // ── (5) 刈り込み ──────────────────────────────────────
@@ -420,21 +519,23 @@ function prune(state: SimState, params: SimParams, bus: EventBus): void {
 // ── 公開 API ─────────────────────────────────────────
 
 export function step(
-  state: SimState, env: Environment, actField: ActivityField,
+  state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
   params: SimParams, rng: SeededRNG, bus: EventBus,
 ): void {
   state.tick++;
   const idx = buildIndex(state);
   updateFlux(state, params, idx);
   updateActivity(state, env, actField, params, idx);
+  // Biomass は毎 tick: 場が拡散・減衰しながら膜のかたちを保つ。
+  updateBiomass(state, bioField, params, idx);
   if (state.tick % 4 === 0)  updateRadius(state, params, bus);
-  if (state.tick % 12 === 0) growthStep(state, env, params, rng, bus, idx);
+  if (state.tick % 12 === 0) growthStep(state, env, bioField, params, rng, bus, idx);
   if (state.tick % 60 === 0) prune(state, params, bus);
 }
 
 export function run(
-  state: SimState, env: Environment, actField: ActivityField,
+  state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
   params: SimParams, rng: SeededRNG, bus: EventBus, ticks: number,
 ): void {
-  for (let i = 0; i < ticks; i++) step(state, env, actField, params, rng, bus);
+  for (let i = 0; i < ticks; i++) step(state, env, actField, bioField, params, rng, bus);
 }
