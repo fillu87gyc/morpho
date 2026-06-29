@@ -2,6 +2,6 @@ node_modules/
 dist/
 renders/
 renders-biomass/
+renders-gif/
 .DS_Store
 *.log
-renders-gif/
