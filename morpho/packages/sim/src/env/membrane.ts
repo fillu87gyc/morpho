@@ -41,6 +41,8 @@ export interface MembraneParams {
   // 圧力ソース
   foodPressure: number;     // 食料が出す静的引力
   sourcePump: number;       // 源が出す呼吸圧の振幅 (±)
+  sourceRadius: number;     // 源 pump の作用半径 (field cell)。広いほど勾配が緩く、
+                            //   局所の点滅が消える。狭いと源 1 点が激しく明滅する。
   bodyPulseAmp: number;     // 体内 pulse: B 比例、per-cell noise phase で非同期
   pulsePeriod: number;      // 全体呼吸の周期
   // 圧力ダイナミクス
@@ -64,8 +66,11 @@ export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   initialRadius: 4.0,
   foodPressure: 0.18,
   sourcePump: 2.6,
+  sourceRadius: 4.5,          // 2.5 (狭い) だと源が点滅して目に痛い。広めにして
+                              //   圧力勾配を滑らかにし、点滅を消す
   bodyPulseAmp: 0.45,         // v2 (0.35) より少し強め: 仮足 explicit を抜いた分を補う
-  pulsePeriod: 130,
+  pulsePeriod: 200,           // 130 は人間の点滅知覚域に近い。200 まで延ばすと
+                              //   「ゆっくり脈打つ」に寄る (≈ 13 フレーム/呼吸)
   pressureDiff: 0.55,
   pressureDecay: 0.07,
   pressureMax: 4.0,
@@ -154,7 +159,7 @@ export class Membrane {
     }
     // 源は呼吸する pump。これが全体の周期的伸縮を駆動する。
     for (const s of sources) {
-      this.stamp(this.Pbuf, s.pos, p.sourcePump * globalBreath, 2.5);
+      this.stamp(this.Pbuf, s.pos, p.sourcePump * globalBreath, p.sourceRadius);
     }
     diffuse(this.Pbuf, this.P, W, p.pressureDiff);
     // クランプ + 障害物
