@@ -336,8 +336,9 @@ function growFromTip(
     if (ec.obstacle > 0.7) { rejected++; continue; }
     // 候補先と現在地点の biomass 差。正なら「膜が既に滲んでいる方向」、
     // すなわち隣の枝と肩を並べて前進する方向。これが「面」感の鍵。
+    // 負側はクランプ: 前線が新しい領域に踏み出すのを抑え込まないため。
     const endBio = bioField.sample(end);
-    const biomassPull = (endBio - tipBio) * params.wBiomassGradient;
+    const biomassPull = Math.max(0, endBio - tipBio) * params.wBiomassGradient;
     const score =
       ec.nutrients * params.nutrientBias + ec.moisture * params.moistureBias -
       ec.brightness * params.brightnessPenalty - ec.obstacle * params.obstaclePenalty +

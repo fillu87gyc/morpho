@@ -1,4 +1,5 @@
 node_modules/
 dist/
+renders/
 .DS_Store
 *.log
