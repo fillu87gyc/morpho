@@ -29,6 +29,11 @@ env.placeStone({ x: 50, y: 55 }, 5);
 
 const membrane = new Membrane(WORLD, FIELD, rng);
 const sources = [{ pos: { x: 50, y: 30 } }];
+const PARAMS = {
+  ...DEFAULT_MEMBRANE_PARAMS,
+  feedingRate: 0.025,
+  pressureDecay: 0.025,
+};
 
 function blend(png: PNG, x: number, y: number, r: number, g: number, b: number, a: number) {
   if (x < 0 || y < 0 || x >= W || y >= H) return;
@@ -113,11 +118,11 @@ function renderFrame(tick: number) {
   console.log(`tick=${tick} maxB=${maxV.toFixed(2)} totalB=${membrane.totalMass().toFixed(1)}`);
 }
 
-const SNAP_AT = [40, 100, 180, 280, 400, 550, 720, 900, 1100, 1300];
+const SNAP_AT = [300, 700, 1100, 1500, 2000, 2500, 2900];
 let nextIdx = 0;
 const total = SNAP_AT[SNAP_AT.length - 1]!;
 for (let t = 0; t <= total; t++) {
-  membrane.step(t, env, sources, DEFAULT_MEMBRANE_PARAMS);
+  membrane.step(t, env, sources, PARAMS);
   if (nextIdx < SNAP_AT.length && t === SNAP_AT[nextIdx]) {
     renderFrame(t);
     nextIdx++;
