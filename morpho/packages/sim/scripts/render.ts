@@ -1,7 +1,5 @@
-// 動作確認用レンダラ。
-// 左: BiomassField のヒートマップ（膜）
-// 右: 同じ tick の Edge ネットワーク（骨格）
-// 数 tick おきに PNG を吐く。
+// 単一ペイン: 膜(BiomassField) の上に管(Edge) を重ねる。
+// 本物の粘菌の見た目 — 黄色の膜の中に少し濃い管が走る — に寄せる。
 
 import { PNG } from 'pngjs';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -14,10 +12,9 @@ import {
 
 const WORLD = 100;
 const FIELD = 64;
-const TILE = 6;          // 1セル何ピクセル
-const PANE = FIELD * TILE;
-const W = PANE * 2 + 16; // 左パネル + ガター + 右パネル
-const H = PANE;
+const TILE = 8;
+const W = FIELD * TILE;
+const H = FIELD * TILE;
 
 const OUT = resolve('renders');
 mkdirSync(OUT, { recursive: true });
@@ -37,18 +34,23 @@ clearAroundSource(env, SOURCE, 6);
 seedSource(state, SOURCE, 8);
 const bus = new EventBus();
 
-function putPixel(png: PNG, x: number, y: number, r: number, g: number, b: number, a = 255) {
+function blend(png: PNG, x: number, y: number, r: number, g: number, b: number, a: number) {
   if (x < 0 || y < 0 || x >= W || y >= H) return;
   const i = (y * W + x) * 4;
-  png.data[i] = r; png.data[i + 1] = g; png.data[i + 2] = b; png.data[i + 3] = a;
+  const inv = 1 - a;
+  png.data[i] = png.data[i] * inv + r * a;
+  png.data[i + 1] = png.data[i + 1] * inv + g * a;
+  png.data[i + 2] = png.data[i + 2] * inv + b * a;
+  png.data[i + 3] = 255;
 }
 
-function lineAA(png: PNG, x0: number, y0: number, x1: number, y1: number, w: number, r: number, g: number, b: number) {
-  // 太線: distance-to-segment で塗る
-  const minX = Math.max(0, Math.floor(Math.min(x0, x1) - w - 1));
-  const maxX = Math.min(W - 1, Math.ceil(Math.max(x0, x1) + w + 1));
-  const minY = Math.max(0, Math.floor(Math.min(y0, y1) - w - 1));
-  const maxY = Math.min(H - 1, Math.ceil(Math.max(y0, y1) + w + 1));
+function lineGlow(png: PNG, x0: number, y0: number, x1: number, y1: number,
+                  coreW: number, glowW: number,
+                  core: [number, number, number], glow: [number, number, number]) {
+  const minX = Math.max(0, Math.floor(Math.min(x0, x1) - glowW - 2));
+  const maxX = Math.min(W - 1, Math.ceil(Math.max(x0, x1) + glowW + 2));
+  const minY = Math.max(0, Math.floor(Math.min(y0, y1) - glowW - 2));
+  const maxY = Math.min(H - 1, Math.ceil(Math.max(y0, y1) + glowW + 2));
   const dx = x1 - x0, dy = y1 - y0;
   const L2 = dx * dx + dy * dy;
   for (let y = minY; y <= maxY; y++) {
@@ -57,147 +59,132 @@ function lineAA(png: PNG, x0: number, y0: number, x1: number, y1: number, w: num
       if (t < 0) t = 0; else if (t > 1) t = 1;
       const px = x0 + dx * t, py = y0 + dy * t;
       const d = Math.hypot(x - px, y - py);
-      if (d <= w) {
-        const a = 1 - Math.max(0, d - (w - 1));
-        const i = (y * W + x) * 4;
-        const inv = 1 - a;
-        png.data[i] = png.data[i] * inv + r * a;
-        png.data[i + 1] = png.data[i + 1] * inv + g * a;
-        png.data[i + 2] = png.data[i + 2] * inv + b * a;
-        png.data[i + 3] = 255;
+      if (d <= glowW) {
+        if (d <= coreW) {
+          // 中心: くっきり
+          const a = 1 - Math.max(0, d - (coreW - 1));
+          blend(png, x, y, core[0], core[1], core[2], Math.min(1, a));
+        } else {
+          // 外周: 柔らかい halo
+          const k = 1 - (d - coreW) / (glowW - coreW);
+          const a = 0.55 * k * k;
+          blend(png, x, y, glow[0], glow[1], glow[2], a);
+        }
       }
     }
   }
-}
-
-function colormap(v: number): [number, number, number] {
-  // 黒→紫→橙→白。低密度を背景に溶かしたいので γ を効かせる。
-  const t = Math.max(0, Math.min(1, Math.pow(v, 0.7)));
-  const r = Math.min(255, Math.floor(255 * Math.min(1, t * 2.0)));
-  const g = Math.min(255, Math.floor(255 * Math.max(0, Math.min(1, t * 2 - 0.6))));
-  const b = Math.min(255, Math.floor(255 * Math.max(0, Math.min(1, 0.8 - Math.abs(t - 0.3) * 2.5) + Math.max(0, t - 0.85) * 4)));
-  return [r, g, b];
 }
 
 function renderFrame(tick: number, snap: SimState, bioField: BiomassField, envRef: GridEnvironment) {
   const png = new PNG({ width: W, height: H });
-  // 背景
+  // 背景: 暗い培地
   for (let i = 0; i < W * H * 4; i += 4) {
-    png.data[i] = 8; png.data[i + 1] = 8; png.data[i + 2] = 14; png.data[i + 3] = 255;
+    png.data[i] = 6; png.data[i + 1] = 5; png.data[i + 2] = 9; png.data[i + 3] = 255;
   }
 
-  // 左パネル: biomass ヒートマップ
-  const maxV = (() => {
-    let m = 0;
-    for (let i = 0; i < bioField.field.data.length; i++) {
-      const v = bioField.field.data[i] ?? 0;
-      if (v > m) m = v;
-    }
-    return Math.max(m, 0.4);
-  })();
-
+  // (1) 食料: 薄緑のグラデ
   for (let fy = 0; fy < FIELD; fy++) {
     for (let fx = 0; fx < FIELD; fx++) {
-      const v = (bioField.field.data[fy * FIELD + fx] ?? 0) / maxV;
-      const [r, g, b] = colormap(v);
+      const nut = envRef.nutrients.data[fy * FIELD + fx] ?? 0;
+      if (nut < 0.05) continue;
+      const a = Math.min(0.55, nut * 0.5);
       const x0 = fx * TILE, y0 = fy * TILE;
-      for (let dy = 0; dy < TILE; dy++) {
-        for (let dx = 0; dx < TILE; dx++) {
-          putPixel(png, x0 + dx, y0 + dy, r, g, b);
-        }
+      for (let dy = 0; dy < TILE; dy++) for (let dx = 0; dx < TILE; dx++) {
+        blend(png, x0 + dx, y0 + dy, 50, 180, 70, a);
       }
     }
   }
-
-  // 左パネルに食料 (緑) と障害物 (グレー) を控えめに重ねる
+  // (2) 障害物: グレーで明示
   for (let fy = 0; fy < FIELD; fy++) {
     for (let fx = 0; fx < FIELD; fx++) {
-      const nut = envRef.nutrients.data[fy * FIELD + fx] ?? 0;
       const ob = envRef.obstacle.data[fy * FIELD + fx] ?? 0;
-      if (nut > 0.2) {
-        const a = Math.min(0.45, nut * 0.4);
-        const x0 = fx * TILE, y0 = fy * TILE;
-        for (let dy = 0; dy < TILE; dy++) for (let dx = 0; dx < TILE; dx++) {
-          const idx = ((y0 + dy) * W + (x0 + dx)) * 4;
-          png.data[idx] = png.data[idx] * (1 - a) + 60 * a;
-          png.data[idx + 1] = png.data[idx + 1] * (1 - a) + 220 * a;
-          png.data[idx + 2] = png.data[idx + 2] * (1 - a) + 90 * a;
-        }
-      }
-      if (ob > 0.5) {
-        const x0 = fx * TILE, y0 = fy * TILE;
-        for (let dy = 0; dy < TILE; dy++) for (let dx = 0; dx < TILE; dx++) {
-          const idx = ((y0 + dy) * W + (x0 + dx)) * 4;
-          png.data[idx] = 70; png.data[idx + 1] = 70; png.data[idx + 2] = 80;
-        }
+      if (ob < 0.5) continue;
+      const x0 = fx * TILE, y0 = fy * TILE;
+      for (let dy = 0; dy < TILE; dy++) for (let dx = 0; dx < TILE; dx++) {
+        blend(png, x0 + dx, y0 + dy, 70, 65, 75, 0.9);
       }
     }
   }
 
-  // 右パネル: ネットワーク（骨格）
-  const offX = PANE + 16;
-  // パネル背景
-  for (let y = 0; y < PANE; y++) {
-    for (let x = 0; x < PANE; x++) {
-      putPixel(png, offX + x, y, 18, 18, 26);
-    }
+  // (3) 膜 (BiomassField) を黄色いセル質として滲ませる
+  // バイリニアで滑らかに、密度に応じて黄→金→白の階調
+  let maxV = 0;
+  for (let i = 0; i < bioField.field.data.length; i++) {
+    const v = bioField.field.data[i] ?? 0;
+    if (v > maxV) maxV = v;
   }
-  // 食料・障害物を右にも軽く
-  for (let fy = 0; fy < FIELD; fy++) {
-    for (let fx = 0; fx < FIELD; fx++) {
-      const nut = envRef.nutrients.data[fy * FIELD + fx] ?? 0;
-      const ob = envRef.obstacle.data[fy * FIELD + fx] ?? 0;
-      const x0 = offX + fx * TILE, y0 = fy * TILE;
-      if (nut > 0.2) {
-        const a = Math.min(0.3, nut * 0.3);
-        for (let dy = 0; dy < TILE; dy++) for (let dx = 0; dx < TILE; dx++) {
-          const idx = ((y0 + dy) * W + (x0 + dx)) * 4;
-          png.data[idx] = png.data[idx] * (1 - a) + 60 * a;
-          png.data[idx + 1] = png.data[idx + 1] * (1 - a) + 200 * a;
-          png.data[idx + 2] = png.data[idx + 2] * (1 - a) + 90 * a;
-        }
-      }
-      if (ob > 0.5) {
-        for (let dy = 0; dy < TILE; dy++) for (let dx = 0; dx < TILE; dx++) {
-          const idx = ((y0 + dy) * W + (x0 + dx)) * 4;
-          png.data[idx] = 70; png.data[idx + 1] = 70; png.data[idx + 2] = 80;
-        }
-      }
+  maxV = Math.max(maxV, 0.4);
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      // バイリニア sample
+      const fxF = x / TILE, fyF = y / TILE;
+      const fx0 = Math.floor(fxF), fy0 = Math.floor(fyF);
+      const fx1 = Math.min(FIELD - 1, fx0 + 1), fy1 = Math.min(FIELD - 1, fy0 + 1);
+      const tx = fxF - fx0, ty = fyF - fy0;
+      const v00 = bioField.field.data[fy0 * FIELD + fx0] ?? 0;
+      const v10 = bioField.field.data[fy0 * FIELD + fx1] ?? 0;
+      const v01 = bioField.field.data[fy1 * FIELD + fx0] ?? 0;
+      const v11 = bioField.field.data[fy1 * FIELD + fx1] ?? 0;
+      const v = ((v00 * (1 - tx) + v10 * tx) * (1 - ty) +
+                 (v01 * (1 - tx) + v11 * tx) * ty) / maxV;
+      if (v < 0.02) continue;
+      // ガンマ補正で「縁が霞む」感じを出す
+      const k = Math.pow(Math.min(1, v), 0.55);
+      // 黄色→金→白
+      const r = 240;
+      const g = Math.floor(190 + 50 * Math.max(0, k - 0.5) * 2);
+      const b = Math.floor(80 + 130 * Math.max(0, k - 0.6) * 2);
+      const a = Math.min(0.85, 0.18 + k * 0.65);
+      blend(png, x, y, r, g, b, a);
     }
   }
 
-  // エッジを描画
+  // (4) 骨格 (Edge): 膜の中を走る管。flux と radius で太さ・明るさを決める。
   const nodeMap = new Map(snap.nodes.map(n => [n.id, n]));
-  const scale = PANE / WORLD;
-  for (const e of snap.edges) {
+  const scale = W / WORLD;
+  // 太い管を後に描くため、まず細い管を、次に太い管を順に
+  const sorted = [...snap.edges].sort((a, b) => a.radius - b.radius);
+  for (const e of sorted) {
     const a = nodeMap.get(e.from), b = nodeMap.get(e.to);
     if (!a || !b) continue;
-    const w = Math.max(1, e.radius * 1.4);
-    const intensity = Math.min(1, e.activity * 0.6 + e.radius * 0.25);
-    const cr = 220, cg = Math.floor(140 + 110 * intensity), cb = Math.floor(80 + 160 * (1 - intensity));
-    lineAA(png, offX + a.pos.x * scale, a.pos.y * scale, offX + b.pos.x * scale, b.pos.y * scale, w, cr, cg, cb);
+    const fluxN = Math.min(1, e.flux / 5);
+    // 太さ: radius が主、flux で補強
+    const core = Math.max(1.0, e.radius * 1.2 + fluxN * 1.4);
+    const glow = core + 2.5;
+    // 色: 膜より赤寄り・暗めの「茶橙」が中心、glow は黄。
+    // 流れがあるエッジほど暗く濃く見える (本物の管も外側より少し暗い)。
+    const t = Math.min(1, fluxN * 0.7 + e.radius * 0.25);
+    const coreC: [number, number, number] = [
+      Math.floor(160 - 40 * t),
+      Math.floor(95  - 30 * t),
+      Math.floor(35  + 10 * t),
+    ];
+    const glowC: [number, number, number] = [255, 210, 110];
+    lineGlow(png,
+      a.pos.x * scale, a.pos.y * scale,
+      b.pos.x * scale, b.pos.y * scale,
+      core, glow, coreC, glowC);
   }
 
-  // ノード
+  // (5) ノード: source(青) と sink(緑) のみ目立たせる
   for (const n of snap.nodes) {
-    const cx = offX + n.pos.x * scale, cy = n.pos.y * scale;
-    const r = n.type === 'source' ? 4 : n.type === 'sink' ? 4 : 2;
-    const [r2, g2, b2] =
-      n.type === 'source' ? [120, 200, 255] :
-      n.type === 'sink'   ? [120, 255, 140] :
-                            [220, 200, 160];
+    if (n.type === 'relay') continue;
+    const cx = n.pos.x * scale, cy = n.pos.y * scale;
+    const r = 5;
+    const [r2, g2, b2] = n.type === 'source' ? [120, 200, 255] : [120, 255, 140];
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-      if (dx * dx + dy * dy <= r * r) putPixel(png, cx + dx, cy + dy, r2, g2, b2);
+      const d = Math.hypot(dx, dy);
+      if (d <= r) blend(png, cx + dx, cy + dy, r2, g2, b2, 1 - d / r);
     }
   }
 
   const path = resolve(OUT, `frame-${String(tick).padStart(4, '0')}.png`);
   writeFileSync(path, PNG.sync.write(png));
-  console.log(`wrote ${path} (edges=${snap.edges.length}, nodes=${snap.nodes.length}, maxBio=${maxV.toFixed(2)})`);
+  console.log(`tick=${tick} edges=${snap.edges.length} nodes=${snap.nodes.length} maxBio=${maxV.toFixed(2)}`);
 }
 
-// メインループ
-const SNAP_AT = [30, 80, 150, 240, 360, 540, 800];
+const SNAP_AT = [60, 150, 280, 450, 700, 1000, 1400];
 let nextIdx = 0;
 const total = SNAP_AT[SNAP_AT.length - 1]!;
 for (let t = 0; t <= total; t++) {
