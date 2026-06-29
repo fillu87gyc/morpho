@@ -1,4 +1,7 @@
 node_modules/
 dist/
-*.log
+renders/
+renders-biomass/
+renders-gif/
 .DS_Store
+*.log
