@@ -49,8 +49,9 @@ export interface MembraneParams {
   viscosity: number;        // B 自体の僅かな拡散 (べたつき) — 0.0–0.05 程度
   // 呼吸
   pulsePeriod: number;
-  // 餌食い (任意の遅い生成: 食料に乗っている B は微増)
-  feedingRate: number;
+  // 餌食い: 食料に乗っている膜は栄養を消費し、自分は微増する
+  consumeRate: number;  // 食料が減る速さ (B 比例)
+  feedingRate: number;  // 消費分のうち B 自身に取り込まれる係数
 }
 
 export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
@@ -66,7 +67,8 @@ export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   maxOutflow: 0.28,
   viscosity: 0.025,
   pulsePeriod: 130,
-  feedingRate: 0.0002,
+  consumeRate: 0.012,   // B=10 が乗ると 0.12/tick で食料減る → 中規模食料は 100tick程度で枯渇
+  feedingRate: 0.10,    // 消費した栄養の 10% が肉に変わる (緩やかな成長)
 };
 
 export class Membrane {
@@ -186,14 +188,17 @@ export class Membrane {
       [this.B.data, this.Bbuf.data] = [this.Bbuf.data, this.B.data];
     }
 
-    // ── (4) 餌食い (任意の遅い質量増加) ──────────────────
-    // 食料に乗っている膜は微増する。長期的な成長を許す。
-    if (p.feedingRate > 0) {
+    // ── (4) 餌食い: 膜が乗っている食料は減り、膜は微増する ──
+    // これがないと食料圧が永続して膜が食料に「貼り付く」。
+    // 食料が枯れると圧が消え、膜は次の食料へ流れる (= 粘菌の探索パターン)。
+    if (p.consumeRate > 0) {
       for (let i = 0; i < N; i++) {
         const n = nut[i] ?? 0;
         const b = this.B.data[i] ?? 0;
-        if (b > 0.01 && n > 0.1) {
-          this.B.data[i] = b + p.feedingRate * n * b;
+        if (n > 0.001 && b > 0.05) {
+          const consumed = Math.min(n, b * p.consumeRate);
+          nut[i] = n - consumed;
+          this.B.data[i] = b + consumed * p.feedingRate;
         }
       }
     }
