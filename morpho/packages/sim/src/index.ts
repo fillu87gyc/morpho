@@ -3,6 +3,7 @@ export * from './rng.js';
 export * from './env/field.js';
 export * from './env/activity-field.js';
 export * from './env/biomass-field.js';
+export * from './env/membrane.js';
 export * from './events/bus.js';
 export * from './graph/step.js';
 export * from './graph/init.js';

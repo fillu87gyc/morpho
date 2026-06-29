@@ -1,5 +1,6 @@
 node_modules/
 dist/
 renders/
+renders-biomass/
 .DS_Store
 *.log
