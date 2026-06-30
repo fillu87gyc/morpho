@@ -24,11 +24,14 @@ mkdirSync(OUT, { recursive: true });
 
 const rng = createRNG(7);
 const env = new GridEnvironment({ worldSize: WORLD, fieldSize: FIELD });
-env.placeFood({ x: 20, y: 25 }, 7, 1.0);
-env.placeFood({ x: 80, y: 25 }, 7, 1.0);
-env.placeFood({ x: 80, y: 80 }, 7, 1.0);
-env.placeFood({ x: 20, y: 80 }, 7, 1.0);
-env.placeStone({ x: 50, y: 55 }, 5);
+// 完全な格子配置だと膜が対称に4分岐して退屈な十字になる。
+// 各食料を不揃いの方向・サイズ・量にして、膜の探索戦略が見えるようにする。
+// 大きい食料ほど引力が強く長く保たれ、小さい食料は素早く食べ尽くされる。
+env.placeFood({ x: 17, y: 22 }, 10.0, 1.3);  // 左上 大: ごちそう
+env.placeFood({ x: 83, y: 28 },  4.5, 0.8);  // 右上 小: つまみ
+env.placeFood({ x: 76, y: 84 },  8.0, 1.1);  // 右下 中
+env.placeFood({ x: 24, y: 77 },  6.0, 0.6);  // 左下 中サイズ・薄い
+env.placeStone({ x: 48, y: 57 }, 5);        // 中央障害物も少しオフセット
 
 const membrane = new Membrane(WORLD, FIELD, rng);
 const sources = [{ pos: { x: 50, y: 30 } }];
@@ -75,13 +78,21 @@ function renderFrameRGBA(): Uint8Array {
     }
   }
 
-  // 膜
-  let maxV = 0;
+  // 膜本体 + 前縁グロー。両方とも物理量 (B, |v|·B) から派生。
+  // 以前あった brightness *= sin(phase) の演出オーバーレイは撤廃。
+  // 呼吸が見えるかどうかは physics (P の振動 → 膜の伸縮) に任せる。
+  let maxV = 0, maxF = 0, maxT = 0;
   for (let i = 0; i < FIELD * FIELD; i++) {
     const v = membrane.B.data[i] ?? 0;
     if (v > maxV) maxV = v;
+    const f = membrane.flowMag.data[i] ?? 0;
+    if (f > maxF) maxF = f;
+    const t = membrane.traffic.data[i] ?? 0;
+    if (t > maxT) maxT = t;
   }
   maxV = Math.max(maxV, 0.3);
+  maxF = Math.max(maxF, 1e-4);
+  maxT = Math.max(maxT, 1e-4);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const fxF = x / TILE, fyF = y / TILE;
@@ -95,11 +106,47 @@ function renderFrameRGBA(): Uint8Array {
       const v = ((v00 * (1 - tx) + v10 * tx) * (1 - ty) +
                  (v01 * (1 - tx) + v11 * tx) * ty) / maxV;
       if (v < 0.02) continue;
-      const k = Math.pow(Math.min(1, v), 0.55);
-      const r = 240;
-      const g = Math.floor(180 + 60 * Math.max(0, k - 0.5) * 2);
-      const b = Math.floor(60 + 150 * Math.max(0, k - 0.7) * 3);
-      const a = Math.min(0.92, 0.18 + k * 0.75);
+
+      // 前縁シグナル (短期の流れ、隣接 4 セルから補間)
+      const f00 = membrane.flowMag.data[fy0 * FIELD + fx0] ?? 0;
+      const f10 = membrane.flowMag.data[fy0 * FIELD + fx1] ?? 0;
+      const f01 = membrane.flowMag.data[fy1 * FIELD + fx0] ?? 0;
+      const f11 = membrane.flowMag.data[fy1 * FIELD + fx1] ?? 0;
+      const fNorm = ((f00 * (1 - tx) + f10 * tx) * (1 - ty) +
+                     (f01 * (1 - tx) + f11 * tx) * ty) / maxF;
+      const front = Math.min(1, fNorm * 1.6);
+
+      // Traffic (長期の流量履歴、管シグナル)。これが膜内の persistent な流路。
+      const t00 = membrane.traffic.data[fy0 * FIELD + fx0] ?? 0;
+      const t10 = membrane.traffic.data[fy0 * FIELD + fx1] ?? 0;
+      const t01 = membrane.traffic.data[fy1 * FIELD + fx0] ?? 0;
+      const t11 = membrane.traffic.data[fy1 * FIELD + fx1] ?? 0;
+      const tNorm = ((t00 * (1 - tx) + t10 * tx) * (1 - ty) +
+                     (t01 * (1 - tx) + t11 * tx) * ty) / maxT;
+      // 閾値を下げて、控えめな管も拾う
+      const tube = Math.max(0, Math.min(1, (tNorm - 0.12) / 0.55));
+
+      // 密度カーブを steeper にしてコア (B>0.5) は十分明るく、
+      // エッジ (B<0.3) は強く減衰する。これで内部の厚みの違いが見える。
+      const vN = Math.min(1, v);
+      const k = Math.pow(vN, 0.85);
+      // 色 (B 由来): ベースの肉色
+      let r = 230 + front * 22;
+      let g = 160 + 90 * Math.max(0, k - 0.45) * 1.8 + front * 60;
+      let b = 40 + 180 * Math.max(0, k - 0.65) * 3 + front * 100;
+      // 管 overlay: 膜の中に青白い persistent な筋を描く。
+      // 強度・閾値とも v1 より強め。B 上に乗っている所だけ光らせる。
+      if (tube > 0 && vN > 0.10) {
+        const tg = Math.min(1, tube * 1.3);
+        r = r * (1 - tg * 0.55) + 235 * tg;
+        g = g * (1 - tg * 0.35) + 248 * tg;
+        b = b * (1 - tg * 0.10) + 255 * tg;
+      }
+      r = Math.min(255, r);
+      g = Math.min(255, g);
+      b = Math.min(255, b);
+      // α もコア優位に: 縁は透けて消えるが、芯は重く乗る
+      const a = Math.min(0.96, Math.pow(vN, 0.6) * 0.85 + front * 0.12 + tube * 0.10);
       const idx = (y * W + x) * 4;
       const inv = 1 - a;
       rgba[idx] = (rgba[idx] ?? 0) * inv + r * a;
