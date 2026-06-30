@@ -4,12 +4,14 @@
 //   - 描画は別クラスに委譲 (render.ts)
 //   - 入力 (ツール選択 / クリック / リセット / 速度) は ui.ts と連携
 //
-// UI 側からは getSnapshot() で読み取り、各種 setX() で意思を渡す。
+// パラメータは main の scripts/biomass-gif.ts (ペトリ皿デモ) と同じ
+// チューニングを使う。DEFAULT_PARAMS のまま走らせると太くてまばらな
+// 管しか出ないため、参照映像のような細い脈管網にならない。
 
 import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, computeTraits,
-  type SimState, type Vec2, type Traits,
+  type SimState, type SimParams, type Vec2, type Traits,
 } from '@morpho/sim';
 
 export type Tool = 'food' | 'light' | 'water' | 'stone' | 'erase';
@@ -32,9 +34,34 @@ export interface GameSnapshot {
 }
 
 const WORLD = 100;
-const FIELD = 64;
-const TICKS_PER_DAY = 30;       // 体感優先で日数化
+const FIELD = 96;               // main のペトリデモと同じ高解像
+const TICKS_PER_DAY = 40;
 const DEFAULT_SOURCE: Vec2 = { x: 50, y: 50 };
+
+// main/scripts/biomass-gif.ts の PARAMS と同じ override。
+// 「皿全体に細い脈管が広がる」体験を出すのに必要な値。
+export const PETRI_PARAMS: SimParams = {
+  ...DEFAULT_PARAMS,
+  growthStep: 3.6,
+  candidateSpreadBase: 1.0,
+  growthActivityThreshold: 0.20,
+  growthProbability: 0.85,
+  branchProbabilityBase: 0.10,
+  branchActivityThreshold: 0.35,
+  pruneRadius: 0.18,
+  fatigueGrow: 0.008,
+  nutrientBias: 2.5,
+  gradientBias: 0.4,
+  noiseAmount: 0.30,
+  worldMargin: 5,
+  mergeRadius: 1.2,
+  lateralBudBiomassThreshold: 0.20,
+  lateralBudProbability: 0.30,
+  biomassDeposit: 0.06,
+  biomassRadius: 2.2,
+  biomassDiffusion: 0.04,
+  biomassDecay: 0.025,
+};
 
 export class Game {
   state!: SimState;
@@ -46,13 +73,12 @@ export class Game {
   private seed: number;
 
   tool: Tool = 'food';
-  brushRadius = 8;       // world units (UI スライダで操作)
-  speed = 1;             // ticks per frame
+  brushRadius = 5;        // 皿が小さいので既定ブラシも小さめ
+  speed = 1;              // ticks per frame
   worldSize = WORLD;
   fieldSize = FIELD;
 
   private recentEvents: string[] = [];
-  private lastTickMs = performance.now();
 
   constructor(seed = (Math.random() * 1e9) | 0) {
     this.seed = seed;
@@ -67,15 +93,21 @@ export class Game {
     this.bio = new BiomassField(WORLD, FIELD);
     this.bus = new EventBus();
     this.state = createInitialState(seed, WORLD);
-    // 初期: ど真ん中に source、四方に少し食料を撒いておくと最初の伸びが見える
-    clearAroundSource(this.env, DEFAULT_SOURCE, 6);
-    seedSource(this.state, DEFAULT_SOURCE, 8);
-    this.env.placeFood({ x: 25, y: 25 }, 6, 0.7);
-    this.env.placeFood({ x: 75, y: 25 }, 6, 0.7);
-    this.env.placeFood({ x: 75, y: 75 }, 6, 0.7);
-    this.env.placeFood({ x: 25, y: 75 }, 6, 0.7);
+
+    // 中央の「オートミール」(=ソース)。
+    // 源を食料の上に置くと初手で tip が全部 sink になり広がらないため
+    // 食料は皿の外周 6 箇所に分散する (main のデモと同じ構図)。
+    clearAroundSource(this.env, DEFAULT_SOURCE, 4);
+    seedSource(this.state, DEFAULT_SOURCE, 6);
+    this.env.placeFood({ x: 22, y: 22 }, 4.5, 0.95);
+    this.env.placeFood({ x: 78, y: 22 }, 5.0, 1.10);
+    this.env.placeFood({ x: 82, y: 55 }, 4.0, 0.85);
+    this.env.placeFood({ x: 78, y: 80 }, 5.0, 1.05);
+    this.env.placeFood({ x: 22, y: 78 }, 4.5, 0.95);
+    this.env.placeFood({ x: 18, y: 50 }, 4.0, 0.85);
+
     this.recentEvents = [];
-    this.pushEvent('新しい世界が始まった');
+    this.pushEvent('新しい皿が用意された');
   }
 
   setTool(t: Tool): void { this.tool = t; }
@@ -85,10 +117,8 @@ export class Game {
   // 1 フレームぶん。requestAnimationFrame のたびに呼ぶ。
   tick(): void {
     for (let i = 0; i < this.speed; i++) {
-      step(this.state, this.env, this.act, this.bio, DEFAULT_PARAMS, this.rng, this.bus);
+      step(this.state, this.env, this.act, this.bio, PETRI_PARAMS, this.rng, this.bus);
     }
-    // 拡散場の自然な減衰 (Activity / Biomass は sim 側で減衰、env は静的)
-    this.lastTickMs = performance.now();
   }
 
   // UI からのクリック。canvas 座標 (px, css size) を渡す。
@@ -97,7 +127,7 @@ export class Game {
     const pos: Vec2 = { x: canvasX * s, y: canvasY * s };
     const r = this.brushRadius;
     switch (this.tool) {
-      case 'food': this.env.placeFood(pos, r, 0.55); break;
+      case 'food': this.env.placeFood(pos, r, 0.7); break;
       case 'light': this.env.placeLight(pos, r, 0.45); break;
       case 'water': this.env.placeWater(pos, r, 0.4); break;
       case 'stone': this.env.placeStone(pos, Math.max(2, r * 0.5)); break;
@@ -170,7 +200,6 @@ export class Game {
   }
 
   private countFoodSpots(): number {
-    // 「食料拠点」= ある閾値以上のエサがあるセルの連結成分数 (簡易: 閾値以上のセル数 / 平均拠点サイズ)
     let cells = 0;
     for (let i = 0; i < this.env.nutrients.data.length; i++) {
       if ((this.env.nutrients.data[i] ?? 0) > 0.3) cells++;

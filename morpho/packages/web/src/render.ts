@@ -1,8 +1,20 @@
-// Canvas レンダラ。PNG 版 (sim/scripts/render.ts) を Web に移植したもの。
-// 構成:
-//   1. オフスクリーン ImageData (field 解像度) に「土地系」(食料/障害物/Biomass) を焼く
-//   2. それを Canvas 全面にバイリニア拡大 (imageSmoothingEnabled)
-//   3. 上から管 (Edge) と ノード (source/sink) をベクター描画 (光彩は乗算合成)
+// Canvas レンダラ。main の scripts/biomass-gif.ts (ペトリ皿デモ) を移植。
+//
+// 構成は同じく 4 レイヤー:
+//   1. シャーレ (暖灰のラジアル + 細い暗いリム)
+//   2. 食料 (オートミール色の薄い斑)
+//   3. プラズマ (黄〜金〜白、密度に応じてグラデ)
+//   4. 脈管網 (2 パス: 大きい halo → 細い core)
+// 加えて Web 版だけのオーバーレイ:
+//   5. 環境ヒート (栄養/水/光) — UI トグル
+//   6. 障害物 (石)
+//   7. カーソルプレビュー
+//
+// 高速化:
+//   - プラズマ / 食料 / 障害物 / ヒート は FIELD 解像度 (96x96) の
+//     オフスクリーン ImageData に焼き、drawImage で smoothing 付き拡大
+//   - 脈管は Canvas Path で 2 パス: lighter で halo → そのままで core
+//   - シャーレ枠とカーソルはベクター直描
 
 import type {
   SimState,
@@ -15,6 +27,18 @@ export interface RenderOptions {
   fieldSize: number;
   showHeat: boolean;
 }
+
+// 配色 (biomass-gif.ts と同じ系統)
+const DISH_INNER: [number, number, number] = [228, 224, 213];
+const DISH_OUTER: [number, number, number] = [188, 184, 176];
+const DISH_RIM:   [number, number, number] = [110, 105, 100];
+const BG:         [number, number, number] = [18, 17, 20];
+const FOOD_HI:    [number, number, number] = [232, 218, 188];
+const FOOD_LO:    [number, number, number] = [188, 168, 132];
+const PLASMA_RIM: [number, number, number] = [200, 170, 60];
+const PLASMA_MID: [number, number, number] = [232, 195, 70];
+const PLASMA_HI:  [number, number, number] = [255, 230, 130];
+const TUBE_HALO:  [number, number, number] = [255, 240, 170];
 
 export class CanvasRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -30,7 +54,6 @@ export class CanvasRenderer {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.resize();
 
-    // オフスクリーン: field 解像度のままピクセルを置く
     this.fieldCanvas = document.createElement('canvas');
     this.fieldCanvas.width = opts.fieldSize;
     this.fieldCanvas.height = opts.fieldSize;
@@ -51,98 +74,141 @@ export class CanvasRenderer {
 
   setShowHeat(v: boolean): void { this.opts.showHeat = v; }
 
+  // シャーレの「描画上の半径」(px in CSS) と中心。CSS 座標で返す。
+  dishGeometry(): { cx: number; cy: number; r: number } {
+    const cssW = this.canvas.width / this.dpr;
+    const cssH = this.canvas.height / this.dpr;
+    return { cx: cssW / 2, cy: cssH / 2, r: Math.min(cssW, cssH) * 0.48 };
+  }
+
   draw(state: SimState, env: GridEnvironment, bio: BiomassField, hoverPx?: { x: number; y: number; radius: number; tool: string }): void {
     const { ctx } = this;
     const cssW = this.canvas.width / this.dpr;
     const cssH = this.canvas.height / this.dpr;
+    const { cx, cy, r: dishR } = this.dishGeometry();
 
-    // 1. 背景
-    const bg = ctx.createRadialGradient(cssW / 2, cssH / 2, 0, cssW / 2, cssH / 2, cssW * 0.7);
-    bg.addColorStop(0, '#0e1411');
-    bg.addColorStop(1, '#06080a');
-    ctx.fillStyle = bg;
+    // 0. 暗い背景
+    ctx.fillStyle = rgb(BG);
     ctx.fillRect(0, 0, cssW, cssH);
 
-    // 2. オフスクリーン: 食料 / 障害物 / Biomass を pixel-by-pixel で焼く
+    // 1. シャーレ (暖灰のラジアル)
+    const dishGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, dishR);
+    dishGrad.addColorStop(0, rgb(DISH_INNER));
+    dishGrad.addColorStop(0.9, rgb(DISH_OUTER));
+    dishGrad.addColorStop(1, rgb(DISH_OUTER));
+    ctx.fillStyle = dishGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, dishR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 以下、シャーレ内側にだけ描く
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, dishR, 0, Math.PI * 2);
+    ctx.clip();
+
+    // 2 + 3 + 6 + (5) : 場系を 1 枚の ImageData に焼いて貼る
     this.paintFieldLayer(env, bio);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(this.fieldCanvas, 0, 0, cssW, cssH);
+    // シャーレ範囲に合わせて拡大して貼る (世界全体ではなくディスクに収まる範囲)
+    const left = cx - dishR;
+    const top = cy - dishR;
+    const side = dishR * 2;
+    ctx.drawImage(this.fieldCanvas, left, top, side, side);
 
-    // 3. 管 (Edge)
-    const scale = cssW / this.opts.worldSize;
-    this.drawEdges(state, scale);
+    // 4. 脈管網
+    const scale = side / this.opts.worldSize;
+    this.drawEdges(state, scale, left, top);
 
-    // 4. ノード
-    this.drawNodes(state, scale);
+    // 4b. ソース (オートミール片)
+    this.drawSources(state, scale, left, top);
 
-    // 5. カーソルプレビュー
+    ctx.restore();
+
+    // 1b. リム (暗い細線 + すぐ内側の薄いハイライト)
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = rgb(DISH_RIM);
+    ctx.beginPath(); ctx.arc(cx, cy, dishR, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(245, 240, 230, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, dishR - 3, 0, Math.PI * 2); ctx.stroke();
+
+    // 7. カーソル
     if (hoverPx) this.drawHover(hoverPx);
   }
 
   private paintFieldLayer(env: GridEnvironment, bio: BiomassField): void {
     const fs = this.opts.fieldSize;
     const data = this.fieldImage.data;
-    // 場の最大値を測って正規化 (端で霞ませるため)
+
     let maxBio = 0;
     for (let i = 0; i < bio.field.data.length; i++) {
       const v = bio.field.data[i] ?? 0;
       if (v > maxBio) maxBio = v;
     }
-    maxBio = Math.max(maxBio, 0.4);
+    maxBio = Math.max(maxBio, 0.6);
 
     for (let y = 0; y < fs; y++) {
       for (let x = 0; x < fs; x++) {
         const i = y * fs + x;
         const di = i * 4;
-        // 開始: 透明
         let r = 0, g = 0, b = 0, a = 0;
 
-        // 食料 — 薄緑
+        // 食料 — オートミール色
         const nut = env.nutrients.data[i] ?? 0;
-        if (nut > 0.04 && this.opts.showHeat) {
-          const k = Math.min(1, nut * 0.7);
-          [r, g, b] = blend(r, g, b, a, 60, 170, 80, k * 0.6);
-          a = Math.max(a, k * 0.6);
-        } else if (nut > 0.04) {
-          const k = Math.min(1, nut * 0.5);
-          [r, g, b] = blend(r, g, b, a, 50, 150, 70, k * 0.35);
-          a = Math.max(a, k * 0.35);
+        if (nut > 0.05) {
+          const t = Math.min(1, nut * 0.8);
+          const fr = FOOD_LO[0] * (1 - t) + FOOD_HI[0] * t;
+          const fg = FOOD_LO[1] * (1 - t) + FOOD_HI[1] * t;
+          const fb = FOOD_LO[2] * (1 - t) + FOOD_HI[2] * t;
+          const fa = Math.min(0.95, 0.35 + nut * 0.5);
+          [r, g, b] = blend(r, g, b, fr, fg, fb, fa);
+          a = Math.max(a, fa);
         }
 
-        // 水 — ヒート時のみ青く表示
+        // ヒート (任意): 水と光をうっすら被せる
         if (this.opts.showHeat) {
           const m = env.moisture.data[i] ?? 0;
           if (m > 0.25) {
             const k = Math.min(1, (m - 0.25) * 1.4);
-            [r, g, b] = blend(r, g, b, a, 70, 130, 220, k * 0.4);
-            a = Math.max(a, k * 0.4);
+            [r, g, b] = blend(r, g, b, 90, 150, 220, k * 0.32);
+            a = Math.max(a, k * 0.32);
           }
           const l = env.brightness.data[i] ?? 0;
           if (l > 0.25) {
             const k = Math.min(1, (l - 0.25) * 1.4);
-            [r, g, b] = blend(r, g, b, a, 245, 230, 150, k * 0.35);
-            a = Math.max(a, k * 0.35);
+            [r, g, b] = blend(r, g, b, 245, 230, 150, k * 0.28);
+            a = Math.max(a, k * 0.28);
           }
         }
 
-        // 障害物 — 暗いグレー
+        // 障害物 — 暗いグレーの石
         const ob = env.obstacle.data[i] ?? 0;
         if (ob > 0.5) {
-          [r, g, b] = blend(r, g, b, a, 78, 72, 80, 0.85);
+          [r, g, b] = blend(r, g, b, 95, 88, 92, 0.85);
           a = Math.max(a, 0.85);
         }
 
-        // Biomass 膜 — 黄〜白
+        // プラズマ — 黄〜金〜白
         const v = (bio.field.data[i] ?? 0) / maxBio;
-        if (v > 0.02) {
+        if (v > 0.025) {
           const k = Math.pow(Math.min(1, v), 0.55);
-          const br = 240;
-          const bg2 = Math.floor(190 + 50 * Math.max(0, k - 0.5) * 2);
-          const bb = Math.floor(80 + 140 * Math.max(0, k - 0.6) * 2);
-          const ba = Math.min(0.9, 0.18 + k * 0.65);
-          [r, g, b] = blend(r, g, b, a, br, bg2, bb, ba);
-          a = Math.max(a, ba);
+          let pr: number, pg: number, pb: number;
+          if (k < 0.5) {
+            const t = k / 0.5;
+            pr = PLASMA_RIM[0] * (1 - t) + PLASMA_MID[0] * t;
+            pg = PLASMA_RIM[1] * (1 - t) + PLASMA_MID[1] * t;
+            pb = PLASMA_RIM[2] * (1 - t) + PLASMA_MID[2] * t;
+          } else {
+            const t = (k - 0.5) / 0.5;
+            pr = PLASMA_MID[0] * (1 - t) + PLASMA_HI[0] * t;
+            pg = PLASMA_MID[1] * (1 - t) + PLASMA_HI[1] * t;
+            pb = PLASMA_MID[2] * (1 - t) + PLASMA_HI[2] * t;
+          }
+          const pa = Math.min(0.92, 0.12 + k * 0.78);
+          [r, g, b] = blend(r, g, b, pr, pg, pb, pa);
+          a = Math.max(a, pa);
         }
 
         data[di] = r;
@@ -154,80 +220,54 @@ export class CanvasRenderer {
     this.fieldCtx.putImageData(this.fieldImage, 0, 0);
   }
 
-  private drawEdges(state: SimState, scale: number): void {
+  private drawEdges(state: SimState, scale: number, offX: number, offY: number): void {
     const { ctx } = this;
     const nodeMap = new Map(state.nodes.map((n) => [n.id, n]));
-
-    // 二段描画: 外周 (glow) を additive で先に、芯線を後で
     const sorted = [...state.edges].sort((a, b) => a.radius - b.radius);
 
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const e of sorted) {
-      const a = nodeMap.get(e.from);
-      const b = nodeMap.get(e.to);
-      if (!a || !b) continue;
-      const fluxN = Math.min(1, e.flux / 5);
-      const core = Math.max(0.9, e.radius * 1.0 + fluxN * 1.0);
-      const glow = core + 3.5;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = `rgba(255, 210, 110, ${0.10 + fluxN * 0.12})`;
-      ctx.lineWidth = glow;
-      ctx.beginPath();
-      ctx.moveTo(a.pos.x * scale, a.pos.y * scale);
-      ctx.lineTo(b.pos.x * scale, b.pos.y * scale);
-      ctx.stroke();
-    }
-    ctx.restore();
+    // 黄色いプラズマ膜 (BiomassField) は既に下のフィールド層が描いている。
+    // 管はその上を「茶〜オレンジの細い線」として走るだけで十分。
+    // shadowBlur を毎エッジに掛けるのは 300+ エッジ × 毎フレームで重すぎる。
+    const pxPerWorld = scale / 5.76;  // 参照 (W=576, world=100) 比
 
     ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     for (const e of sorted) {
       const a = nodeMap.get(e.from);
       const b = nodeMap.get(e.to);
       if (!a || !b) continue;
       const fluxN = Math.min(1, e.flux / 5);
-      const core = Math.max(0.9, e.radius * 1.0 + fluxN * 1.0);
-      const t = Math.min(1, fluxN * 0.7 + e.radius * 0.25);
-      const rr = Math.floor(160 - 40 * t);
-      const gg = Math.floor(105 - 30 * t);
-      const bb = Math.floor(45 + 10 * t);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = `rgb(${rr}, ${gg}, ${bb})`;
-      ctx.lineWidth = core;
+      const tubeW = Math.max(0.7, e.radius * 1.05 + fluxN * 1.4) * pxPerWorld;
+      const t = Math.min(1, fluxN * 0.65 + Math.min(1, e.radius / 2) * 0.55);
+      // 太い・流量多い管ほど濃いオレンジ → 細い枝はクリーム色
+      const rr = Math.floor(245 - 90 * t);
+      const gg = Math.floor(195 - 105 * t);
+      const bb = Math.floor(95 - 65 * t);
+      ctx.strokeStyle = `rgba(${rr}, ${gg}, ${bb}, 0.9)`;
+      ctx.lineWidth = Math.max(0.6, tubeW * 0.55);
       ctx.beginPath();
-      ctx.moveTo(a.pos.x * scale, a.pos.y * scale);
-      ctx.lineTo(b.pos.x * scale, b.pos.y * scale);
+      ctx.moveTo(offX + a.pos.x * scale, offY + a.pos.y * scale);
+      ctx.lineTo(offX + b.pos.x * scale, offY + b.pos.y * scale);
       ctx.stroke();
     }
     ctx.restore();
   }
 
-  private drawNodes(state: SimState, scale: number): void {
+  private drawSources(state: SimState, scale: number, offX: number, offY: number): void {
     const { ctx } = this;
     for (const n of state.nodes) {
-      if (n.type === 'relay') continue;
-      const cx = n.pos.x * scale;
-      const cy = n.pos.y * scale;
-      const r = n.type === 'source' ? 5.2 : 4.2;
-      const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 3);
-      if (n.type === 'source') {
-        halo.addColorStop(0, 'rgba(170, 230, 255, 0.95)');
-        halo.addColorStop(0.4, 'rgba(120, 200, 255, 0.45)');
-        halo.addColorStop(1, 'rgba(120, 200, 255, 0)');
-      } else {
-        halo.addColorStop(0, 'rgba(180, 255, 180, 0.95)');
-        halo.addColorStop(0.4, 'rgba(120, 255, 140, 0.4)');
-        halo.addColorStop(1, 'rgba(120, 255, 140, 0)');
-      }
-      ctx.fillStyle = halo;
+      if (n.type !== 'source') continue;
+      const cx = offX + n.pos.x * scale;
+      const cy = offY + n.pos.y * scale;
+      const rx = 9 * (scale / 6.4);
+      const ry = 6 * (scale / 6.4);
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx);
+      grad.addColorStop(0, `rgba(${FOOD_HI[0]}, ${FOOD_HI[1]}, ${FOOD_HI[2]}, 0.85)`);
+      grad.addColorStop(1, `rgba(${FOOD_LO[0]}, ${FOOD_LO[1]}, ${FOOD_LO[2]}, 0)`);
+      ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(cx, cy, r * 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = n.type === 'source' ? '#dff3ff' : '#dfffd9';
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -235,9 +275,8 @@ export class CanvasRenderer {
   private drawHover(h: { x: number; y: number; radius: number; tool: string }): void {
     const { ctx } = this;
     ctx.save();
-    ctx.lineWidth = 1.5;
-    const stroke = toolColor(h.tool);
-    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = toolColor(h.tool);
     ctx.setLineDash([4, 3]);
     ctx.beginPath();
     ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
@@ -246,8 +285,7 @@ export class CanvasRenderer {
   }
 }
 
-function blend(r: number, g: number, b: number, a: number, r2: number, g2: number, b2: number, a2: number): [number, number, number] {
-  // src-over: out = src*a + dst*(1-a) (premul は単純化のため省略)
+function blend(r: number, g: number, b: number, r2: number, g2: number, b2: number, a2: number): [number, number, number] {
   const inv = 1 - a2;
   return [
     Math.floor(r * inv + r2 * a2),
@@ -256,13 +294,17 @@ function blend(r: number, g: number, b: number, a: number, r2: number, g2: numbe
   ];
 }
 
+function rgb([r, g, b]: [number, number, number]): string {
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 function toolColor(tool: string): string {
   switch (tool) {
-    case 'food': return 'rgba(120, 230, 140, 0.9)';
-    case 'light': return 'rgba(250, 230, 140, 0.9)';
-    case 'water': return 'rgba(140, 200, 250, 0.9)';
-    case 'stone': return 'rgba(180, 180, 190, 0.9)';
-    case 'erase': return 'rgba(240, 120, 120, 0.9)';
-    default: return 'rgba(255,255,255,0.8)';
+    case 'food': return 'rgba(120, 90, 40, 0.95)';
+    case 'light': return 'rgba(220, 180, 60, 0.95)';
+    case 'water': return 'rgba(80, 130, 200, 0.95)';
+    case 'stone': return 'rgba(80, 80, 90, 0.95)';
+    case 'erase': return 'rgba(200, 60, 60, 0.95)';
+    default: return 'rgba(60, 60, 60, 0.8)';
   }
 }
