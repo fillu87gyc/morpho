@@ -1,0 +1,21 @@
+{
+  "name": "@morpho/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "seedrandom": "^3.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/seedrandom": "^3.0.8",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}
