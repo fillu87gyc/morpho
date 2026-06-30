@@ -56,6 +56,13 @@ export interface MembraneParams {
   // 表面張力
   surfaceTension: number;
   surfaceTensionBand: number;
+  // Traffic (管の自己組織化): |v|·B を遅い EMA で積分。
+  // 短期の flowMag と違い、これは「最近 N tick の流量履歴」を持つ。
+  // 同じ場所に流れが続けば値が貯まり、流れが止まれば緩やかに消える。
+  // 描画段でこれを overlay すると、膜の中に persistent な管が浮かぶ。
+  // 物理にはフィードバックしない。
+  trafficInflow: number;     // 1 tick あたり加算される flowMag の比率 (0-1)
+  trafficDecay: number;      // 1 tick の残存率。0.995 で半減期≈140 tick
   // 摂食
   consumeRate: number;
   feedingRate: number;
@@ -78,6 +85,8 @@ export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   interiorDamping: 0.30,      // 内部は 30% 速度。境界が圧倒的に速く動く
   surfaceTension: 0.18,
   surfaceTensionBand: 0.45,
+  trafficInflow: 1.0,
+  trafficDecay: 0.992,        // 半減期 ≈ 86 tick (約半呼吸)。短すぎず長すぎず
   consumeRate: 0.012,
   feedingRate: 0.10,
 };
@@ -89,7 +98,8 @@ export class Membrane {
   P: FieldGrid;          // 圧力
   vx: FieldGrid;         // 速度場 x (cell 中心)
   vy: FieldGrid;         // 速度場 y (cell 中心)
-  flowMag: FieldGrid;    // |v|·B の time-smoothed (描画用)
+  flowMag: FieldGrid;    // |v|·B の short-term smooth (描画用、前縁シグナル)
+  traffic: FieldGrid;    // |v|·B の long-term integral (描画用、管)
   phase = 0;
   tick = 0;
   // ノイズフィールドは残してあるが v4 では未使用 (body pulse を廃止したため)。
@@ -108,6 +118,7 @@ export class Membrane {
     this.vx = makeField(size);
     this.vy = makeField(size);
     this.flowMag = makeField(size);
+    this.traffic = makeField(size);
     this.Pbuf = makeField(size);
     this.Bbuf = makeField(size);
     this.noise = makeField(size);
@@ -286,13 +297,21 @@ export class Membrane {
       [this.B.data, this.Bbuf.data] = [this.Bbuf.data, this.B.data];
     }
 
-    // ── (6) flowMag (描画用): |v|·B の time-smooth ──
+    // ── (6) flowMag + traffic 更新 (描画用) ────────────
+    // flowMag: 直近 (≈ 数 tick) の流れ。前縁の白い輝き。
+    // traffic: 長期 (≈ 100 tick) の流量履歴。膜内に浮かぶ「管」のパターン。
     {
       const m = this.flowMag.data;
+      const t = this.traffic.data;
+      const inflow = p.trafficInflow;
+      const decay = p.trafficDecay;
       for (let i = 0; i < N; i++) {
         const speed = Math.hypot(this.vx.data[i] ?? 0, this.vy.data[i] ?? 0);
         const inst = speed * (this.B.data[i] ?? 0);
         m[i] = (m[i] ?? 0) * 0.78 + inst * 0.22;
+        // traffic[i] = decay * traffic + inflow * |v|·B
+        // 流れが止まれば指数減衰、続けば積分される
+        t[i] = (t[i] ?? 0) * decay + inst * inflow * (1 - decay);
       }
     }
 

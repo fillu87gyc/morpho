@@ -81,15 +81,18 @@ function renderFrameRGBA(): Uint8Array {
   // 膜本体 + 前縁グロー。両方とも物理量 (B, |v|·B) から派生。
   // 以前あった brightness *= sin(phase) の演出オーバーレイは撤廃。
   // 呼吸が見えるかどうかは physics (P の振動 → 膜の伸縮) に任せる。
-  let maxV = 0, maxF = 0;
+  let maxV = 0, maxF = 0, maxT = 0;
   for (let i = 0; i < FIELD * FIELD; i++) {
     const v = membrane.B.data[i] ?? 0;
     if (v > maxV) maxV = v;
     const f = membrane.flowMag.data[i] ?? 0;
     if (f > maxF) maxF = f;
+    const t = membrane.traffic.data[i] ?? 0;
+    if (t > maxT) maxT = t;
   }
   maxV = Math.max(maxV, 0.3);
   maxF = Math.max(maxF, 1e-4);
+  maxT = Math.max(maxT, 1e-4);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const fxF = x / TILE, fyF = y / TILE;
@@ -104,7 +107,7 @@ function renderFrameRGBA(): Uint8Array {
                  (v01 * (1 - tx) + v11 * tx) * ty) / maxV;
       if (v < 0.02) continue;
 
-      // 前縁シグナル (隣接 4 セルから補間)
+      // 前縁シグナル (短期の流れ、隣接 4 セルから補間)
       const f00 = membrane.flowMag.data[fy0 * FIELD + fx0] ?? 0;
       const f10 = membrane.flowMag.data[fy0 * FIELD + fx1] ?? 0;
       const f01 = membrane.flowMag.data[fy1 * FIELD + fx0] ?? 0;
@@ -113,16 +116,37 @@ function renderFrameRGBA(): Uint8Array {
                      (f01 * (1 - tx) + f11 * tx) * ty) / maxF;
       const front = Math.min(1, fNorm * 1.6);
 
+      // Traffic (長期の流量履歴、管シグナル)。これが膜内の persistent な流路。
+      const t00 = membrane.traffic.data[fy0 * FIELD + fx0] ?? 0;
+      const t10 = membrane.traffic.data[fy0 * FIELD + fx1] ?? 0;
+      const t01 = membrane.traffic.data[fy1 * FIELD + fx0] ?? 0;
+      const t11 = membrane.traffic.data[fy1 * FIELD + fx1] ?? 0;
+      const tNorm = ((t00 * (1 - tx) + t10 * tx) * (1 - ty) +
+                     (t01 * (1 - tx) + t11 * tx) * ty) / maxT;
+      // 閾値 0.25 以下は管とみなさない (短期ノイズを切る)
+      const tube = Math.max(0, Math.min(1, (tNorm - 0.25) / 0.7));
+
       // 密度カーブを steeper にしてコア (B>0.5) は十分明るく、
       // エッジ (B<0.3) は強く減衰する。これで内部の厚みの違いが見える。
       const vN = Math.min(1, v);
       const k = Math.pow(vN, 0.85);
-      // 前縁ほど白く: G・B を持ち上げる
-      const r = Math.min(255, 230 + front * 22);
-      const g = Math.min(255, 160 + 90 * Math.max(0, k - 0.45) * 1.8 + front * 60);
-      const b = Math.min(255, 40 + 180 * Math.max(0, k - 0.65) * 3 + front * 100);
+      // 色 (B 由来): ベースの肉色
+      let r = 230 + front * 22;
+      let g = 160 + 90 * Math.max(0, k - 0.45) * 1.8 + front * 60;
+      let b = 40 + 180 * Math.max(0, k - 0.65) * 3 + front * 100;
+      // 管 overlay: 膜の中に青白い persistent な筋を描く。
+      // 単純加算だと黒地でも光るので、B がある場所限定で寄せる。
+      if (tube > 0 && vN > 0.15) {
+        const tg = tube * 0.85;  // 強度
+        r = r * (1 - tg * 0.4) + 220 * tg;
+        g = g * (1 - tg * 0.2) + 240 * tg;
+        b = b * (1 - tg * 0.0) + 250 * tg;
+      }
+      r = Math.min(255, r);
+      g = Math.min(255, g);
+      b = Math.min(255, b);
       // α もコア優位に: 縁は透けて消えるが、芯は重く乗る
-      const a = Math.min(0.96, Math.pow(vN, 0.6) * 0.85 + front * 0.12);
+      const a = Math.min(0.96, Math.pow(vN, 0.6) * 0.85 + front * 0.12 + tube * 0.10);
       const idx = (y * W + x) * 4;
       const inv = 1 - a;
       rgba[idx] = (rgba[idx] ?? 0) * inv + r * a;
