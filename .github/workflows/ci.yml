@@ -13,9 +13,6 @@ jobs:
   sim:
     name: sim (typecheck + test)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: morpho/packages/sim
     steps:
       - uses: actions/checkout@v4
 
@@ -23,23 +20,28 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: morpho/packages/sim/package-lock.json
+          cache-dependency-path: morpho/package-lock.json
 
+      # morpho/ は npm workspaces (packages/sim, packages/web)。
+      # web が sim のソースを直接 import するため、ルートで一度に
+      # install して両パッケージの依存を共通の node_modules に
+      # hoist しておく必要がある (個別 install だと web 側から
+      # sim の依存 (seedrandom 等) が解決できない)。
       - name: Install dependencies
+        working-directory: morpho
         run: npm ci
 
       - name: Typecheck
+        working-directory: morpho/packages/sim
         run: npm run typecheck
 
       - name: Test
+        working-directory: morpho/packages/sim
         run: npm test
 
   web:
     name: web (typecheck + build)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: morpho/packages/web
     steps:
       - uses: actions/checkout@v4
 
@@ -47,22 +49,16 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: |
-            morpho/packages/web/package-lock.json
-            morpho/packages/sim/package-lock.json
+          cache-dependency-path: morpho/package-lock.json
 
-      # web は @morpho/sim をビルド成果物ではなくソース (../sim/src) を直接
-      # import している (tsconfig paths / vite alias)。tsc が sim 内の
-      # import (seedrandom 等) の型を解決するには sim 側の node_modules も要る。
-      - name: Install sim dependencies
-        working-directory: morpho/packages/sim
-        run: npm ci
-
-      - name: Install web dependencies
+      - name: Install dependencies
+        working-directory: morpho
         run: npm ci
 
       - name: Typecheck
+        working-directory: morpho/packages/web
         run: npm run typecheck
 
       - name: Build
+        working-directory: morpho/packages/web
         run: npm run build

@@ -69,12 +69,16 @@
 - **描画はラッパー** — `@morpho/web` は sim を import するだけで、sim 側に描画依存を持ち込まない (Node でも引き続き使える)。
 - **時間スケールは UI に切り出す** — sim は「1 tick」しか知らない。日数や時代は web 側の派生量。
 - **個性 / 図鑑 / 子孫は web 側で持つ** — sim は遺伝子を1個体ぶん受け取って動くだけ。永続化は localStorage。
+- **`morpho/` は npm workspaces** — `@morpho/web` は `@morpho/sim` をビルド成果物ではなく `../sim/src` を直接 import している。
+  そのため install は必ず `morpho/` ルートで行うこと。`packages/web` や `packages/sim` の中だけで `npm install` すると、
+  もう片方の依存 (`seedrandom` など) が解決できずに壊れる。
 
 ## 動かし方 (M0)
 
 ```sh
-cd morpho/packages/web
-npm install
+cd morpho
+npm install       # ルートで一度だけ (workspaces が両パッケージの依存を解決する)
+cd packages/web
 npm run dev
 # → http://localhost:5173 で遊べる
 ```
