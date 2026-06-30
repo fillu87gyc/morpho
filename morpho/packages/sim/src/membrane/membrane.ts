@@ -22,10 +22,13 @@
 //   - 源は initial mass を置く位置でしかなくなる (発振器の役目を降りる)
 //   - 体内が静まり、輪郭の前進/後退だけが目立つ
 //   - 食料攻略の順序と滞在時間が探索戦略として読める
+//
+// このモデルは graph 系の SimState/SimEdge とは独立。
+// 同じ環境 (GridEnvironment) を共有する別の sim としてふるまう。
 
 import type { Vec2 } from '../types.js';
-import { makeField, type FieldGrid } from './field.js';
-import type { GridEnvironment } from './field.js';
+import { makeField, type FieldGrid } from '../field/grid.js';
+import type { GridEnvironment } from '../env/environment.js';
 import type { SeededRNG } from '../rng.js';
 
 export interface MembraneSource {
