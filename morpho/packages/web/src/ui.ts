@@ -1,5 +1,6 @@
 // HUD と入力。DOM 更新を集約。
 // - 値が変わったところだけ書き換える (textContent が等しければスキップ)。
+// - 数値はモックアップに合わせて千桁区切り。
 
 import type { Game, Tool } from './game.js';
 
@@ -20,29 +21,48 @@ function setBar(e: El, ratio: number): void {
   e.style.width = `${pct.toFixed(1)}%`;
 }
 
+function pct(v: number): string { return `${Math.round(v * 100)}%`; }
+function thou(n: number): string { return n.toLocaleString('ja-JP'); }
+
 export class Ui {
+  // header
   private day = el('day');
   private era = el('era');
-  private nodes = el('k-nodes');
-  private edges = el('k-edges');
-  private thick = el('k-thick');
-  private food = el('k-food');
+  // quest
+  private questBar = el('quest-bar');
+  private questPct = el('quest-pct');
+  // world info
+  private wArea = el('w-area');
+  private wMass = el('w-mass');
+  private wLinks = el('w-links');
+  private wCr = el('w-cr');
+  private wCt = el('w-ct');
+  // env balance (5 axes)
+  private eLight = el('e-light');
+  private eTemp = el('e-temp');
+  private eMoi = el('e-moisture');
+  private eNut = el('e-nutrient');
+  private eTox = el('e-toxin');
+  private eLightN = el('e-light-n');
+  private eTempN = el('e-temp-n');
+  private eMoiN = el('e-moisture-n');
+  private eNutN = el('e-nutrient-n');
+  private eToxN = el('e-toxin-n');
+  // traits
   private tExp = el('t-explore');
   private tEff = el('t-efficient');
   private tStb = el('t-stable');
   private tExpN = el('t-explore-n');
   private tEffN = el('t-efficient-n');
   private tStbN = el('t-stable-n');
-  private eNut = el('e-nutrient');
-  private eMoi = el('e-moisture');
-  private eLit = el('e-light');
-  private eNutN = el('e-nutrient-n');
-  private eMoiN = el('e-moisture-n');
-  private eLitN = el('e-light-n');
-  private questBar = el('quest-bar');
-  private questPct = el('quest-pct');
-  private brushN = el('brush-n');
+  // logs
   private log = el('log');
+  private evo = el('evo');
+  // brush
+  private brushN = el('brush-n');
+
+  private lastEvoLen = -1;
+  private lastEventLen = -1;
 
   constructor(
     private game: Game,
@@ -54,7 +74,6 @@ export class Ui {
       onToggleHeat: () => void;
     },
   ) {
-    // 速度
     document.querySelectorAll<HTMLButtonElement>('button.speed').forEach((b) => {
       b.addEventListener('click', () => {
         document.querySelectorAll<HTMLButtonElement>('button.speed').forEach((x) => x.classList.remove('active'));
@@ -63,7 +82,6 @@ export class Ui {
         this.hooks.onSpeed(s);
       });
     });
-    // ツール
     document.querySelectorAll<HTMLButtonElement>('button.tool').forEach((b) => {
       b.addEventListener('click', () => {
         document.querySelectorAll<HTMLButtonElement>('button.tool').forEach((x) => x.classList.remove('active'));
@@ -72,30 +90,47 @@ export class Ui {
         this.hooks.onTool(t);
       });
     });
-    // ブラシ
     const brush = el('brush') as HTMLInputElement;
     brush.addEventListener('input', () => {
       const v = Number(brush.value);
       this.brushN.textContent = String(v);
       this.hooks.onBrush(v);
     });
-    // リセット / ヒート
     (el('reset') as HTMLButtonElement).addEventListener('click', () => this.hooks.onReset());
     (el('toggle-heat') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleHeat());
 
-    // 初期ツール強調
     document.querySelector<HTMLButtonElement>('button.tool[data-tool="food"]')?.classList.add('active');
   }
 
   render(): void {
     const s = this.game.snapshot();
     setText(this.day, String(s.day));
-    setText(this.era, eraName(s.day));
-    setText(this.nodes, String(s.state.nodes.length));
-    setText(this.edges, String(s.state.edges.length));
-    setText(this.thick, String(s.thickEdges));
-    setText(this.food, String(s.foodSpots));
+    setText(this.era, s.era);
 
+    // クエスト
+    setBar(this.questBar, s.questProgress);
+    setText(this.questPct, String(Math.round(s.questProgress * 100)));
+
+    // ワールド情報
+    setText(this.wArea, thou(s.world.areaM2));
+    setText(this.wMass, s.world.massKg.toFixed(2));
+    setText(this.wLinks, thou(s.world.networkLinks));
+    setText(this.wCr, String(s.world.coloniesReached));
+    setText(this.wCt, String(s.world.coloniesTotal));
+
+    // 環境バランス (5)
+    setBar(this.eLight, s.balance.light);
+    setBar(this.eTemp, s.balance.temperature);
+    setBar(this.eMoi, s.balance.moisture);
+    setBar(this.eNut, s.balance.nutrient);
+    setBar(this.eTox, s.balance.toxin);
+    setText(this.eLightN, pct(s.balance.light));
+    setText(this.eTempN, pct(s.balance.temperature));
+    setText(this.eMoiN, pct(s.balance.moisture));
+    setText(this.eNutN, pct(s.balance.nutrient));
+    setText(this.eToxN, pct(s.balance.toxin));
+
+    // 個性
     setBar(this.tExp, s.traits.exploration);
     setBar(this.tEff, s.traits.efficiency);
     setBar(this.tStb, s.traits.stability);
@@ -103,36 +138,42 @@ export class Ui {
     setText(this.tEffN, pct(s.traits.efficiency));
     setText(this.tStbN, pct(s.traits.stability));
 
-    setBar(this.eNut, s.balance.nutrient);
-    setBar(this.eMoi, s.balance.moisture);
-    setBar(this.eLit, s.balance.light);
-    setText(this.eNutN, pct(s.balance.nutrient));
-    setText(this.eMoiN, pct(s.balance.moisture));
-    setText(this.eLitN, pct(s.balance.light));
-
-    // メインクエスト: 「太い幹 ÷ 食料拠点」っぽい代理指標で十分
-    const goal = Math.min(1, (s.thickEdges + s.state.edges.length * 0.2) / 60);
-    setBar(this.questBar, goal);
-    setText(this.questPct, String(Math.round(goal * 100)));
-
-    // ログ
+    // ログ (差分が出たときだけ書き換える)
     const events = this.game.events();
-    if (this.log.childElementCount !== events.length) {
+    if (this.lastEventLen !== events.length) {
       this.log.innerHTML = '';
       for (const e of events) {
         const li = document.createElement('li');
         li.textContent = e;
         this.log.appendChild(li);
       }
+      this.lastEventLen = events.length;
+    }
+
+    const evo = this.game.evolution();
+    if (this.lastEvoLen !== evo.length) {
+      this.evo.innerHTML = '';
+      if (evo.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'まだ何も起きていない…';
+        this.evo.appendChild(li);
+      } else {
+        for (const e of evo) {
+          const li = document.createElement('li');
+          const time = document.createElement('span');
+          time.className = 'time';
+          const day = Math.floor(e.tick / 40);
+          time.textContent = `Day ${day}`;
+          const body = document.createElement('span');
+          body.className = 'body';
+          body.textContent = e.text;
+          li.appendChild(time);
+          li.appendChild(body);
+          this.evo.appendChild(li);
+        }
+      }
+      this.lastEvoLen = evo.length;
     }
   }
 }
-
-function eraName(day: number): string {
-  if (day < 10) return '胞子期';
-  if (day < 25) return '拡散期';
-  if (day < 60) return '変形体期';
-  return '成熟期';
-}
-
-function pct(v: number): string { return `${Math.round(v * 100)}%`; }

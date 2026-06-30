@@ -19,10 +19,10 @@
           <div class="day">DAY <span id="day">0</span></div>
           <div class="era" id="era">胞子期</div>
           <div class="controls">
-            <button data-speed="0" class="speed">⏸</button>
-            <button data-speed="1" class="speed active">▶</button>
-            <button data-speed="4" class="speed">⏩</button>
-            <button data-speed="16" class="speed">⏭</button>
+            <button data-speed="0" class="speed" title="一時停止">⏸</button>
+            <button data-speed="1" class="speed active" title="再生">▶</button>
+            <button data-speed="4" class="speed" title="早送り">⏩</button>
+            <button data-speed="16" class="speed" title="超早送り">⏭</button>
           </div>
         </div>
       </header>
@@ -31,9 +31,48 @@
         <aside class="panel left">
           <section class="card">
             <h2>メインクエスト</h2>
-            <div class="quest">栄養を世界の隅々まで届けよう</div>
+            <div class="quest">大陸全体に栄養を届けよう</div>
             <div class="progress"><div id="quest-bar" class="bar"></div></div>
             <div class="quest-pct"><span id="quest-pct">0</span>%</div>
+          </section>
+
+          <section class="card">
+            <h2>ワールド情報</h2>
+            <dl class="kv">
+              <dt>総面積</dt><dd><span id="w-area">0</span> m²</dd>
+              <dt>粘菌の総量</dt><dd><span id="w-mass">0.00</span> kg</dd>
+              <dt>接続ネットワーク</dt><dd id="w-links">0</dd>
+              <dt>拠点 (コロニー)</dt><dd><span id="w-cr">0</span>/<span id="w-ct">0</span></dd>
+            </dl>
+          </section>
+
+          <section class="card">
+            <h2>環境バランス</h2>
+            <div class="trait">
+              <span class="ico-lbl"><i class="dot dot-light"></i>光</span>
+              <div class="progress"><div id="e-light" class="bar light"></div></div>
+              <span class="num" id="e-light-n">0%</span>
+            </div>
+            <div class="trait">
+              <span class="ico-lbl"><i class="dot dot-temp"></i>温度</span>
+              <div class="progress"><div id="e-temp" class="bar temp"></div></div>
+              <span class="num" id="e-temp-n">0%</span>
+            </div>
+            <div class="trait">
+              <span class="ico-lbl"><i class="dot dot-moisture"></i>湿度</span>
+              <div class="progress"><div id="e-moisture" class="bar moisture"></div></div>
+              <span class="num" id="e-moisture-n">0%</span>
+            </div>
+            <div class="trait">
+              <span class="ico-lbl"><i class="dot dot-nutrient"></i>栄養</span>
+              <div class="progress"><div id="e-nutrient" class="bar nutrient"></div></div>
+              <span class="num" id="e-nutrient-n">0%</span>
+            </div>
+            <div class="trait">
+              <span class="ico-lbl"><i class="dot dot-toxin"></i>毒素</span>
+              <div class="progress"><div id="e-toxin" class="bar toxin"></div></div>
+              <span class="num" id="e-toxin-n">0%</span>
+            </div>
           </section>
 
           <section class="card">
@@ -54,21 +93,6 @@
               <span class="num" id="t-stable-n">0%</span>
             </div>
           </section>
-
-          <section class="card">
-            <h2>世界の状態</h2>
-            <dl class="kv">
-              <dt>ノード</dt><dd id="k-nodes">0</dd>
-              <dt>管 (エッジ)</dt><dd id="k-edges">0</dd>
-              <dt>太い幹</dt><dd id="k-thick">0</dd>
-              <dt>食料拠点</dt><dd id="k-food">0</dd>
-            </dl>
-          </section>
-
-          <section class="card">
-            <h2>最近の出来事</h2>
-            <ul id="log" class="log"></ul>
-          </section>
         </aside>
 
         <div class="canvas-wrap">
@@ -80,55 +104,48 @@
           <section class="card">
             <h2>環境を整える</h2>
             <div class="palette">
-              <button class="tool" data-tool="food">
+              <button class="tool" data-tool="food" title="栄養を撒く">
                 <span class="ico ico-food"></span>
                 <span>エサ</span>
               </button>
-              <button class="tool" data-tool="light">
+              <button class="tool" data-tool="light" title="光を当てる">
                 <span class="ico ico-light"></span>
                 <span>光</span>
               </button>
-              <button class="tool" data-tool="water">
+              <button class="tool" data-tool="water" title="水を引く">
                 <span class="ico ico-water"></span>
                 <span>水</span>
               </button>
-              <button class="tool" data-tool="stone">
+              <button class="tool" data-tool="stone" title="障害物を置く">
                 <span class="ico ico-stone"></span>
                 <span>石</span>
               </button>
-              <button class="tool" data-tool="erase">
+              <button class="tool" data-tool="erase" title="土地をならす">
                 <span class="ico ico-erase"></span>
                 <span>消す</span>
               </button>
             </div>
             <div class="brush">
-              <label>ブラシの大きさ <span id="brush-n">8</span></label>
-              <input id="brush" type="range" min="2" max="16" value="8" />
+              <label>ブラシの大きさ <span id="brush-n">5</span></label>
+              <input id="brush" type="range" min="2" max="16" value="5" />
             </div>
             <div class="hud-hint">クリック or ドラッグで配置</div>
           </section>
 
           <section class="card">
-            <h2>環境バランス</h2>
-            <div class="trait">
-              <span class="lbl">栄養</span>
-              <div class="progress"><div id="e-nutrient" class="bar nutrient"></div></div>
-              <span class="num" id="e-nutrient-n">0%</span>
-            </div>
-            <div class="trait">
-              <span class="lbl">水分</span>
-              <div class="progress"><div id="e-moisture" class="bar moisture"></div></div>
-              <span class="num" id="e-moisture-n">0%</span>
-            </div>
-            <div class="trait">
-              <span class="lbl">明るさ</span>
-              <div class="progress"><div id="e-light" class="bar light"></div></div>
-              <span class="num" id="e-light-n">0%</span>
-            </div>
+            <h2>進化の記録</h2>
+            <ul id="evo" class="evo">
+              <li class="empty">まだ何も起きていない…</li>
+            </ul>
+          </section>
+
+          <section class="card">
+            <h2>最近の出来事</h2>
+            <ul id="log" class="log"></ul>
           </section>
 
           <section class="card actions">
-            <button id="reset">新しい世界へ</button>
+            <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>
           </section>
         </aside>

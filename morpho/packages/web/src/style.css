@@ -87,11 +87,23 @@ body { overflow: hidden; }
 }
 .bar.nutrient { background: linear-gradient(90deg, #79c879, #b8e88a); }
 .bar.moisture { background: linear-gradient(90deg, #6fb3e8, #a6d8ff); }
-.bar.light { background: linear-gradient(90deg, #f1e08a, #fff3b8); }
+.bar.light    { background: linear-gradient(90deg, #f1e08a, #fff3b8); }
+.bar.temp     { background: linear-gradient(90deg, #d97a55, #f0b48a); }
+.bar.toxin    { background: linear-gradient(90deg, #8a5cb0, #c79de0); }
 .quest-pct { font-size: 12px; color: var(--text-dim); text-align: right; margin-top: 4px; }
 
-.trait { display: grid; grid-template-columns: 60px 1fr 42px; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 12px; }
+.trait { display: grid; grid-template-columns: 64px 1fr 42px; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 12px; }
 .trait .lbl { color: var(--text-dim); }
+.trait .ico-lbl { color: var(--text-dim); display: inline-flex; align-items: center; gap: 5px; }
+.trait .ico-lbl .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px;
+  box-shadow: 0 0 4px currentColor;
+}
+.dot-light    { background: #f1e08a; color: rgba(241, 224, 138, 0.6); }
+.dot-temp     { background: #d97a55; color: rgba(217, 122, 85, 0.6); }
+.dot-moisture { background: #6fb3e8; color: rgba(111, 179, 232, 0.6); }
+.dot-nutrient { background: #79c879; color: rgba(121, 200, 121, 0.6); }
+.dot-toxin    { background: #8a5cb0; color: rgba(138, 92, 176, 0.6); }
 .trait .num { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
 .trait:last-child { margin-bottom: 0; }
 
@@ -102,6 +114,21 @@ body { overflow: hidden; }
 .log { list-style: none; padding: 0; margin: 0; font-size: 11px; color: var(--text-dim); }
 .log li { padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); }
 .log li:last-child { border-bottom: none; }
+
+.evo { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+.evo li {
+  display: grid; grid-template-columns: 48px 1fr; gap: 8px; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+  animation: evo-in 380ms ease;
+}
+.evo li:last-child { border-bottom: none; }
+.evo li .time { color: var(--accent); font-size: 11px; font-variant-numeric: tabular-nums; }
+.evo li .body { color: var(--text); }
+.evo li.empty { display: block; color: var(--text-dim); font-style: italic; font-size: 11px; }
+@keyframes evo-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 .canvas-wrap {
   position: relative;
