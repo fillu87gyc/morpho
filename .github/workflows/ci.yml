@@ -47,9 +47,18 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: morpho/packages/web/package-lock.json
+          cache-dependency-path: |
+            morpho/packages/web/package-lock.json
+            morpho/packages/sim/package-lock.json
 
-      - name: Install dependencies
+      # web は @morpho/sim をビルド成果物ではなくソース (../sim/src) を直接
+      # import している (tsconfig paths / vite alias)。tsc が sim 内の
+      # import (seedrandom 等) の型を解決するには sim 側の node_modules も要る。
+      - name: Install sim dependencies
+        working-directory: morpho/packages/sim
+        run: npm ci
+
+      - name: Install web dependencies
         run: npm ci
 
       - name: Typecheck
