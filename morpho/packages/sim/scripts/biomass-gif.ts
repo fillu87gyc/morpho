@@ -123,8 +123,8 @@ function renderFrameRGBA(): Uint8Array {
       const t11 = membrane.traffic.data[fy1 * FIELD + fx1] ?? 0;
       const tNorm = ((t00 * (1 - tx) + t10 * tx) * (1 - ty) +
                      (t01 * (1 - tx) + t11 * tx) * ty) / maxT;
-      // 閾値 0.25 以下は管とみなさない (短期ノイズを切る)
-      const tube = Math.max(0, Math.min(1, (tNorm - 0.25) / 0.7));
+      // 閾値を下げて、控えめな管も拾う
+      const tube = Math.max(0, Math.min(1, (tNorm - 0.12) / 0.55));
 
       // 密度カーブを steeper にしてコア (B>0.5) は十分明るく、
       // エッジ (B<0.3) は強く減衰する。これで内部の厚みの違いが見える。
@@ -135,12 +135,12 @@ function renderFrameRGBA(): Uint8Array {
       let g = 160 + 90 * Math.max(0, k - 0.45) * 1.8 + front * 60;
       let b = 40 + 180 * Math.max(0, k - 0.65) * 3 + front * 100;
       // 管 overlay: 膜の中に青白い persistent な筋を描く。
-      // 単純加算だと黒地でも光るので、B がある場所限定で寄せる。
-      if (tube > 0 && vN > 0.15) {
-        const tg = tube * 0.85;  // 強度
-        r = r * (1 - tg * 0.4) + 220 * tg;
-        g = g * (1 - tg * 0.2) + 240 * tg;
-        b = b * (1 - tg * 0.0) + 250 * tg;
+      // 強度・閾値とも v1 より強め。B 上に乗っている所だけ光らせる。
+      if (tube > 0 && vN > 0.10) {
+        const tg = Math.min(1, tube * 1.3);
+        r = r * (1 - tg * 0.55) + 235 * tg;
+        g = g * (1 - tg * 0.35) + 248 * tg;
+        b = b * (1 - tg * 0.10) + 255 * tg;
       }
       r = Math.min(255, r);
       g = Math.min(255, g);

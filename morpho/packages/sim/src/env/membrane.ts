@@ -39,8 +39,12 @@ export interface MembraneParams {
   // 圧力ソース (発振器なし)
   foodPressure: number;      // 食料が出す正の引力 (mass がここへ流れる)
   biomassPressure: number;   // 密集した自分が出す負圧 (体は自分から外へ広がる)
+  // 体内進行波: selfPressure を per-cell 位相で揺らす。
+  // 全身が一斉に脈動するのではなく、波が膜内を走る (peristalsis-like)。
+  // 源 pump を復活させないまま、体内の絶え間ない流動感を取り戻す唯一の driver。
+  bodyPulseAmp: number;      // selfPressure の振幅比 (0 で停止、0.5 で強め)
   // 呼吸 (圧力ではなく流速で表現)
-  breathPeriod: number;      // mobility 振動の周期
+  breathPeriod: number;      // mobility & body pulse の周期
   mobilityBreathAmp: number; // ±比率。0 なら完全に静か、0.15 で穏やかな脈
   // 圧力ダイナミクス
   pressureDiff: number;
@@ -73,8 +77,9 @@ export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   initialRadius: 4.0,
   foodPressure: 0.45,         // 唯一の探索 driver になるので v3 (0.18) より強める
   biomassPressure: 0.10,      // 体が自分から外へ広がる弱い圧。surfaceTension と釣り合う
+  bodyPulseAmp: 0.55,         // per-cell 位相で selfPressure を ±55% 揺らす → 進行波
   breathPeriod: 200,
-  mobilityBreathAmp: 0.15,    // 流速が ±15% で揺れる
+  mobilityBreathAmp: 0.30,    // 流速が ±30% で揺れる (15% は静かすぎた)
   pressureDiff: 0.55,
   pressureDecay: 0.07,
   pressureMax: 4.0,
@@ -82,11 +87,11 @@ export const DEFAULT_MEMBRANE_PARAMS: MembraneParams = {
   maxFlux: 0.22,
   viscosity: 0.025,
   interiorThreshold: 0.45,    // 平均 B のスケール (initial で 1.5 弱)
-  interiorDamping: 0.30,      // 内部は 30% 速度。境界が圧倒的に速く動く
+  interiorDamping: 0.55,      // 内部も半分は動く。完全凍結だと体内シャトリングが死ぬ
   surfaceTension: 0.18,
   surfaceTensionBand: 0.45,
   trafficInflow: 1.0,
-  trafficDecay: 0.992,        // 半減期 ≈ 86 tick (約半呼吸)。短すぎず長すぎず
+  trafficDecay: 0.997,        // 半減期 ≈ 230 tick (約 1.1 呼吸)。tube を長く残す
   consumeRate: 0.012,
   feedingRate: 0.10,
 };
@@ -153,14 +158,19 @@ export class Membrane {
     const mobility = 1 + p.mobilityBreathAmp * Math.sin(phase);
 
     // ── (1) Pressure: 食料(+) と 自己圧(-) だけ ────────
-    // pump なし。発振器がいない。
+    // 源 pump なし (発振器なし)。selfPressure だけが per-cell 位相で揺らぐ。
+    // localPulse は cell ごとに違う位相を持つので、波が膜内を進行する。
+    // 結果: 膜全体は同期せず、ある場所は膨らみある場所は縮む状態が走り回る。
     for (let i = 0; i < N; i++) {
       const o = ob[i] ?? 0;
       if (o > 0.5) { this.Pbuf.data[i] = 0; continue; }
       const n = nut[i] ?? 0;
       const bv = this.B.data[i] ?? 0;
       const foodAttract = n * p.foodPressure;
-      const selfPressure = bv * p.biomassPressure; // 自分の場所から外へ広がる
+      // 進行波: noise[i] が空間的に乱数なので、位相が連続的にずれて波として走る。
+      // bodyPulseAmp=0 なら一定 (v4 の挙動)、>0 で揺らぎが乗る。
+      const localPulse = 1 + p.bodyPulseAmp * Math.sin(phase + (this.noise.data[i] ?? 0));
+      const selfPressure = bv * p.biomassPressure * localPulse;
       const decayed = (this.P.data[i] ?? 0) * (1 - p.pressureDecay);
       this.Pbuf.data[i] = decayed + foodAttract - selfPressure;
     }
