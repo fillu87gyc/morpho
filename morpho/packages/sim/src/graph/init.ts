@@ -1,5 +1,8 @@
-import type { SimState, SimNode, Traits, Vec2 } from '../types.js';
-import type { GridEnvironment } from '../env/field.js';
+// 初期状態の構築。空の SimState を作る + source を植える + 障害物を逃がす。
+// 動的な振る舞いはここに含めない (life, growth, prune 側の責務)。
+
+import type { SimState, SimNode, Vec2 } from '../types.js';
+import type { GridEnvironment } from '../env/environment.js';
 
 export function createInitialState(seed: number, worldSize = 100): SimState {
   return { tick: 0, seed, nodes: [], edges: [], nextNodeId: 0, nextEdgeId: 0, worldSize };
@@ -26,6 +29,7 @@ export function seedSource(state: SimState, pos: Vec2, initialBranches = 6): voi
   }
 }
 
+// source の真下に石を置かれた場合の救済: 半径内の障害物を消す。
 export function clearAroundSource(env: GridEnvironment, pos: Vec2, radius = 6): void {
   const s = env.fieldSize / env.worldSize;
   const cx = pos.x * s, cy = pos.y * s;
@@ -40,27 +44,4 @@ export function clearAroundSource(env: GridEnvironment, pos: Vec2, radius = 6): 
       if (dx * dx + dy * dy <= r2) env.obstacle.data[y * env.fieldSize + x] = 0;
     }
   }
-}
-
-export function computeTraits(state: SimState): Traits {
-  if (state.nodes.length === 0) return { exploration: 0, efficiency: 0, stability: 0 };
-
-  let mx = 0, my = 0;
-  for (const n of state.nodes) { mx += n.pos.x; my += n.pos.y; }
-  mx /= state.nodes.length; my /= state.nodes.length;
-  let variance = 0;
-  for (const n of state.nodes) {
-    variance += (n.pos.x - mx) ** 2 + (n.pos.y - my) ** 2;
-  }
-  const exploration = Math.min(1, Math.sqrt(variance / state.nodes.length) / (state.worldSize * 0.4));
-
-  const ratio = state.edges.length / Math.max(1, state.nodes.length - 1);
-  const sinkReached = Math.min(1, state.nodes.filter(n => n.type === 'sink').length * 0.25);
-  const efficiency = sinkReached * 0.5 + Math.max(0, 1 - Math.abs(ratio - 1.0)) * 0.5;
-
-  const thick = state.edges.filter(e => e.radius > 1.5).length;
-  const stability = state.edges.length > 0 ? thick / state.edges.length : 0;
-
-  const c = (v: number) => v < 0 ? 0 : v > 1 ? 1 : v;
-  return { exploration: c(exploration), efficiency: c(efficiency), stability: c(stability) };
 }
