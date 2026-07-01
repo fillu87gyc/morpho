@@ -3,13 +3,14 @@
 // 取りこぼし・タイポをコンパイル時に検出できる。
 
 import type { Tool, GameSnapshot, EvolutionLog } from './game.js';
+import type { Vec2 } from '@morpho/sim';
 
 export type ToWorkerMessage =
   | { type: 'reset'; seed?: number }
   | { type: 'setSpeed'; speed: number }
   | { type: 'setTool'; tool: Tool }
   | { type: 'setBrush'; radius: number }
-  | { type: 'apply'; x: number; y: number; size: number };
+  | { type: 'apply'; pos: Vec2 };
 
 export type FromWorkerMessage =
   | { type: 'snapshot'; snapshot: GameSnapshot; events: string[]; evolution: EvolutionLog[] };

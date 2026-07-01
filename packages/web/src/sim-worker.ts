@@ -30,7 +30,7 @@ ctx.onmessage = (e) => {
     case 'setSpeed': game.setSpeed(msg.speed); break;
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;
-    case 'apply': game.apply(msg.x, msg.y, msg.size); dirty = true; break;
+    case 'apply': game.apply(msg.pos); dirty = true; break;
   }
 };
 

@@ -53,6 +53,8 @@ body { overflow: hidden; }
   cursor: pointer;
 }
 .time .controls button.active { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.time .controls input[type="range"] { width: 110px; accent-color: var(--accent); }
+.time .controls .speed-n { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 28px; }
 
 .stage {
   display: grid;

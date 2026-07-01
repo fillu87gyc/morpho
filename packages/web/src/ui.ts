@@ -73,15 +73,27 @@ export class Ui {
       onBrush: (r: number) => void;
       onReset: () => void;
       onToggleHeat: () => void;
+      onResetView: () => void;
     },
   ) {
-    document.querySelectorAll<HTMLButtonElement>('button.speed').forEach((b) => {
-      b.addEventListener('click', () => {
-        document.querySelectorAll<HTMLButtonElement>('button.speed').forEach((x) => x.classList.remove('active'));
-        b.classList.add('active');
-        const s = Number(b.dataset.speed ?? 1);
-        this.hooks.onSpeed(s);
-      });
+    // 再生速度: スライダーで連続的に選べる。一時停止ボタンは直前の速度を
+    // 覚えておいて、押し直したときに同じ速度へ戻す。
+    const pauseBtn = el('pause-toggle') as HTMLButtonElement;
+    const speedSlider = el('speed-slider') as HTMLInputElement;
+    const speedN = el('speed-n');
+    let lastSpeed = Number(speedSlider.value) || 1;
+    let paused = false;
+    speedSlider.addEventListener('input', () => {
+      const v = Number(speedSlider.value);
+      lastSpeed = v;
+      setText(speedN, String(v));
+      if (!paused) this.hooks.onSpeed(v);
+    });
+    pauseBtn.addEventListener('click', () => {
+      paused = !paused;
+      pauseBtn.textContent = paused ? '▶' : '⏸';
+      pauseBtn.classList.toggle('active', paused);
+      this.hooks.onSpeed(paused ? 0 : lastSpeed);
     });
     document.querySelectorAll<HTMLButtonElement>('button.tool').forEach((b) => {
       b.addEventListener('click', () => {
@@ -99,6 +111,7 @@ export class Ui {
     });
     (el('reset') as HTMLButtonElement).addEventListener('click', () => this.hooks.onReset());
     (el('toggle-heat') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleHeat());
+    (el('reset-view') as HTMLButtonElement).addEventListener('click', () => this.hooks.onResetView());
 
     document.querySelector<HTMLButtonElement>('button.tool[data-tool="food"]')?.classList.add('active');
   }

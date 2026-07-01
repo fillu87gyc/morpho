@@ -6,6 +6,7 @@
 
 import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog } from './game.js';
 import type { ToWorkerMessage, FromWorkerMessage } from './worker-protocol.js';
+import type { Vec2 } from '@morpho/sim';
 
 export class GameProxy {
   private worker: Worker;
@@ -47,9 +48,7 @@ export class GameProxy {
   setTool(t: Tool): void { this.tool = t; this.send({ type: 'setTool', tool: t }); }
   setBrush(r: number): void { this.brushRadius = r; this.send({ type: 'setBrush', radius: r }); }
   setSpeed(s: number): void { this.speed = Math.max(0, s | 0); this.send({ type: 'setSpeed', speed: this.speed }); }
-  apply(canvasX: number, canvasY: number, canvasSize: number): void {
-    this.send({ type: 'apply', x: canvasX, y: canvasY, size: canvasSize });
-  }
+  apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
   reset(seed?: number): void { this.send({ type: 'reset', seed }); }
 
   snapshot(): GameSnapshot { return this.current(); }

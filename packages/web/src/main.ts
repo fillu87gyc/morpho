@@ -5,6 +5,7 @@ import { GameProxy } from './game-proxy.js';
 import { CanvasRenderer } from './render.js';
 import { Ui } from './ui.js';
 import { Timeline } from './timeline.js';
+import { Camera } from './camera.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -16,6 +17,7 @@ const renderer = new CanvasRenderer(canvas, {
   showHeat: false,
 });
 const timeline = new Timeline();
+const camera = new Camera(game.worldSize);
 
 const ui = new Ui(game, {
   onSpeed: (s) => game.setSpeed(s),
@@ -24,6 +26,7 @@ const ui = new Ui(game, {
   onReset: () => {
     game.reset();
     timeline.reset();
+    camera.reset();
     fitCanvas();
   },
   onToggleHeat: () => {
@@ -31,22 +34,41 @@ const ui = new Ui(game, {
     renderer.setShowHeat(showHeat);
     document.getElementById('toggle-heat')?.classList.toggle('active', showHeat);
   },
+  onResetView: () => camera.reset(),
 });
 
 let showHeat = false;
 
 // ── 入力: カーソル位置と押下状態 ──────────────────────
+// 左ボタン (ドラッグ含む) はツールの適用、右ボタンのドラッグはパン、
+// ホイールはカーソル中心のズームに使う。
 let pressed = false;
+let panning = false;
+let panLast: { x: number; y: number } | null = null;
 let lastApplyMs = 0;
 let hover: { x: number; y: number } | null = null;
 const APPLY_INTERVAL = 33; // ドラッグ中 ~30Hz で塗り続ける
 
-function getCanvasPos(e: PointerEvent): { x: number; y: number } {
+function getCanvasPos(e: PointerEvent | WheelEvent): { x: number; y: number } {
   const rect = canvas!.getBoundingClientRect();
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
 
+function viewportSize(): number {
+  const rect = canvas!.getBoundingClientRect();
+  return Math.min(rect.width, rect.height);
+}
+
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
 canvas.addEventListener('pointerdown', (e) => {
+  if (e.button === 2) {
+    panning = true;
+    panLast = { x: e.clientX, y: e.clientY };
+    canvas.setPointerCapture(e.pointerId);
+    return;
+  }
+  if (e.button !== 0) return;
   pressed = true;
   canvas.setPointerCapture(e.pointerId);
   const p = getCanvasPos(e);
@@ -54,20 +76,35 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   hover = getCanvasPos(e);
+  if (panning && panLast) {
+    const dx = e.clientX - panLast.x;
+    const dy = e.clientY - panLast.y;
+    panLast = { x: e.clientX, y: e.clientY };
+    camera.pan(viewportSize(), dx, dy);
+    return;
+  }
   if (pressed && performance.now() - lastApplyMs > APPLY_INTERVAL) {
     applyAt(hover.x, hover.y);
   }
 });
 canvas.addEventListener('pointerup', (e) => {
+  if (e.button === 2) { panning = false; panLast = null; canvas.releasePointerCapture(e.pointerId); return; }
   pressed = false;
   canvas.releasePointerCapture(e.pointerId);
 });
 canvas.addEventListener('pointerleave', () => { hover = null; });
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const p = getCanvasPos(e);
+  // 上スクロール (deltaY < 0) でズームイン。指数的に効かせて滑らかにする。
+  const factor = Math.pow(1.0015, -e.deltaY);
+  camera.zoomAt(viewportSize(), p.x, p.y, factor);
+}, { passive: false });
+canvas.addEventListener('dblclick', () => camera.reset());
 
 function applyAt(x: number, y: number): void {
-  const rect = canvas!.getBoundingClientRect();
-  const size = Math.min(rect.width, rect.height);
-  game.apply(x, y, size);
+  const worldPos = camera.screenToWorld(viewportSize(), x, y);
+  game.apply(worldPos);
   lastApplyMs = performance.now();
 }
 
@@ -89,17 +126,18 @@ fitCanvas();
 // 影響されない)。
 function frame() {
   if (game.ready) {
-    const rect = canvas!.getBoundingClientRect();
-    const size = Math.min(rect.width, rect.height);
+    const size = viewportSize();
+    const zoomedScale = size * camera.zoom / game.worldSize;
     const hoverPx = hover ? {
       x: hover.x,
       y: hover.y,
-      radius: game.brushRadius * (size / game.worldSize),
+      radius: game.brushRadius * zoomedScale,
       tool: game.tool as Tool,
     } : undefined;
-    renderer.draw(game.snapshot().state, game.env, game.bio, hoverPx);
+    renderer.draw(game.snapshot().state, game.env, game.bio, camera.view(), hoverPx);
     ui.render();
-    timeline.maybeCapture(game.snapshot().day, () => renderer.captureThumbnail(96));
+    const snap = game.snapshot();
+    timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, 96));
     renderTimeline();
   }
   requestAnimationFrame(frame);

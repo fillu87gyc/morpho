@@ -19,10 +19,9 @@
           <div class="day">DAY <span id="day">0</span></div>
           <div class="era" id="era">胞子期</div>
           <div class="controls">
-            <button data-speed="0" class="speed" title="一時停止">⏸</button>
-            <button data-speed="1" class="speed active" title="再生">▶</button>
-            <button data-speed="4" class="speed" title="早送り">⏩</button>
-            <button data-speed="16" class="speed" title="超早送り">⏭</button>
+            <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
+            <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
+            <span class="speed-n">×<span id="speed-n">1</span></span>
           </div>
         </div>
       </header>
@@ -97,7 +96,7 @@
 
         <div class="canvas-wrap">
           <canvas id="canvas" width="640" height="640"></canvas>
-          <div id="hint" class="hint">ツールを選んで世界をクリックしてみてください</div>
+          <div id="hint" class="hint">クリックで配置 / ホイールでズーム / 右ドラッグで移動</div>
         </div>
 
         <aside class="panel right">
@@ -152,6 +151,7 @@
           <section class="card actions">
             <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>
+            <button id="reset-view">全体を見る</button>
           </section>
         </aside>
       </main>
