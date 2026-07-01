@@ -1,8 +1,5 @@
 {
   "name": "morpho",
   "private": true,
-  "workspaces": [
-    "packages/sim",
-    "packages/web"
-  ]
+  "packageManager": "pnpm@10.33.0"
 }
