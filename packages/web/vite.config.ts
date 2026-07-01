@@ -14,6 +14,9 @@ export default defineConfig({
       allow: [resolve(__dirname, '..')],
     },
   },
+  worker: {
+    format: 'es',
+  },
   build: {
     target: 'es2022',
     outDir: 'dist',

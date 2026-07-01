@@ -18,6 +18,7 @@ import type {
   GridEnvironment,
   BiomassField,
 } from '@morpho/sim';
+import type { WorldView } from './camera.js';
 
 export interface RenderOptions {
   worldSize: number;
@@ -71,7 +72,7 @@ export class CanvasRenderer {
 
   setShowHeat(v: boolean): void { this.opts.showHeat = v; }
 
-  draw(state: SimState, env: GridEnvironment, bio: BiomassField, hoverPx?: { x: number; y: number; radius: number; tool: string }): void {
+  draw(state: SimState, env: GridEnvironment, bio: BiomassField, view: WorldView, hoverPx?: { x: number; y: number; radius: number; tool: string }): void {
     const { ctx } = this;
     const cssW = this.canvas.width / this.dpr;
     const cssH = this.canvas.height / this.dpr;
@@ -88,21 +89,50 @@ export class CanvasRenderer {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, cssW, cssH);
 
-    // 2. 場系を焼いて貼る (世界 = 画面いっぱい、square 領域)
+    // 2. 場系を焼いて貼る。view (カメラのズーム/パン) に応じて
+    //    fieldCanvas (常に世界全体を焼いた1枚) から必要な矩形だけを
+    //    切り出して拡大する。zoom=1 のときは全体をそのまま貼るのと同じ。
     this.paintFieldLayer(env, bio);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(this.fieldCanvas, left, top, side, side);
+    const fieldScale = this.opts.fieldSize / this.opts.worldSize;
+    ctx.drawImage(
+      this.fieldCanvas,
+      view.worldLeft * fieldScale, view.worldTop * fieldScale,
+      view.worldSpan * fieldScale, view.worldSpan * fieldScale,
+      left, top, side, side,
+    );
 
     // 3. 脈管網
-    const scale = side / this.opts.worldSize;
-    this.drawEdges(state, scale, left, top);
+    const scale = side / view.worldSpan;
+    const offX = left - view.worldLeft * scale;
+    const offY = top - view.worldTop * scale;
+    this.drawEdges(ctx, state, scale, offX, offY);
 
     // 4. source / sink
-    this.drawNodes(state, scale, left, top);
+    this.drawNodes(ctx, state, scale, offX, offY);
 
     // 5. カーソル
     if (hoverPx) this.drawHover(hoverPx);
+  }
+
+  // 成長タイムライン用のサムネイル。現在のカメラ位置に関わらず、
+  // 常に世界全体を俯瞰した絵を焼く (ズーム中でも成長の全体像が分かるように)。
+  renderThumbnail(state: SimState, env: GridEnvironment, bio: BiomassField, size: number): string {
+    const thumb = document.createElement('canvas');
+    thumb.width = size;
+    thumb.height = size;
+    const tctx = thumb.getContext('2d');
+    if (!tctx) return '';
+    this.paintFieldLayer(env, bio);
+    tctx.fillStyle = rgb(BG_INNER);
+    tctx.fillRect(0, 0, size, size);
+    tctx.imageSmoothingEnabled = true;
+    tctx.drawImage(this.fieldCanvas, 0, 0, size, size);
+    const scale = size / this.opts.worldSize;
+    this.drawEdges(tctx, state, scale, 0, 0);
+    this.drawNodes(tctx, state, scale, 0, 0);
+    return thumb.toDataURL('image/png');
   }
 
   private paintFieldLayer(env: GridEnvironment, bio: BiomassField): void {
@@ -121,6 +151,25 @@ export class CanvasRenderer {
         const i = y * fs + x;
         const di = i * 4;
         let r = 0, g = 0, b = 0, a = 0;
+
+        // 地形の質感 (常時, 控えめ): ヒート表示 OFF でもバイオームの違いが
+        // 見えるように、baseline (湿度 0.3 / 明るさ 0.2) からの差分だけを
+        // 弱く乗せる。強い版はヒート表示 ON のときの下のブロックが担う。
+        const moiBase = env.moisture.data[i] ?? 0;
+        const briBase = env.brightness.data[i] ?? 0;
+        const moiDelta = moiBase - 0.3;
+        if (moiDelta > 0.06) {
+          // 湿った土地 — 仄かに青緑
+          const k = Math.min(1, (moiDelta - 0.06) * 2.4);
+          [r, g, b] = blend(r, g, b, 70, 110, 140, k * 0.16);
+          a = Math.max(a, k * 0.16);
+        } else if (moiDelta < -0.04) {
+          // 乾いた土地 (砂地) — 仄かに山吹の砂色。明るさが高いほど強調。
+          const k = Math.min(1, (-moiDelta) * 2.4 + Math.max(0, briBase - 0.2) * 0.8);
+          const fa = Math.min(0.20, k * 0.18);
+          [r, g, b] = blend(r, g, b, 190, 165, 115, fa);
+          a = Math.max(a, fa);
+        }
 
         // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)
         const nut = env.nutrients.data[i] ?? 0;
@@ -184,8 +233,7 @@ export class CanvasRenderer {
     this.fieldCtx.putImageData(this.fieldImage, 0, 0);
   }
 
-  private drawEdges(state: SimState, scale: number, offX: number, offY: number): void {
-    const { ctx } = this;
+  private drawEdges(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
     const nodeMap = new Map(state.nodes.map((n) => [n.id, n]));
     const sorted = [...state.edges].sort((a, b) => a.radius - b.radius);
     const pxPerWorld = scale / 5.76;  // 参照 (W=576, world=100) 比
@@ -214,8 +262,7 @@ export class CanvasRenderer {
     ctx.restore();
   }
 
-  private drawNodes(state: SimState, scale: number, offX: number, offY: number): void {
-    const { ctx } = this;
+  private drawNodes(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
     for (const n of state.nodes) {
       if (n.type === 'relay') continue;
       const cx = offX + n.pos.x * scale;

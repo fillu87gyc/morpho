@@ -11,7 +11,7 @@
 import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, computeTraits,
-  type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
+  type SimState, type SimParams, type Vec2, type Traits, type SimEvent, type SeededRNG,
 } from '@morpho/sim';
 
 export type Tool = 'food' | 'light' | 'water' | 'stone' | 'erase';
@@ -55,10 +55,21 @@ export interface GameSnapshot {
   questProgress: number; // [0,1]
 }
 
-const WORLD = 100;
-const FIELD = 96;
+export const WORLD = 100;
+export const FIELD = 96;
 const TICKS_PER_DAY = 40;
 const DEFAULT_SOURCE: Vec2 = { x: 50, y: 50 };
+
+// 皿の外周 6 箇所の固定食料点 (main petri デモと同じ構図)。
+// バイオード生成で岩場をここに重ねないための「避けるべき地点」にも使う。
+const FOOD_POINTS: { pos: Vec2; radius: number; amount: number }[] = [
+  { pos: { x: 22, y: 22 }, radius: 4.5, amount: 0.95 },
+  { pos: { x: 78, y: 22 }, radius: 5.0, amount: 1.10 },
+  { pos: { x: 82, y: 55 }, radius: 4.0, amount: 0.85 },
+  { pos: { x: 78, y: 80 }, radius: 5.0, amount: 1.05 },
+  { pos: { x: 22, y: 78 }, radius: 4.5, amount: 0.95 },
+  { pos: { x: 18, y: 50 }, radius: 4.0, amount: 0.85 },
+];
 
 export const PETRI_PARAMS: SimParams = {
   ...DEFAULT_PARAMS,
@@ -125,13 +136,8 @@ export class Game {
 
     clearAroundSource(this.env, DEFAULT_SOURCE, 4);
     seedSource(this.state, DEFAULT_SOURCE, 6);
-    // 皿の外周 6 箇所に食料 (main petri デモと同じ構図)。
-    this.env.placeFood({ x: 22, y: 22 }, 4.5, 0.95);
-    this.env.placeFood({ x: 78, y: 22 }, 5.0, 1.10);
-    this.env.placeFood({ x: 82, y: 55 }, 4.0, 0.85);
-    this.env.placeFood({ x: 78, y: 80 }, 5.0, 1.05);
-    this.env.placeFood({ x: 22, y: 78 }, 4.5, 0.95);
-    this.env.placeFood({ x: 18, y: 50 }, 4.0, 0.85);
+    for (const f of FOOD_POINTS) this.env.placeFood(f.pos, f.radius, f.amount);
+    generateBiome(this.env, this.rng, WORLD, [DEFAULT_SOURCE, ...FOOD_POINTS.map((f) => f.pos)]);
 
     this.evoLog = [];
     this.recentEvents = [];
@@ -187,19 +193,31 @@ export class Game {
     }
   }
 
-  apply(canvasX: number, canvasY: number, canvasSize: number): void {
-    const s = this.worldSize / canvasSize;
-    const pos: Vec2 = { x: canvasX * s, y: canvasY * s };
+  // pos はワールド座標 (0..worldSize)。画面→ワールド変換はカメラ (main 側) の責務。
+  apply(pos: Vec2): void {
     const r = this.brushRadius;
     switch (this.tool) {
       case 'food':
         this.env.placeFood(pos, r, 0.7);
         this.coloniesTotal += 1;
+        this.pushEvent('栄養を撒いた');
         break;
-      case 'light': this.env.placeLight(pos, r, 0.45); break;
-      case 'water': this.env.placeWater(pos, r, 0.4); break;
-      case 'stone': this.env.placeStone(pos, Math.max(2, r * 0.5)); break;
-      case 'erase': this.erase(pos, r); break;
+      case 'light':
+        this.env.placeLight(pos, r, 0.45);
+        this.pushEvent('光をあてた');
+        break;
+      case 'water':
+        this.env.placeWater(pos, r, 0.4);
+        this.pushEvent('水を引いた');
+        break;
+      case 'stone':
+        this.env.placeStone(pos, Math.max(2, r * 0.5));
+        this.pushEvent('障害物を置いた');
+        break;
+      case 'erase':
+        this.erase(pos, r);
+        this.pushEvent('土地をならした');
+        break;
     }
   }
 
@@ -329,4 +347,79 @@ function clusterCount(points: { x: number; y: number }[], radius: number): numbe
     if (!merged) reps.push(p);
   }
   return reps.length;
+}
+
+// ── バイオード生成 ────────────────────────────────────
+// 起伏のある地形にするため、岩場 / 砂地 / 草地 / 水場 / 陽だまりの
+// パッチをランダムに散らす。sim 側には手を入れず、Environment.placeX()
+// だけを呼ぶ (アーキテクチャ方針: 書き込みは placeX 経由に限定する)。
+
+type BiomeKind = 'rock' | 'sand' | 'grass' | 'water' | 'light';
+
+const BIOME_WEIGHTS: [BiomeKind, number][] = [
+  ['grass', 0.30],
+  ['rock', 0.25],
+  ['sand', 0.22],
+  ['water', 0.13],
+  ['light', 0.10],
+];
+
+function pickBiomeKind(rng: SeededRNG): BiomeKind {
+  const r = rng.next();
+  let acc = 0;
+  for (const [kind, w] of BIOME_WEIGHTS) {
+    acc += w;
+    if (r < acc) return kind;
+  }
+  return 'grass';
+}
+
+function generateBiome(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void {
+  const patchCount = rng.int(9, 14);
+  const avoidRadius = 9; // source / 固定食料点の近くには岩を置かない (通行止め防止)
+
+  for (let i = 0; i < patchCount; i++) {
+    const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
+    const kind = pickBiomeKind(rng);
+    const patchRadius = rng.range(9, 20);
+
+    if (kind === 'rock') {
+      if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
+      // 単一の塊ではなく、小石を数個ばら撒いて「岩場」らしい粒感を出す。
+      const rockCount = rng.int(3, 7);
+      for (let j = 0; j < rockCount; j++) {
+        const a = rng.range(0, Math.PI * 2);
+        const d = rng.range(0, patchRadius * 0.7);
+        const pos: Vec2 = { x: center.x + Math.cos(a) * d, y: center.y + Math.sin(a) * d };
+        if (avoidPoints.some((p) => dist(p, pos) < avoidRadius * 0.6)) continue;
+        env.placeStone(pos, rng.range(1.4, 3.2));
+      }
+      continue;
+    }
+
+    switch (kind) {
+      case 'sand':
+        // 乾いて明るい砂地: 明るさを上げ、湿度をわずかに下げる。
+        env.placeLight(center, patchRadius, rng.range(0.18, 0.32));
+        env.placeWater(center, patchRadius * 0.9, -rng.range(0.08, 0.16));
+        break;
+      case 'grass':
+        // 湿って肥沃な草地: 湿度と栄養をわずかに底上げする。
+        env.placeWater(center, patchRadius * 0.85, rng.range(0.10, 0.20));
+        env.placeFood(center, patchRadius * 0.5, rng.range(0.12, 0.25));
+        break;
+      case 'water':
+        // 小さな水場: 湿度を強めに上げる。
+        env.placeWater(center, patchRadius * 0.7, rng.range(0.30, 0.5));
+        break;
+      case 'light':
+        // 陽だまり: 明るさを強めに上げる。
+        env.placeLight(center, patchRadius * 0.7, rng.range(0.28, 0.45));
+        break;
+    }
+  }
+}
+
+function dist(a: Vec2, b: Vec2): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
