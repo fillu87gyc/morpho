@@ -71,6 +71,18 @@ export class CanvasRenderer {
 
   setShowHeat(v: boolean): void { this.opts.showHeat = v; }
 
+  // 成長タイムライン用のサムネイル。直前に draw() した内容をそのまま
+  // 縮小コピーするだけなので、Biomass/Edges の再計算は不要。
+  captureThumbnail(size: number): string {
+    const thumb = document.createElement('canvas');
+    thumb.width = size;
+    thumb.height = size;
+    const tctx = thumb.getContext('2d');
+    if (!tctx) return '';
+    tctx.drawImage(this.canvas, 0, 0, size, size);
+    return thumb.toDataURL('image/png');
+  }
+
   draw(state: SimState, env: GridEnvironment, bio: BiomassField, hoverPx?: { x: number; y: number; radius: number; tool: string }): void {
     const { ctx } = this;
     const cssW = this.canvas.width / this.dpr;

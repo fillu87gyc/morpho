@@ -1,18 +1,21 @@
 // エントリ。ゲームとレンダラを生成し、RAF ループに繋ぐ。
 
-import { Game, type Tool } from './game.js';
+import type { Tool } from './game.js';
+import { GameProxy } from './game-proxy.js';
 import { CanvasRenderer } from './render.js';
 import { Ui } from './ui.js';
+import { Timeline } from './timeline.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
 
-const game = new Game();
+const game = new GameProxy();
 const renderer = new CanvasRenderer(canvas, {
   worldSize: game.worldSize,
   fieldSize: game.fieldSize,
   showHeat: false,
 });
+const timeline = new Timeline();
 
 const ui = new Ui(game, {
   onSpeed: (s) => game.setSpeed(s),
@@ -20,6 +23,7 @@ const ui = new Ui(game, {
   onBrush: (r) => game.setBrush(r),
   onReset: () => {
     game.reset();
+    timeline.reset();
     fitCanvas();
   },
   onToggleHeat: () => {
@@ -65,11 +69,6 @@ function applyAt(x: number, y: number): void {
   const size = Math.min(rect.width, rect.height);
   game.apply(x, y, size);
   lastApplyMs = performance.now();
-  if (game.tool === 'stone') game.pushEvent('障害物を置いた');
-  else if (game.tool === 'food') game.pushEvent('栄養を撒いた');
-  else if (game.tool === 'water') game.pushEvent('水を引いた');
-  else if (game.tool === 'light') game.pushEvent('光をあてた');
-  else if (game.tool === 'erase') game.pushEvent('土地をならした');
 }
 
 // ── レイアウト ────────────────────────────────────────
@@ -85,18 +84,48 @@ window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
 // ── メインループ ─────────────────────────────────────
+// tick は sim-worker.ts が自前のタイマーで進める。ここでは Worker から
+// 届いた最新スナップショットを描画するだけ (UI 操作は tick の重さに
+// 影響されない)。
 function frame() {
-  game.tick();
-  const rect = canvas!.getBoundingClientRect();
-  const size = Math.min(rect.width, rect.height);
-  const hoverPx = hover ? {
-    x: hover.x,
-    y: hover.y,
-    radius: game.brushRadius * (size / game.worldSize),
-    tool: game.tool as Tool,
-  } : undefined;
-  renderer.draw(game.snapshot().state, game.env, game.bio, hoverPx);
-  ui.render();
+  if (game.ready) {
+    const rect = canvas!.getBoundingClientRect();
+    const size = Math.min(rect.width, rect.height);
+    const hoverPx = hover ? {
+      x: hover.x,
+      y: hover.y,
+      radius: game.brushRadius * (size / game.worldSize),
+      tool: game.tool as Tool,
+    } : undefined;
+    renderer.draw(game.snapshot().state, game.env, game.bio, hoverPx);
+    ui.render();
+    timeline.maybeCapture(game.snapshot().day, () => renderer.captureThumbnail(96));
+    renderTimeline();
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ── 成長タイムライン ──────────────────────────────────
+const timelineEl = document.getElementById('timeline');
+let lastTimelineLen = -1;
+function renderTimeline(): void {
+  if (!timelineEl) return;
+  const entries = timeline.list();
+  if (entries.length === lastTimelineLen) return;
+  lastTimelineLen = entries.length;
+  timelineEl.innerHTML = '';
+  for (const e of entries) {
+    const fig = document.createElement('figure');
+    fig.className = 'timeline-entry';
+    const img = document.createElement('img');
+    img.src = e.thumb;
+    img.alt = `Day ${e.day}`;
+    const cap = document.createElement('figcaption');
+    cap.textContent = `Day ${e.day}`;
+    fig.appendChild(img);
+    fig.appendChild(cap);
+    timelineEl.appendChild(fig);
+  }
+  timelineEl.scrollLeft = timelineEl.scrollWidth;
+}

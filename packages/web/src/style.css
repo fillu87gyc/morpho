@@ -130,6 +130,29 @@ body { overflow: hidden; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+.timeline {
+  display: flex; gap: 8px;
+  overflow-x: auto; padding-bottom: 2px;
+}
+.timeline::-webkit-scrollbar { height: 5px; }
+.timeline::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: 3px; }
+.timeline:empty::before {
+  content: 'Day 1 でここに記録されます';
+  font-size: 11px; color: var(--text-dim); font-style: italic;
+}
+.timeline-entry {
+  margin: 0; flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.timeline-entry img {
+  width: 56px; height: 56px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-edge);
+  object-fit: cover;
+  background: #07090a;
+}
+.timeline-entry figcaption { font-size: 10px; color: var(--text-dim); }
+
 .canvas-wrap {
   position: relative;
   display: flex; align-items: center; justify-content: center;

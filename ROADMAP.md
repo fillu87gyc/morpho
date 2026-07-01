@@ -22,9 +22,9 @@
 ### M1 — 「観察する」を気持ちよくする
 - [ ] BiomassField の差分のみを再描画 (60fps 安定 / モバイル可)
 - [ ] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け)
-- [ ] Web Worker でシミュレーションを分離 (UI 操作を止めない)
-- [ ] スナップショット採取: Day 1 / 5 / 10 ... を縮小サムネで成長タイムラインに表示
-- [ ] 環境ヒートマップ表示の ON/OFF (栄養 / 水 / 光)
+- [x] Web Worker でシミュレーションを分離 (UI 操作を止めない)
+- [x] スナップショット採取: Day 1 / 5 / 10 ... を縮小サムネで成長タイムラインに表示
+- [x] 環境ヒートマップ表示の ON/OFF (栄養 / 水 / 光)
 
 ### M2 — ねばりのこに「個性」を持たせる
 - [ ] Source ごとの遺伝パラメータ (mergeRadius / branchProb / 嗜好) を内部に持たせる
@@ -69,15 +69,18 @@
 - **描画はラッパー** — `@morpho/web` は sim を import するだけで、sim 側に描画依存を持ち込まない (Node でも引き続き使える)。
 - **時間スケールは UI に切り出す** — sim は「1 tick」しか知らない。日数や時代は web 側の派生量。
 - **個性 / 図鑑 / 子孫は web 側で持つ** — sim は遺伝子を1個体ぶん受け取って動くだけ。永続化は localStorage。
-- **リポジトリルートは npm workspaces** — `@morpho/web` は `@morpho/sim` をビルド成果物ではなく `../sim/src` を直接 import している。
-  そのため install は必ずリポジトリルートで行うこと。`packages/web` や `packages/sim` の中だけで `npm install` すると、
+- **リポジトリルートは pnpm workspaces** — `@morpho/web` は `@morpho/sim` をビルド成果物ではなく `../sim/src` を直接 import している。
+  そのため install は必ずリポジトリルートで行うこと。`packages/web` や `packages/sim` の中だけで install すると、
   もう片方の依存 (`seedrandom` など) が解決できずに壊れる。
+- **tick は Worker、描画はメインスレッド** — `Game` (state / env / fields) の実体は `sim-worker.ts` の中で動く。
+  メインスレッドは `game-proxy.ts` (`GameProxy`) を通じて postMessage で命令 (setTool 等) を送り、
+  最新スナップショットを受け取って描画するだけ。速度倍率を上げても入力やホバー表示が詰まらない。
 
 ## 動かし方 (M0)
 
 ```sh
-npm install       # リポジトリルートで一度だけ (workspaces が両パッケージの依存を解決する)
+pnpm install      # リポジトリルートで一度だけ (workspaces が両パッケージの依存を解決する)
 cd packages/web
-npm run dev
+pnpm dev
 # → http://localhost:5173 で遊べる
 ```

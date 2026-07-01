@@ -55,8 +55,8 @@ export interface GameSnapshot {
   questProgress: number; // [0,1]
 }
 
-const WORLD = 100;
-const FIELD = 96;
+export const WORLD = 100;
+export const FIELD = 96;
 const TICKS_PER_DAY = 40;
 const DEFAULT_SOURCE: Vec2 = { x: 50, y: 50 };
 
@@ -195,11 +195,24 @@ export class Game {
       case 'food':
         this.env.placeFood(pos, r, 0.7);
         this.coloniesTotal += 1;
+        this.pushEvent('栄養を撒いた');
         break;
-      case 'light': this.env.placeLight(pos, r, 0.45); break;
-      case 'water': this.env.placeWater(pos, r, 0.4); break;
-      case 'stone': this.env.placeStone(pos, Math.max(2, r * 0.5)); break;
-      case 'erase': this.erase(pos, r); break;
+      case 'light':
+        this.env.placeLight(pos, r, 0.45);
+        this.pushEvent('光をあてた');
+        break;
+      case 'water':
+        this.env.placeWater(pos, r, 0.4);
+        this.pushEvent('水を引いた');
+        break;
+      case 'stone':
+        this.env.placeStone(pos, Math.max(2, r * 0.5));
+        this.pushEvent('障害物を置いた');
+        break;
+      case 'erase':
+        this.erase(pos, r);
+        this.pushEvent('土地をならした');
+        break;
     }
   }
 

@@ -2,7 +2,8 @@
 // - 値が変わったところだけ書き換える (textContent が等しければスキップ)。
 // - 数値はモックアップに合わせて千桁区切り。
 
-import type { Game, Tool } from './game.js';
+import type { Tool } from './game.js';
+import type { GameProxy } from './game-proxy.js';
 
 type El = HTMLElement;
 
@@ -65,7 +66,7 @@ export class Ui {
   private lastEventLen = -1;
 
   constructor(
-    private game: Game,
+    private game: GameProxy,
     private hooks: {
       onSpeed: (s: number) => void;
       onTool: (t: Tool) => void;
