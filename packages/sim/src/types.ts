@@ -61,3 +61,13 @@ export interface Traits {
   efficiency: number;  // 効率性: 余分なエッジが少ない
   stability: number;   // 安定性: 太い幹の割合
 }
+
+// 個体ビュー用の6軸。Traits (探索性/効率性/安定性) に
+// 健康度/活力/適応性を足したもの。
+export interface Individuality extends Traits {
+  health: number;       // 健康度: 疲労・ストレスの低さ
+  vitality: number;     // 活力: 平均 activity
+  adaptability: number; // 適応性: 分岐構造の多様性
+}
+
+export type IndividualTypeId = 'thick-connector' | 'spreader' | 'efficient' | 'resilient' | 'balanced';

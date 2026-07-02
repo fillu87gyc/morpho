@@ -4,6 +4,7 @@
 
 import type { Tool } from './game.js';
 import type { GameProxy } from './game-proxy.js';
+import type { Encyclopedia } from './encyclopedia.js';
 
 type El = HTMLElement;
 
@@ -56,6 +57,17 @@ export class Ui {
   private tExpN = el('t-explore-n');
   private tEffN = el('t-efficient-n');
   private tStbN = el('t-stable-n');
+  // individuality (個体ビュー)
+  private tHealth = el('t-health');
+  private tVitality = el('t-vitality');
+  private tAdapt = el('t-adapt');
+  private tHealthN = el('t-health-n');
+  private tVitalityN = el('t-vitality-n');
+  private tAdaptN = el('t-adapt-n');
+  private indTypeN = el('ind-type-n');
+  // 図鑑
+  private ency = el('ency');
+  private encyProgress = el('ency-progress');
   // logs
   private log = el('log');
   private evo = el('evo');
@@ -64,9 +76,11 @@ export class Ui {
 
   private lastEvoLen = -1;
   private lastEventLen = -1;
+  private lastEncyVersion = -1;
 
   constructor(
     private game: GameProxy,
+    private encyclopedia: Encyclopedia,
     private hooks: {
       onSpeed: (s: number) => void;
       onTool: (t: Tool) => void;
@@ -144,13 +158,20 @@ export class Ui {
     setText(this.eNutN, pct(s.balance.nutrient));
     setText(this.eToxN, pct(s.balance.toxin));
 
-    // 個性
-    setBar(this.tExp, s.traits.exploration);
-    setBar(this.tEff, s.traits.efficiency);
-    setBar(this.tStb, s.traits.stability);
-    setText(this.tExpN, pct(s.traits.exploration));
-    setText(this.tEffN, pct(s.traits.efficiency));
-    setText(this.tStbN, pct(s.traits.stability));
+    // 個体ビュー (6軸 + タイプ)
+    setText(this.indTypeN, s.typeInfo.label);
+    setBar(this.tHealth, s.individuality.health);
+    setBar(this.tVitality, s.individuality.vitality);
+    setBar(this.tExp, s.individuality.exploration);
+    setBar(this.tEff, s.individuality.efficiency);
+    setBar(this.tStb, s.individuality.stability);
+    setBar(this.tAdapt, s.individuality.adaptability);
+    setText(this.tHealthN, pct(s.individuality.health));
+    setText(this.tVitalityN, pct(s.individuality.vitality));
+    setText(this.tExpN, pct(s.individuality.exploration));
+    setText(this.tEffN, pct(s.individuality.efficiency));
+    setText(this.tStbN, pct(s.individuality.stability));
+    setText(this.tAdaptN, pct(s.individuality.adaptability));
 
     // ログ (差分が出たときだけ書き換える)
     const events = this.game.events();
@@ -188,6 +209,33 @@ export class Ui {
         }
       }
       this.lastEvoLen = evo.length;
+    }
+
+    // 図鑑 (バージョンが変わった = 新規発見 or 更新があったときだけ書き換える)
+    if (this.lastEncyVersion !== this.encyclopedia.version) {
+      this.lastEncyVersion = this.encyclopedia.version;
+      const entries = this.encyclopedia.list();
+      setText(this.encyProgress, `${entries.length}/5`);
+      this.ency.innerHTML = '';
+      if (entries.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'まだ何も発見していない…';
+        this.ency.appendChild(li);
+      } else {
+        for (const e of entries) {
+          const li = document.createElement('li');
+          const label = document.createElement('span');
+          label.className = 'label';
+          label.textContent = e.label;
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          meta.textContent = `Day ${e.day}`;
+          li.appendChild(label);
+          li.appendChild(meta);
+          this.ency.appendChild(li);
+        }
+      }
     }
   }
 }

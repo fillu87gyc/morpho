@@ -129,4 +129,22 @@ describe('Game', () => {
     expect(s.questProgress).toBeGreaterThanOrEqual(0);
     expect(s.questProgress).toBeLessThanOrEqual(1);
   });
+
+  it('同じ seed なら同じ genome / タイプが再現される', () => {
+    const a = new Game(55);
+    const b = new Game(55);
+    expect(a.genome).toEqual(b.genome);
+    expect(a.snapshot().typeInfo).toEqual(b.snapshot().typeInfo);
+  });
+
+  it('個体ビュー (individuality) の全軸は [0,1] に収まる', () => {
+    const g = new Game(8);
+    g.setSpeed(1);
+    for (let i = 0; i < 200; i++) g.tick();
+    const ind = g.snapshot().individuality;
+    for (const v of Object.values(ind)) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1);
+    }
+  });
 });
