@@ -20,7 +20,7 @@
 - [x] CI に web typecheck を追加
 
 ### M1 — 「観察する」を気持ちよくする
-- [ ] BiomassField の差分のみを再描画 (60fps 安定 / モバイル可)
+- [x] BiomassField の差分のみを再描画 (60fps 安定 / モバイル可)
 - [ ] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け)
 - [x] Web Worker でシミュレーションを分離 (UI 操作を止めない)
 - [x] スナップショット採取: Day 1 / 5 / 10 ... を縮小サムネで成長タイムラインに表示

@@ -45,6 +45,22 @@ export class CanvasRenderer {
   private fieldCtx: CanvasRenderingContext2D;
   private dpr: number;
 
+  // 差分再描画用: 直前フレームで焼いた場の値を保持し、変化したセルだけ
+  // 色を計算し直す。地形 (nutrients/moisture/brightness/obstacle) は
+  // ツールを使わない限りほぼ静止しているため、これだけで大半のフレームは
+  // 「触った/育った」近傍のみの再計算 + putImageData の部分矩形更新で済む。
+  private prevBio: Float32Array | null = null;
+  private prevNutrients: Float32Array | null = null;
+  private prevMoisture: Float32Array | null = null;
+  private prevBrightness: Float32Array | null = null;
+  private prevObstacle: Float32Array | null = null;
+  private prevMaxBio = -1;
+  private prevShowHeat: boolean | null = null;
+  // 生の浮動小数比較だと biomass の減衰が皿全体でごく僅かに毎tick進み
+  // 続けるため、見た目に影響しない変化まで「差分」扱いになってしまう。
+  // 可視のバイト値 (0-255) が変わらない程度の揺れは無視する。
+  private static readonly FIELD_EPS = 0.004;
+
   constructor(private canvas: HTMLCanvasElement, private opts: RenderOptions) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2d context unavailable');
@@ -118,6 +134,10 @@ export class CanvasRenderer {
 
   // 成長タイムライン用のサムネイル。現在のカメラ位置に関わらず、
   // 常に世界全体を俯瞰した絵を焼く (ズーム中でも成長の全体像が分かるように)。
+  // paintFieldLayer は差分描画のため、直前の draw() 呼び出しと env/bio が
+  // 一致している前提 (main.ts は同じフレーム内で同じスナップショットを
+  // draw() → renderThumbnail() の順に渡す) で呼ぶこと。異なるスナップショットを
+  // 渡すと、直前に描かれた絵との差分だけが焼き足される。
   renderThumbnail(state: SimState, env: GridEnvironment, bio: BiomassField, size: number): string {
     const thumb = document.createElement('canvas');
     thumb.width = size;
@@ -137,26 +157,84 @@ export class CanvasRenderer {
 
   private paintFieldLayer(env: GridEnvironment, bio: BiomassField): void {
     const fs = this.opts.fieldSize;
+    const n = fs * fs;
     const data = this.fieldImage.data;
+    const bioData = bio.field.data;
+    const nutData = env.nutrients.data;
+    const moiData = env.moisture.data;
+    const briData = env.brightness.data;
+    const obData = env.obstacle.data;
 
     let maxBio = 0;
-    for (let i = 0; i < bio.field.data.length; i++) {
-      const v = bio.field.data[i] ?? 0;
+    for (let i = 0; i < bioData.length; i++) {
+      const v = bioData[i] ?? 0;
       if (v > maxBio) maxBio = v;
     }
     maxBio = Math.max(maxBio, 0.6);
 
+    // maxBio が動くと biomass の正規化値 (v = raw/maxBio) が全セルで
+    // ずれるため、生の値が変わっていないセルも塗り直しが要る。
+    // 変化が小さければ無視して差分描画を続け、大きく動いた
+    // (序盤の急成長など) フレームだけ全面フォールバックする。
+    const maxBioJumped = this.prevMaxBio < 0
+      || Math.abs(maxBio - this.prevMaxBio) / Math.max(this.prevMaxBio, 1e-6) > 0.02;
+    const heatChanged = this.prevShowHeat !== this.opts.showHeat;
+    const full = this.prevBio === null || maxBioJumped || heatChanged;
+
+    // 遅延確保。prevBio が null (初回) の間に full の判定を済ませてから
+    // ここで確保するので、判定そのものには影響しない。
+    if (this.prevBio === null) {
+      this.prevBio = new Float32Array(n);
+      this.prevNutrients = new Float32Array(n);
+      this.prevMoisture = new Float32Array(n);
+      this.prevBrightness = new Float32Array(n);
+      this.prevObstacle = new Float32Array(n);
+    }
+    const prevBio = this.prevBio;
+    const prevNutrients = this.prevNutrients!;
+    const prevMoisture = this.prevMoisture!;
+    const prevBrightness = this.prevBrightness!;
+    const prevObstacle = this.prevObstacle!;
+
+    let dx0 = fs, dy0 = fs, dx1 = -1, dy1 = -1;
+
     for (let y = 0; y < fs; y++) {
       for (let x = 0; x < fs; x++) {
         const i = y * fs + x;
+
+        if (!full) {
+          const changed =
+            Math.abs((bioData[i] ?? 0) - (prevBio[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
+            Math.abs((nutData[i] ?? 0) - (prevNutrients[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
+            Math.abs((moiData[i] ?? 0) - (prevMoisture[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
+            Math.abs((briData[i] ?? 0) - (prevBrightness[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
+            Math.abs((obData[i] ?? 0) - (prevObstacle[i] ?? 0)) > CanvasRenderer.FIELD_EPS;
+          if (!changed) continue;
+        }
+
+        // このセルは今回塗り直す。基準値は「前フレームの生値」ではなく
+        // 「最後に実際に塗った値」で更新する — でないと、毎フレーム
+        // epsilon 未満の緩やかな変化 (biomass の減衰など) が無限に
+        // 見逃され続け、実際の値からどんどん乖離した色が表示され続ける。
+        prevBio[i] = bioData[i] ?? 0;
+        prevNutrients[i] = nutData[i] ?? 0;
+        prevMoisture[i] = moiData[i] ?? 0;
+        prevBrightness[i] = briData[i] ?? 0;
+        prevObstacle[i] = obData[i] ?? 0;
+
+        if (x < dx0) dx0 = x;
+        if (x > dx1) dx1 = x;
+        if (y < dy0) dy0 = y;
+        if (y > dy1) dy1 = y;
+
         const di = i * 4;
         let r = 0, g = 0, b = 0, a = 0;
 
         // 地形の質感 (常時, 控えめ): ヒート表示 OFF でもバイオームの違いが
         // 見えるように、baseline (湿度 0.3 / 明るさ 0.2) からの差分だけを
         // 弱く乗せる。強い版はヒート表示 ON のときの下のブロックが担う。
-        const moiBase = env.moisture.data[i] ?? 0;
-        const briBase = env.brightness.data[i] ?? 0;
+        const moiBase = moiData[i] ?? 0;
+        const briBase = briData[i] ?? 0;
         const moiDelta = moiBase - 0.3;
         if (moiDelta > 0.06) {
           // 湿った土地 — 仄かに青緑
@@ -172,7 +250,7 @@ export class CanvasRenderer {
         }
 
         // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)
-        const nut = env.nutrients.data[i] ?? 0;
+        const nut = nutData[i] ?? 0;
         if (nut > 0.05) {
           const k = Math.min(1, nut * 0.6);
           const fa = 0.18 + k * 0.32;
@@ -182,29 +260,27 @@ export class CanvasRenderer {
 
         // ヒート (UI トグル): 水を青く、光を黄色く薄く乗せる
         if (this.opts.showHeat) {
-          const m = env.moisture.data[i] ?? 0;
-          if (m > 0.25) {
-            const k = Math.min(1, (m - 0.25) * 1.4);
+          if (moiBase > 0.25) {
+            const k = Math.min(1, (moiBase - 0.25) * 1.4);
             [r, g, b] = blend(r, g, b, 90, 150, 220, k * 0.32);
             a = Math.max(a, k * 0.32);
           }
-          const l = env.brightness.data[i] ?? 0;
-          if (l > 0.25) {
-            const k = Math.min(1, (l - 0.25) * 1.4);
+          if (briBase > 0.25) {
+            const k = Math.min(1, (briBase - 0.25) * 1.4);
             [r, g, b] = blend(r, g, b, 245, 230, 150, k * 0.28);
             a = Math.max(a, k * 0.28);
           }
         }
 
         // 障害物 — 暗いグレーの石 (背景より少し明るい程度に)
-        const ob = env.obstacle.data[i] ?? 0;
+        const ob = obData[i] ?? 0;
         if (ob > 0.5) {
           [r, g, b] = blend(r, g, b, 70, 65, 75, 0.85);
           a = Math.max(a, 0.85);
         }
 
         // プラズマ膜 — 縁は暗い金、中は山吹、芯は明るい黄
-        const v = (bio.field.data[i] ?? 0) / maxBio;
+        const v = (bioData[i] ?? 0) / maxBio;
         if (v > 0.025) {
           const k = Math.pow(Math.min(1, v), 0.55);
           let pr: number, pg: number, pb: number;
@@ -230,7 +306,14 @@ export class CanvasRenderer {
         data[di + 3] = Math.floor(a * 255);
       }
     }
-    this.fieldCtx.putImageData(this.fieldImage, 0, 0);
+
+    // 変化したセルがあった矩形だけをキャンバスへ反映する。
+    if (dx1 >= dx0) {
+      this.fieldCtx.putImageData(this.fieldImage, 0, 0, dx0, dy0, dx1 - dx0 + 1, dy1 - dy0 + 1);
+    }
+
+    this.prevMaxBio = maxBio;
+    this.prevShowHeat = this.opts.showHeat;
   }
 
   private drawEdges(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
