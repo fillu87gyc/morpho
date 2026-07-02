@@ -40,7 +40,7 @@ jobs:
         run: pnpm test
 
   web:
-    name: web (typecheck + build)
+    name: web (typecheck + test + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +59,50 @@ jobs:
         working-directory: packages/web
         run: pnpm run typecheck
 
+      - name: Unit tests
+        working-directory: packages/web
+        run: pnpm test
+
       - name: Build
         working-directory: packages/web
         run: pnpm run build
+
+  # ブラウザで実際に起動して sim-worker + Canvas 差分描画 + HUD の配線が
+  # 壊れていないか確認する回帰ガード。型チェックやユニットテストでは
+  # 踏めない「本物のブラウザでつなげたときに壊れていないか」を保証する。
+  # 時間がかかっても正確さを優先し、失敗時はトレース一式をアーティファクトに残す。
+  web-e2e:
+    name: web (e2e smoke tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        working-directory: packages/web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build
+        working-directory: packages/web
+        run: pnpm run build
+
+      - name: E2E tests
+        working-directory: packages/web
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: packages/web/playwright-report/
+          retention-days: 14

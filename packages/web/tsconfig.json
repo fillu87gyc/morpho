@@ -15,5 +15,9 @@
       "@morpho/sim": ["../sim/src/index.ts"]
     }
   },
-  "include": ["src/**/*", "vite.config.ts", "../sim/src/**/*"]
+  "include": [
+    "src/**/*", "vite.config.ts", "../sim/src/**/*",
+    "test/**/*", "vitest.config.ts",
+    "e2e/**/*", "playwright.config.ts"
+  ]
 }

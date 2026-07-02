@@ -19,12 +19,20 @@ import type {
   BiomassField,
 } from '@morpho/sim';
 import type { WorldView } from './camera.js';
+import { MultiLayerDirtyTracker } from './field-diff.js';
 
 export interface RenderOptions {
   worldSize: number;
   fieldSize: number;
   showHeat: boolean;
 }
+
+// paintFieldLayer が焼くレイヤ数: biomass / nutrients / moisture / brightness / obstacle。
+const FIELD_LAYER_COUNT = 5;
+// 生の浮動小数比較だと biomass の減衰が皿全体でごく僅かに毎tick進み続けるため、
+// 見た目に影響しない変化まで「差分」扱いになってしまう。可視のバイト値
+// (0-255) が変わらない程度の揺れは無視する。
+const FIELD_EPS = 0.004;
 
 // 配色: morphosmoke.png の暗い森のトーンに揃える。
 const BG_INNER:    [number, number, number] = [14, 20, 17];
@@ -45,6 +53,15 @@ export class CanvasRenderer {
   private fieldCtx: CanvasRenderingContext2D;
   private dpr: number;
 
+  // 差分再描画用: 直前フレームで焼いた場の値を保持し、変化したセルだけ
+  // 色を計算し直す。地形 (nutrients/moisture/brightness/obstacle) は
+  // ツールを使わない限りほぼ静止しているため、これだけで大半のフレームは
+  // 「触った/育った」近傍のみの再計算 + putImageData の部分矩形更新で済む。
+  // 実装 (field-diff.ts) は DOM 非依存でユニットテストされている。
+  private tracker: MultiLayerDirtyTracker;
+  private prevMaxBio = -1;
+  private prevShowHeat: boolean | null = null;
+
   constructor(private canvas: HTMLCanvasElement, private opts: RenderOptions) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2d context unavailable');
@@ -59,6 +76,7 @@ export class CanvasRenderer {
     if (!fctx) throw new Error('offscreen 2d unavailable');
     this.fieldCtx = fctx;
     this.fieldImage = fctx.createImageData(opts.fieldSize, opts.fieldSize);
+    this.tracker = new MultiLayerDirtyTracker(opts.fieldSize, FIELD_LAYER_COUNT, FIELD_EPS);
   }
 
   resize(): void {
@@ -118,6 +136,10 @@ export class CanvasRenderer {
 
   // 成長タイムライン用のサムネイル。現在のカメラ位置に関わらず、
   // 常に世界全体を俯瞰した絵を焼く (ズーム中でも成長の全体像が分かるように)。
+  // paintFieldLayer は差分描画のため、直前の draw() 呼び出しと env/bio が
+  // 一致している前提 (main.ts は同じフレーム内で同じスナップショットを
+  // draw() → renderThumbnail() の順に渡す) で呼ぶこと。異なるスナップショットを
+  // 渡すと、直前に描かれた絵との差分だけが焼き足される。
   renderThumbnail(state: SimState, env: GridEnvironment, bio: BiomassField, size: number): string {
     const thumb = document.createElement('canvas');
     thumb.width = size;
@@ -136,27 +158,41 @@ export class CanvasRenderer {
   }
 
   private paintFieldLayer(env: GridEnvironment, bio: BiomassField): void {
-    const fs = this.opts.fieldSize;
     const data = this.fieldImage.data;
+    const bioData = bio.field.data;
+    const nutData = env.nutrients.data;
+    const moiData = env.moisture.data;
+    const briData = env.brightness.data;
+    const obData = env.obstacle.data;
 
     let maxBio = 0;
-    for (let i = 0; i < bio.field.data.length; i++) {
-      const v = bio.field.data[i] ?? 0;
+    for (let i = 0; i < bioData.length; i++) {
+      const v = bioData[i] ?? 0;
       if (v > maxBio) maxBio = v;
     }
     maxBio = Math.max(maxBio, 0.6);
 
-    for (let y = 0; y < fs; y++) {
-      for (let x = 0; x < fs; x++) {
-        const i = y * fs + x;
+    // maxBio が動くと biomass の正規化値 (v = raw/maxBio) が全セルで
+    // ずれるため、生の値が変わっていないセルも塗り直しが要る。
+    // 変化が小さければ無視して差分描画を続け、大きく動いた
+    // (序盤の急成長など) フレームだけ全面フォールバックする。
+    const maxBioJumped = this.prevMaxBio < 0
+      || Math.abs(maxBio - this.prevMaxBio) / Math.max(this.prevMaxBio, 1e-6) > 0.02;
+    const heatChanged = this.prevShowHeat !== this.opts.showHeat;
+    const full = !this.tracker.initialized || maxBioJumped || heatChanged;
+
+    const dirty = this.tracker.update(
+      [bioData, nutData, moiData, briData, obData],
+      full,
+      (i) => {
         const di = i * 4;
         let r = 0, g = 0, b = 0, a = 0;
 
         // 地形の質感 (常時, 控えめ): ヒート表示 OFF でもバイオームの違いが
         // 見えるように、baseline (湿度 0.3 / 明るさ 0.2) からの差分だけを
         // 弱く乗せる。強い版はヒート表示 ON のときの下のブロックが担う。
-        const moiBase = env.moisture.data[i] ?? 0;
-        const briBase = env.brightness.data[i] ?? 0;
+        const moiBase = moiData[i] ?? 0;
+        const briBase = briData[i] ?? 0;
         const moiDelta = moiBase - 0.3;
         if (moiDelta > 0.06) {
           // 湿った土地 — 仄かに青緑
@@ -172,7 +208,7 @@ export class CanvasRenderer {
         }
 
         // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)
-        const nut = env.nutrients.data[i] ?? 0;
+        const nut = nutData[i] ?? 0;
         if (nut > 0.05) {
           const k = Math.min(1, nut * 0.6);
           const fa = 0.18 + k * 0.32;
@@ -182,29 +218,27 @@ export class CanvasRenderer {
 
         // ヒート (UI トグル): 水を青く、光を黄色く薄く乗せる
         if (this.opts.showHeat) {
-          const m = env.moisture.data[i] ?? 0;
-          if (m > 0.25) {
-            const k = Math.min(1, (m - 0.25) * 1.4);
+          if (moiBase > 0.25) {
+            const k = Math.min(1, (moiBase - 0.25) * 1.4);
             [r, g, b] = blend(r, g, b, 90, 150, 220, k * 0.32);
             a = Math.max(a, k * 0.32);
           }
-          const l = env.brightness.data[i] ?? 0;
-          if (l > 0.25) {
-            const k = Math.min(1, (l - 0.25) * 1.4);
+          if (briBase > 0.25) {
+            const k = Math.min(1, (briBase - 0.25) * 1.4);
             [r, g, b] = blend(r, g, b, 245, 230, 150, k * 0.28);
             a = Math.max(a, k * 0.28);
           }
         }
 
         // 障害物 — 暗いグレーの石 (背景より少し明るい程度に)
-        const ob = env.obstacle.data[i] ?? 0;
+        const ob = obData[i] ?? 0;
         if (ob > 0.5) {
           [r, g, b] = blend(r, g, b, 70, 65, 75, 0.85);
           a = Math.max(a, 0.85);
         }
 
         // プラズマ膜 — 縁は暗い金、中は山吹、芯は明るい黄
-        const v = (bio.field.data[i] ?? 0) / maxBio;
+        const v = (bioData[i] ?? 0) / maxBio;
         if (v > 0.025) {
           const k = Math.pow(Math.min(1, v), 0.55);
           let pr: number, pg: number, pb: number;
@@ -228,9 +262,19 @@ export class CanvasRenderer {
         data[di + 1] = g;
         data[di + 2] = b;
         data[di + 3] = Math.floor(a * 255);
-      }
+      },
+    );
+
+    // 変化したセルがあった矩形だけをキャンバスへ反映する。
+    if (dirty) {
+      this.fieldCtx.putImageData(
+        this.fieldImage, 0, 0,
+        dirty.x0, dirty.y0, dirty.x1 - dirty.x0 + 1, dirty.y1 - dirty.y0 + 1,
+      );
     }
-    this.fieldCtx.putImageData(this.fieldImage, 0, 0);
+
+    this.prevMaxBio = maxBio;
+    this.prevShowHeat = this.opts.showHeat;
   }
 
   private drawEdges(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
