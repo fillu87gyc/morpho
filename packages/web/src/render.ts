@@ -19,12 +19,20 @@ import type {
   BiomassField,
 } from '@morpho/sim';
 import type { WorldView } from './camera.js';
+import { MultiLayerDirtyTracker } from './field-diff.js';
 
 export interface RenderOptions {
   worldSize: number;
   fieldSize: number;
   showHeat: boolean;
 }
+
+// paintFieldLayer が焼くレイヤ数: biomass / nutrients / moisture / brightness / obstacle。
+const FIELD_LAYER_COUNT = 5;
+// 生の浮動小数比較だと biomass の減衰が皿全体でごく僅かに毎tick進み続けるため、
+// 見た目に影響しない変化まで「差分」扱いになってしまう。可視のバイト値
+// (0-255) が変わらない程度の揺れは無視する。
+const FIELD_EPS = 0.004;
 
 // 配色: morphosmoke.png の暗い森のトーンに揃える。
 const BG_INNER:    [number, number, number] = [14, 20, 17];
@@ -49,17 +57,10 @@ export class CanvasRenderer {
   // 色を計算し直す。地形 (nutrients/moisture/brightness/obstacle) は
   // ツールを使わない限りほぼ静止しているため、これだけで大半のフレームは
   // 「触った/育った」近傍のみの再計算 + putImageData の部分矩形更新で済む。
-  private prevBio: Float32Array | null = null;
-  private prevNutrients: Float32Array | null = null;
-  private prevMoisture: Float32Array | null = null;
-  private prevBrightness: Float32Array | null = null;
-  private prevObstacle: Float32Array | null = null;
+  // 実装 (field-diff.ts) は DOM 非依存でユニットテストされている。
+  private tracker: MultiLayerDirtyTracker;
   private prevMaxBio = -1;
   private prevShowHeat: boolean | null = null;
-  // 生の浮動小数比較だと biomass の減衰が皿全体でごく僅かに毎tick進み
-  // 続けるため、見た目に影響しない変化まで「差分」扱いになってしまう。
-  // 可視のバイト値 (0-255) が変わらない程度の揺れは無視する。
-  private static readonly FIELD_EPS = 0.004;
 
   constructor(private canvas: HTMLCanvasElement, private opts: RenderOptions) {
     const ctx = canvas.getContext('2d');
@@ -75,6 +76,7 @@ export class CanvasRenderer {
     if (!fctx) throw new Error('offscreen 2d unavailable');
     this.fieldCtx = fctx;
     this.fieldImage = fctx.createImageData(opts.fieldSize, opts.fieldSize);
+    this.tracker = new MultiLayerDirtyTracker(opts.fieldSize, FIELD_LAYER_COUNT, FIELD_EPS);
   }
 
   resize(): void {
@@ -156,8 +158,6 @@ export class CanvasRenderer {
   }
 
   private paintFieldLayer(env: GridEnvironment, bio: BiomassField): void {
-    const fs = this.opts.fieldSize;
-    const n = fs * fs;
     const data = this.fieldImage.data;
     const bioData = bio.field.data;
     const nutData = env.nutrients.data;
@@ -179,54 +179,12 @@ export class CanvasRenderer {
     const maxBioJumped = this.prevMaxBio < 0
       || Math.abs(maxBio - this.prevMaxBio) / Math.max(this.prevMaxBio, 1e-6) > 0.02;
     const heatChanged = this.prevShowHeat !== this.opts.showHeat;
-    const full = this.prevBio === null || maxBioJumped || heatChanged;
+    const full = !this.tracker.initialized || maxBioJumped || heatChanged;
 
-    // 遅延確保。prevBio が null (初回) の間に full の判定を済ませてから
-    // ここで確保するので、判定そのものには影響しない。
-    if (this.prevBio === null) {
-      this.prevBio = new Float32Array(n);
-      this.prevNutrients = new Float32Array(n);
-      this.prevMoisture = new Float32Array(n);
-      this.prevBrightness = new Float32Array(n);
-      this.prevObstacle = new Float32Array(n);
-    }
-    const prevBio = this.prevBio;
-    const prevNutrients = this.prevNutrients!;
-    const prevMoisture = this.prevMoisture!;
-    const prevBrightness = this.prevBrightness!;
-    const prevObstacle = this.prevObstacle!;
-
-    let dx0 = fs, dy0 = fs, dx1 = -1, dy1 = -1;
-
-    for (let y = 0; y < fs; y++) {
-      for (let x = 0; x < fs; x++) {
-        const i = y * fs + x;
-
-        if (!full) {
-          const changed =
-            Math.abs((bioData[i] ?? 0) - (prevBio[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
-            Math.abs((nutData[i] ?? 0) - (prevNutrients[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
-            Math.abs((moiData[i] ?? 0) - (prevMoisture[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
-            Math.abs((briData[i] ?? 0) - (prevBrightness[i] ?? 0)) > CanvasRenderer.FIELD_EPS ||
-            Math.abs((obData[i] ?? 0) - (prevObstacle[i] ?? 0)) > CanvasRenderer.FIELD_EPS;
-          if (!changed) continue;
-        }
-
-        // このセルは今回塗り直す。基準値は「前フレームの生値」ではなく
-        // 「最後に実際に塗った値」で更新する — でないと、毎フレーム
-        // epsilon 未満の緩やかな変化 (biomass の減衰など) が無限に
-        // 見逃され続け、実際の値からどんどん乖離した色が表示され続ける。
-        prevBio[i] = bioData[i] ?? 0;
-        prevNutrients[i] = nutData[i] ?? 0;
-        prevMoisture[i] = moiData[i] ?? 0;
-        prevBrightness[i] = briData[i] ?? 0;
-        prevObstacle[i] = obData[i] ?? 0;
-
-        if (x < dx0) dx0 = x;
-        if (x > dx1) dx1 = x;
-        if (y < dy0) dy0 = y;
-        if (y > dy1) dy1 = y;
-
+    const dirty = this.tracker.update(
+      [bioData, nutData, moiData, briData, obData],
+      full,
+      (i) => {
         const di = i * 4;
         let r = 0, g = 0, b = 0, a = 0;
 
@@ -304,12 +262,15 @@ export class CanvasRenderer {
         data[di + 1] = g;
         data[di + 2] = b;
         data[di + 3] = Math.floor(a * 255);
-      }
-    }
+      },
+    );
 
     // 変化したセルがあった矩形だけをキャンバスへ反映する。
-    if (dx1 >= dx0) {
-      this.fieldCtx.putImageData(this.fieldImage, 0, 0, dx0, dy0, dx1 - dx0 + 1, dy1 - dy0 + 1);
+    if (dirty) {
+      this.fieldCtx.putImageData(
+        this.fieldImage, 0, 0,
+        dirty.x0, dirty.y0, dirty.x1 - dirty.x0 + 1, dirty.y1 - dirty.y0 + 1,
+      );
     }
 
     this.prevMaxBio = maxBio;

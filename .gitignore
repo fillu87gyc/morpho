@@ -5,3 +5,5 @@ renders-biomass/
 renders-gif/
 .DS_Store
 *.log
+playwright-report/
+test-results/
