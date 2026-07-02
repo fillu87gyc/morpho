@@ -16,7 +16,11 @@ export default defineConfig({
   },
   webServer: {
     // dist は CI/ローカルどちらでも事前に `pnpm run build` 済みの前提。
-    command: 'pnpm exec vite preview --port 4173 --strictPort',
+    // --host を明示しないと 'localhost' の名前解決結果 (IPv6 の ::1 など)
+    // にバインドされることがあり、127.0.0.1 への疎通を待つ webServer.url
+    // がいつまでも繋がらずタイムアウトする (GitHub Actions の ubuntu-latest
+    // ランナーで実際に発生した)。IPv4 ループバックへ明示的にバインドする。
+    command: 'pnpm exec vite preview --port 4173 --strictPort --host 127.0.0.1',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,

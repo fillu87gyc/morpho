@@ -115,6 +115,11 @@ test('一時停止すると DAY が止まり、再生すると再び進む', asy
 
   await page.click('#pause-toggle');
   await expect(page.locator('#pause-toggle')).toHaveClass(/active/);
+  // クリックで送られる setSpeed(0) は sim-worker への非同期メッセージなので、
+  // クリック直後はまだ飛行中の tick が1つ残っている可能性がある。それが
+  // 着地するのを待ってから基準値を採る (でないと稀に古い進行中の DAY を
+  // pausedDay として捉えてしまい、後続の一致チェックがフレーキーになる)。
+  await page.waitForTimeout(300);
   const pausedDay = await dayText(page);
   await page.waitForTimeout(1500);
   expect(await dayText(page)).toBe(pausedDay);
