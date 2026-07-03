@@ -5,6 +5,9 @@
 import type { Tool, StageId } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
+import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
+import { dailyChallengeFor, type DailyChallengeTracker } from './challenges.js';
+import type { Scoreboard } from './scoreboard.js';
 
 type El = HTMLElement;
 
@@ -31,9 +34,16 @@ export class Ui {
   private day = el('day');
   private era = el('era');
   private stageName = el('stage-name');
-  // quest
-  private questBar = el('quest-bar');
-  private questPct = el('quest-pct');
+  // メインクエスト (固定2本)
+  private qConnectBar = el('q-connect-bar');
+  private qConnectN = el('q-connect-n');
+  private qExploreBar = el('q-explore-bar');
+  private qExploreN = el('q-explore-n');
+  // デイリーチャレンジ
+  private chalTitle = el('chal-title');
+  private chalDesc = el('chal-desc');
+  private chalGoal = el('chal-goal');
+  private chalStatus = el('chal-status');
   // world info
   private wArea = el('w-area');
   private wMass = el('w-mass');
@@ -69,6 +79,11 @@ export class Ui {
   // 図鑑
   private ency = el('ency');
   private encyProgress = el('ency-progress');
+  // アチーブメント
+  private ach = el('ach');
+  private achProgress = el('ach-progress');
+  // 記録
+  private board = el('board');
   // logs
   private log = el('log');
   private evo = el('evo');
@@ -78,11 +93,19 @@ export class Ui {
   private lastEvoLen = -1;
   private lastEventLen = -1;
   private lastEncyVersion = -1;
+  private lastAchVersion = -1;
+  private lastBoardVersion = -1;
+  private lastChalKey = '';
   private lastStageId: StageId | null = null;
 
   constructor(
     private game: GameProxy,
-    private encyclopedia: Encyclopedia,
+    private trackers: {
+      encyclopedia: Encyclopedia;
+      achievements: Achievements;
+      challenges: DailyChallengeTracker;
+      scoreboard: Scoreboard;
+    },
     private hooks: {
       onSpeed: (s: number) => void;
       onTool: (t: Tool) => void;
@@ -149,9 +172,31 @@ export class Ui {
       if (stageSelect.value !== s.stage.id) stageSelect.value = s.stage.id;
     }
 
-    // クエスト
-    setBar(this.questBar, s.questProgress);
-    setText(this.questPct, String(Math.round(s.questProgress * 100)));
+    // メインクエスト (固定2本)
+    const connectQuest = s.quests.find((q) => q.id === 'connect-all');
+    const exploreQuest = s.quests.find((q) => q.id === 'explore-70');
+    if (connectQuest) {
+      setBar(this.qConnectBar, connectQuest.progress);
+      setText(this.qConnectN, pct(connectQuest.progress));
+    }
+    if (exploreQuest) {
+      setBar(this.qExploreBar, exploreQuest.progress);
+      setText(this.qExploreN, pct(exploreQuest.progress));
+    }
+
+    // デイリーチャレンジ (日付が変わるか達成したときだけ書き換える)
+    const today = new Date();
+    const chal = dailyChallengeFor(today);
+    const chalDone = this.trackers.challenges.isCompletedToday(today);
+    const chalKey = `${chal.kind}:${chalDone}`;
+    if (this.lastChalKey !== chalKey) {
+      this.lastChalKey = chalKey;
+      setText(this.chalTitle, chal.title);
+      setText(this.chalDesc, chal.description);
+      setText(this.chalGoal, chal.goal);
+      setText(this.chalStatus, chalDone ? '本日の挑戦、達成済み ✓' : '挑戦中…');
+      this.chalStatus.classList.toggle('done', chalDone);
+    }
 
     // ワールド情報
     setText(this.wArea, thou(s.world.areaM2));
@@ -226,9 +271,9 @@ export class Ui {
     }
 
     // 図鑑 (バージョンが変わった = 新規発見 or 更新があったときだけ書き換える)
-    if (this.lastEncyVersion !== this.encyclopedia.version) {
-      this.lastEncyVersion = this.encyclopedia.version;
-      const entries = this.encyclopedia.list();
+    if (this.lastEncyVersion !== this.trackers.encyclopedia.version) {
+      this.lastEncyVersion = this.trackers.encyclopedia.version;
+      const entries = this.trackers.encyclopedia.list();
       setText(this.encyProgress, `${entries.length}/5`);
       this.ency.innerHTML = '';
       if (entries.length === 0) {
@@ -248,6 +293,55 @@ export class Ui {
           li.appendChild(label);
           li.appendChild(meta);
           this.ency.appendChild(li);
+        }
+      }
+    }
+
+    // アチーブメント (バージョンが変わった = 新規解除があったときだけ書き換える)
+    if (this.lastAchVersion !== this.trackers.achievements.version) {
+      this.lastAchVersion = this.trackers.achievements.version;
+      const unlockedCount = ACHIEVEMENT_DEFS.filter((d) => this.trackers.achievements.isUnlocked(d.id)).length;
+      setText(this.achProgress, `${unlockedCount}/${ACHIEVEMENT_DEFS.length}`);
+      this.ach.innerHTML = '';
+      for (const def of ACHIEVEMENT_DEFS) {
+        const status = this.trackers.achievements.statusOf(def.id);
+        const li = document.createElement('li');
+        li.className = status ? 'unlocked' : 'locked';
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = (status ? '✓ ' : '🔒 ') + def.label;
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = status ? `Day ${status.day}` : def.description;
+        li.appendChild(label);
+        li.appendChild(meta);
+        this.ach.appendChild(li);
+      }
+    }
+
+    // 記録 (バージョンが変わった = 新記録があったときだけ書き換える)
+    if (this.lastBoardVersion !== this.trackers.scoreboard.version) {
+      this.lastBoardVersion = this.trackers.scoreboard.version;
+      const records = this.trackers.scoreboard.list();
+      this.board.innerHTML = '';
+      if (records.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'まだ記録がない…';
+        this.board.appendChild(li);
+      } else {
+        for (const r of records) {
+          const li = document.createElement('li');
+          const label = document.createElement('span');
+          label.className = 'label';
+          label.textContent = r.stageName;
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          const connectText = r.bestConnectDay !== null ? `最短${r.bestConnectDay}日` : '未接続';
+          meta.textContent = `${connectText} ・ スコア${Math.round(r.bestScore * 100)}%`;
+          li.appendChild(label);
+          li.appendChild(meta);
+          this.board.appendChild(li);
         }
       }
     }

@@ -6,7 +6,10 @@ import { CanvasRenderer } from './render.js';
 import { Ui } from './ui.js';
 import { Timeline } from './timeline.js';
 import { Camera } from './camera.js';
-import { Encyclopedia } from './encyclopedia.js';
+import { Encyclopedia, TOTAL_TYPE_COUNT } from './encyclopedia.js';
+import { Achievements } from './achievements.js';
+import { dailyChallengeFor, DailyChallengeTracker } from './challenges.js';
+import { Scoreboard } from './scoreboard.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -20,8 +23,11 @@ const renderer = new CanvasRenderer(canvas, {
 const timeline = new Timeline();
 const camera = new Camera(game.worldSize);
 const encyclopedia = new Encyclopedia();
+const achievements = new Achievements();
+const challenges = new DailyChallengeTracker();
+const scoreboard = new Scoreboard();
 
-const ui = new Ui(game, encyclopedia, {
+const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard }, {
   onSpeed: (s) => game.setSpeed(s),
   onTool: (t) => game.setTool(t),
   onBrush: (r) => game.setBrush(r),
@@ -148,6 +154,35 @@ function frame() {
     if (snap.day >= 3) {
       encyclopedia.record(snap.typeInfo.id, snap.typeInfo.label, snap.genome, snap.individuality, snap.state.seed, snap.day);
     }
+
+    const connectProgress = snap.quests.find((q) => q.id === 'connect-all')?.progress ?? 0;
+
+    scoreboard.record(snap.stage.id, snap.stage.name, {
+      connectProgress,
+      day: snap.day,
+      compositeScore: (snap.traits.exploration + snap.traits.efficiency + snap.traits.stability) / 3,
+      massKg: snap.world.massKg,
+      areaM2: snap.world.areaM2,
+    });
+
+    const today = new Date();
+    const todaysChallenge = dailyChallengeFor(today);
+    if (!challenges.isCompletedToday(today) && todaysChallenge.isComplete({
+      connectProgress, day: snap.day, networkLinks: snap.world.networkLinks, toxin: snap.balance.toxin,
+    })) {
+      challenges.complete(today, todaysChallenge.kind, snap.day, snap.state.seed);
+    }
+
+    achievements.check({
+      connectProgress,
+      individuality: snap.individuality,
+      thickEdges: snap.thickEdges,
+      encyclopediaCount: encyclopedia.list().length,
+      encyclopediaTotal: TOTAL_TYPE_COUNT,
+      stagesPlayed: scoreboard.stagesPlayedCount(),
+      dailyChallengesCompleted: challenges.completedCount(),
+    }, snap.state.seed, snap.day);
+
     ui.render();
     timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, snap.stage.id, snap.landmarks, 96));
     renderTimeline();

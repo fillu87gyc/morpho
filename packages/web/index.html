@@ -31,9 +31,24 @@
         <aside class="panel left">
           <section class="card">
             <h2>メインクエスト</h2>
-            <div class="quest">大陸全体に栄養を届けよう</div>
-            <div class="progress"><div id="quest-bar" class="bar"></div></div>
-            <div class="quest-pct"><span id="quest-pct">0</span>%</div>
+            <div class="quest-item">
+              <div class="quest-head"><span class="quest-title">拠点をすべてつなぐ</span><span class="num" id="q-connect-n">0%</span></div>
+              <div class="progress"><div id="q-connect-bar" class="bar"></div></div>
+            </div>
+            <div class="quest-item">
+              <div class="quest-head"><span class="quest-title">大陸の70%を探索する</span><span class="num" id="q-explore-n">0%</span></div>
+              <div class="progress"><div id="q-explore-bar" class="bar"></div></div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>デイリーチャレンジ</h2>
+            <div class="challenge">
+              <div class="challenge-title" id="chal-title">—</div>
+              <div class="challenge-desc" id="chal-desc"></div>
+              <div class="challenge-goal" id="chal-goal"></div>
+              <div class="challenge-status" id="chal-status">挑戦中…</div>
+            </div>
           </section>
 
           <section class="card">
@@ -166,9 +181,21 @@
           </section>
 
           <section class="card">
-            <h2>図鑑 <span id="ency-progress" class="ency-progress">0/5</span></h2>
+            <h2>図鑑 <span id="ency-progress" class="badge">0/5</span></h2>
             <ul id="ency" class="ency">
               <li class="empty">まだ何も発見していない…</li>
+            </ul>
+          </section>
+
+          <section class="card">
+            <h2>アチーブメント <span id="ach-progress" class="badge">0/7</span></h2>
+            <ul id="ach" class="ach"></ul>
+          </section>
+
+          <section class="card">
+            <h2>記録</h2>
+            <ul id="board" class="board">
+              <li class="empty">まだ記録がない…</li>
             </ul>
           </section>
 
