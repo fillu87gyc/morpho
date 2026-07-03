@@ -37,6 +37,12 @@ const ui = new Ui(game, encyclopedia, {
     document.getElementById('toggle-heat')?.classList.toggle('active', showHeat);
   },
   onResetView: () => camera.reset(),
+  onStageChange: (id) => {
+    game.reset(undefined, id);
+    timeline.reset();
+    camera.reset();
+    fitCanvas();
+  },
 });
 
 let showHeat = false;
@@ -136,14 +142,14 @@ function frame() {
       radius: game.brushRadius * zoomedScale,
       tool: game.tool as Tool,
     } : undefined;
-    renderer.draw(game.snapshot().state, game.env, game.bio, camera.view(), hoverPx);
     const snap = game.snapshot();
+    renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx);
     // 育ちが浅いうち (Day 3 未満) は個性が定まっていないので図鑑には記録しない。
     if (snap.day >= 3) {
       encyclopedia.record(snap.typeInfo.id, snap.typeInfo.label, snap.genome, snap.individuality, snap.state.seed, snap.day);
     }
     ui.render();
-    timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, 96));
+    timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, snap.stage.id, snap.landmarks, 96));
     renderTimeline();
   }
   requestAnimationFrame(frame);

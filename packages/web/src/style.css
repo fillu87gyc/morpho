@@ -242,6 +242,18 @@ body { overflow: hidden; }
 }
 .actions button:hover { background: rgba(255,255,255,0.04); }
 .actions button.active { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.stage-select-label { font-size: 11px; color: var(--text-dim); }
+.actions select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.time .stage-name { color: var(--text-dim); border-color: var(--panel-edge); }
 
 .footnote { text-align: center; color: var(--text-dim); font-size: 11px; padding: 8px 0 12px; }
 

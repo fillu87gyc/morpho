@@ -12,9 +12,12 @@ import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, computeTraits,
   createGenome, applyGenome, computeIndividuality, classifyIndividual,
-  type SimState, type SimParams, type Vec2, type Traits, type SimEvent, type SeededRNG,
+  type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
   type Genome, type Individuality, type IndividualTypeInfo,
 } from '@morpho/sim';
+import { STAGES, type StageId, type StageConfig } from './stages.js';
+
+export type { StageId } from './stages.js';
 
 export type Tool = 'food' | 'light' | 'water' | 'stone' | 'erase';
 
@@ -58,6 +61,9 @@ export interface GameSnapshot {
   era: string;
   thickEdges: number;
   questProgress: number; // [0,1]
+  stage: { id: StageId; name: string; description: string };
+  // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
+  landmarks: Vec2[];
 }
 
 export const WORLD = 100;
@@ -109,6 +115,9 @@ export class Game {
   private params!: SimParams;
   private rng!: ReturnType<typeof createRNG>;
   private seed: number;
+  private stage!: StageConfig;
+  private lastEra = '';
+  private landmarks: Vec2[] = [];
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -127,19 +136,23 @@ export class Game {
   // (= 一度設置した拠点は「到達対象」として残す)。
   private coloniesTotal = 6;
 
-  constructor(seed = (Math.random() * 1e9) | 0) {
+  constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri') {
     this.seed = seed;
-    this.reset(seed);
+    this.reset(seed, stageId);
   }
 
-  reset(seed = (Math.random() * 1e9) | 0): void {
+  reset(seed = (Math.random() * 1e9) | 0, stageId: StageId = this.stage?.id ?? 'petri'): void {
     this.seed = seed;
+    this.stage = STAGES[stageId];
     this.rng = createRNG(seed);
     // その個体固有の遺伝パラメータを rng から決定的に引く (地形生成より先に
     // 引いて、常に同じ順番で消費されるようにする)。
     this.genome = createGenome(this.rng);
-    this.params = applyGenome(PETRI_PARAMS, this.genome);
-    this.env = new GridEnvironment({ worldSize: WORLD, fieldSize: FIELD });
+    this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
+    this.env = new GridEnvironment({
+      worldSize: WORLD, fieldSize: FIELD,
+      baseMoisture: this.stage.baseMoisture, baseBrightness: this.stage.baseBrightness,
+    });
     this.act = new ActivityField(WORLD, FIELD);
     this.bio = new BiomassField(WORLD, FIELD);
     this.bus = new EventBus();
@@ -147,15 +160,16 @@ export class Game {
 
     clearAroundSource(this.env, DEFAULT_SOURCE, 4);
     seedSource(this.state, DEFAULT_SOURCE, 6);
-    for (const f of FOOD_POINTS) this.env.placeFood(f.pos, f.radius, f.amount);
-    generateBiome(this.env, this.rng, WORLD, [DEFAULT_SOURCE, ...FOOD_POINTS.map((f) => f.pos)]);
+    for (const f of FOOD_POINTS) this.env.placeFood(f.pos, f.radius, f.amount * this.stage.foodAmountMultiplier);
+    this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [DEFAULT_SOURCE, ...FOOD_POINTS.map((f) => f.pos)]);
 
     this.evoLog = [];
     this.recentEvents = [];
     this.thickenedSeen.clear();
     this.lastLoopAtTick = -999;
     this.coloniesTotal = 6;
-    this.pushEvent('新しい皿が用意された');
+    this.lastEra = eraName(0);
+    this.pushEvent(`新しい${this.stage.name}が用意された`);
   }
 
   setTool(t: Tool): void { this.tool = t; }
@@ -165,8 +179,21 @@ export class Game {
   tick(): void {
     for (let i = 0; i < this.speed; i++) {
       step(this.state, this.env, this.act, this.bio, this.params, this.rng, this.bus);
+      this.env.decay(this.stage.nutrientDecayPerTick, this.stage.moistureRelaxPerTick);
     }
     this.drainBus();
+    this.checkEraTransition();
+  }
+
+  // 「時代」(胞子期 → 拡散期 → 変形体期 → 成熟期) が切り替わった節目を
+  // 進化の記録に残す。DAY カウンタの派生量なので tick 側で監視する。
+  private checkEraTransition(): void {
+    const day = Math.floor(this.state.tick / TICKS_PER_DAY);
+    const era = eraName(day);
+    if (era !== this.lastEra) {
+      this.pushEvo(this.state.tick, `${era}に入った`);
+      this.lastEra = era;
+    }
   }
 
   // EventBus に溜まった sim イベントを「進化の記録」用のログに翻訳して落とす。
@@ -272,6 +299,8 @@ export class Game {
       balance, world,
       day, era: eraName(day),
       thickEdges, questProgress,
+      stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
+      landmarks: this.landmarks,
     };
   }
 
@@ -361,79 +390,4 @@ function clusterCount(points: { x: number; y: number }[], radius: number): numbe
     if (!merged) reps.push(p);
   }
   return reps.length;
-}
-
-// ── バイオード生成 ────────────────────────────────────
-// 起伏のある地形にするため、岩場 / 砂地 / 草地 / 水場 / 陽だまりの
-// パッチをランダムに散らす。sim 側には手を入れず、Environment.placeX()
-// だけを呼ぶ (アーキテクチャ方針: 書き込みは placeX 経由に限定する)。
-
-type BiomeKind = 'rock' | 'sand' | 'grass' | 'water' | 'light';
-
-const BIOME_WEIGHTS: [BiomeKind, number][] = [
-  ['grass', 0.30],
-  ['rock', 0.25],
-  ['sand', 0.22],
-  ['water', 0.13],
-  ['light', 0.10],
-];
-
-function pickBiomeKind(rng: SeededRNG): BiomeKind {
-  const r = rng.next();
-  let acc = 0;
-  for (const [kind, w] of BIOME_WEIGHTS) {
-    acc += w;
-    if (r < acc) return kind;
-  }
-  return 'grass';
-}
-
-function generateBiome(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void {
-  const patchCount = rng.int(9, 14);
-  const avoidRadius = 9; // source / 固定食料点の近くには岩を置かない (通行止め防止)
-
-  for (let i = 0; i < patchCount; i++) {
-    const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
-    const kind = pickBiomeKind(rng);
-    const patchRadius = rng.range(9, 20);
-
-    if (kind === 'rock') {
-      if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
-      // 単一の塊ではなく、小石を数個ばら撒いて「岩場」らしい粒感を出す。
-      const rockCount = rng.int(3, 7);
-      for (let j = 0; j < rockCount; j++) {
-        const a = rng.range(0, Math.PI * 2);
-        const d = rng.range(0, patchRadius * 0.7);
-        const pos: Vec2 = { x: center.x + Math.cos(a) * d, y: center.y + Math.sin(a) * d };
-        if (avoidPoints.some((p) => dist(p, pos) < avoidRadius * 0.6)) continue;
-        env.placeStone(pos, rng.range(1.4, 3.2));
-      }
-      continue;
-    }
-
-    switch (kind) {
-      case 'sand':
-        // 乾いて明るい砂地: 明るさを上げ、湿度をわずかに下げる。
-        env.placeLight(center, patchRadius, rng.range(0.18, 0.32));
-        env.placeWater(center, patchRadius * 0.9, -rng.range(0.08, 0.16));
-        break;
-      case 'grass':
-        // 湿って肥沃な草地: 湿度と栄養をわずかに底上げする。
-        env.placeWater(center, patchRadius * 0.85, rng.range(0.10, 0.20));
-        env.placeFood(center, patchRadius * 0.5, rng.range(0.12, 0.25));
-        break;
-      case 'water':
-        // 小さな水場: 湿度を強めに上げる。
-        env.placeWater(center, patchRadius * 0.7, rng.range(0.30, 0.5));
-        break;
-      case 'light':
-        // 陽だまり: 明るさを強めに上げる。
-        env.placeLight(center, patchRadius * 0.7, rng.range(0.28, 0.45));
-        break;
-    }
-  }
-}
-
-function dist(a: Vec2, b: Vec2): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
 }

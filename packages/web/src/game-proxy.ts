@@ -4,7 +4,7 @@
 // を持ち、main.ts / ui.ts からは Game を直接使っていた頃と同じ書き味で
 // 呼べる。実体は Worker とのメッセージ往復に過ぎない。
 
-import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog } from './game.js';
+import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type StageId } from './game.js';
 import type { ToWorkerMessage, FromWorkerMessage } from './worker-protocol.js';
 import type { Vec2 } from '@morpho/sim';
 
@@ -49,7 +49,7 @@ export class GameProxy {
   setBrush(r: number): void { this.brushRadius = r; this.send({ type: 'setBrush', radius: r }); }
   setSpeed(s: number): void { this.speed = Math.max(0, s | 0); this.send({ type: 'setSpeed', speed: this.speed }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
-  reset(seed?: number): void { this.send({ type: 'reset', seed }); }
+  reset(seed?: number, stageId?: StageId): void { this.send({ type: 'reset', seed, stageId }); }
 
   snapshot(): GameSnapshot { return this.current(); }
   events(): string[] { return this.recentEvents; }
