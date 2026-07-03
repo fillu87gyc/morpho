@@ -153,6 +153,32 @@ describe('Game', () => {
     expect(a.snapshot().typeInfo).toEqual(b.snapshot().typeInfo);
   });
 
+  it('parentGenome を渡すと、その遺伝子を継承した (=完全に独立ではない) genome になる', () => {
+    const parent = new Game(1).genome;
+    const independent = new Game(2).genome;
+    const child = new Game(2, 'petri', parent).genome;
+    // 独立生成した genome とは異なる一方、親から大きく外れてもいない。
+    expect(child).not.toEqual(independent);
+    const distance = (g: typeof parent) => (Object.keys(parent) as (keyof typeof parent)[])
+      .reduce((sum, k) => sum + Math.abs(g[k] - parent[k]), 0);
+    expect(distance(child)).toBeLessThan(distance(independent));
+  });
+
+  it('同じ parentGenome + seed なら決定的に同じ子 genome になる', () => {
+    const parent = new Game(1).genome;
+    const a = new Game(3, 'petri', parent).genome;
+    const b = new Game(3, 'petri', parent).genome;
+    expect(a).toEqual(b);
+  });
+
+  it('reset に parentGenome を渡すと以後の個体もその遺伝子を継承する', () => {
+    const parent = new Game(1).genome;
+    const g = new Game(9);
+    g.reset(9, 'petri', parent);
+    const independent = new Game(9).genome;
+    expect(g.genome).not.toEqual(independent);
+  });
+
   it('個体ビュー (individuality) の全軸は [0,1] に収まる', () => {
     const g = new Game(8);
     g.setSpeed(1);

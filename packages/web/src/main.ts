@@ -10,11 +10,20 @@ import { Encyclopedia, TOTAL_TYPE_COUNT } from './encyclopedia.js';
 import { Achievements } from './achievements.js';
 import { dailyChallengeFor, DailyChallengeTracker } from './challenges.js';
 import { Scoreboard } from './scoreboard.js';
+import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
 
-const game = new GameProxy();
+const encyclopedia = new Encyclopedia();
+const achievements = new Achievements();
+const challenges = new DailyChallengeTracker();
+const scoreboard = new Scoreboard();
+const lineage = new Lineage();
+
+// 系統に採取済みの種があれば、初回起動から継承した個体で始める
+// (M5: セッションをまたいで系統樹を続けられる)。
+const game = new GameProxy(lineage.current()?.genome);
 const renderer = new CanvasRenderer(canvas, {
   worldSize: game.worldSize,
   fieldSize: game.fieldSize,
@@ -22,17 +31,13 @@ const renderer = new CanvasRenderer(canvas, {
 });
 const timeline = new Timeline();
 const camera = new Camera(game.worldSize);
-const encyclopedia = new Encyclopedia();
-const achievements = new Achievements();
-const challenges = new DailyChallengeTracker();
-const scoreboard = new Scoreboard();
 
-const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard }, {
+const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage }, {
   onSpeed: (s) => game.setSpeed(s),
   onTool: (t) => game.setTool(t),
   onBrush: (r) => game.setBrush(r),
   onReset: () => {
-    game.reset();
+    game.reset(undefined, undefined, lineage.current()?.genome);
     timeline.reset();
     camera.reset();
     fitCanvas();
@@ -44,10 +49,24 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard }, 
   },
   onResetView: () => camera.reset(),
   onStageChange: (id) => {
-    game.reset(undefined, id);
+    game.reset(undefined, id, lineage.current()?.genome);
     timeline.reset();
     camera.reset();
     fitCanvas();
+  },
+  onHarvestSeed: () => {
+    const snap = game.snapshot();
+    if (snap.day < HARVEST_MIN_DAY) return;
+    lineage.harvest({
+      genome: snap.genome,
+      typeId: snap.typeInfo.id,
+      typeLabel: snap.typeInfo.label,
+      individuality: snap.individuality,
+      seed: snap.state.seed,
+      day: snap.day,
+      stageId: snap.stage.id,
+      stageName: snap.stage.name,
+    });
   },
 });
 

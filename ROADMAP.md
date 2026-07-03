@@ -66,9 +66,13 @@
   - `web/src/scoreboard.ts`: ステージごとに「全拠点接続までの最短日数」「3軸スコアの最高値」「最大質量/面積」のベスト記録を自動更新して localStorage に保存
 
 ### M5 — 子孫を残す
-- [ ] 育てた個体の「種」を採取 → 次プレイの初期パラメータに遺伝
-- [ ] 系統樹 UI (1代目 / 2代目 / 3代目 …)
-- [ ] 環境変化と子孫個性の連動
+- [x] 育てた個体の「種」を採取 → 次プレイの初期パラメータに遺伝
+  - `sim/graph/genome.ts`: `createChildGenome(parent, rng, mutationScale)` が親の Genome を継承しつつ変異させた子を決定的に生成 (sim 側の純粋関数として `createGenome` と対の存在)
+  - `web/src/lineage.ts`: `Lineage` が採取した種 (世代ごとの Genome / タイプ / 個性) を localStorage に記録。次回起動時・リセット時・ステージ変更時に自動で最新の種を継承する
+- [x] 系統樹 UI (1代目 / 2代目 / 3代目 …)
+  - 左ペインに「系統樹」カードを追加。「種を採取」ボタン (Day 5 以降で有効) と、これまでの世代を一覧表示
+- [x] 環境変化と子孫個性の連動
+  - `web/game.ts` の `mutationScaleFor()`: ステージの自然減衰速度 (`nutrientDecayPerTick` / `moistureRelaxPerTick`) が大きい (=過酷な) ステージほど、継承時の変異幅が大きくなる。同じ親の種でも、植える土地によって子の個性の振れ幅が変わる
 
 ### M6 — World View
 - [ ] 複数ソースを大マップに配置 → ズームアウトで俯瞰、ズームインで個体ビュー

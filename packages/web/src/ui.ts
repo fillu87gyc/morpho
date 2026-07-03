@@ -8,6 +8,7 @@ import type { Encyclopedia } from './encyclopedia.js';
 import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
 import { dailyChallengeFor, type DailyChallengeTracker } from './challenges.js';
 import type { Scoreboard } from './scoreboard.js';
+import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 
 type El = HTMLElement;
 
@@ -84,6 +85,11 @@ export class Ui {
   private achProgress = el('ach-progress');
   // 記録
   private board = el('board');
+  // 系統樹
+  private lineageGen = el('lineage-gen');
+  private lineageList = el('lineage');
+  private harvestBtn = el('harvest-seed') as HTMLButtonElement;
+  private harvestHint = el('harvest-hint');
   // logs
   private log = el('log');
   private evo = el('evo');
@@ -95,7 +101,9 @@ export class Ui {
   private lastEncyVersion = -1;
   private lastAchVersion = -1;
   private lastBoardVersion = -1;
+  private lastLineageVersion = -1;
   private lastChalKey = '';
+  private lastHarvestable = false;
   private lastStageId: StageId | null = null;
 
   constructor(
@@ -105,6 +113,7 @@ export class Ui {
       achievements: Achievements;
       challenges: DailyChallengeTracker;
       scoreboard: Scoreboard;
+      lineage: Lineage;
     },
     private hooks: {
       onSpeed: (s: number) => void;
@@ -114,8 +123,10 @@ export class Ui {
       onToggleHeat: () => void;
       onResetView: () => void;
       onStageChange: (id: StageId) => void;
+      onHarvestSeed: () => void;
     },
   ) {
+    this.harvestBtn.addEventListener('click', () => this.hooks.onHarvestSeed());
     // 再生速度: スライダーで連続的に選べる。一時停止ボタンは直前の速度を
     // 覚えておいて、押し直したときに同じ速度へ戻す。
     const pauseBtn = el('pause-toggle') as HTMLButtonElement;
@@ -183,6 +194,15 @@ export class Ui {
       setBar(this.qExploreBar, exploreQuest.progress);
       setText(this.qExploreN, pct(exploreQuest.progress));
     }
+
+    // 系統樹: 採取できる日数に達したかどうかだけ見て、変わったときだけ書き換える。
+    const harvestable = s.day >= HARVEST_MIN_DAY;
+    if (this.lastHarvestable !== harvestable) {
+      this.lastHarvestable = harvestable;
+      this.harvestBtn.disabled = !harvestable;
+      setText(this.harvestHint, harvestable ? '' : `Day ${HARVEST_MIN_DAY} で種を採取できるようになる`);
+    }
+    setText(this.lineageGen, `現在 ${this.trackers.lineage.nextGeneration()}代目`);
 
     // デイリーチャレンジ (日付が変わるか達成したときだけ書き換える)
     const today = new Date();
@@ -342,6 +362,32 @@ export class Ui {
           li.appendChild(label);
           li.appendChild(meta);
           this.board.appendChild(li);
+        }
+      }
+    }
+
+    // 系統樹 (バージョンが変わった = 新規採取があったときだけ書き換える)
+    if (this.lastLineageVersion !== this.trackers.lineage.version) {
+      this.lastLineageVersion = this.trackers.lineage.version;
+      const entries = this.trackers.lineage.list();
+      this.lineageList.innerHTML = '';
+      if (entries.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'まだ種を採取していない…';
+        this.lineageList.appendChild(li);
+      } else {
+        for (const e of [...entries].reverse()) {
+          const li = document.createElement('li');
+          const label = document.createElement('span');
+          label.className = 'label';
+          label.textContent = `${e.generation}代目 — ${e.typeLabel}`;
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          meta.textContent = `Day ${e.day} ・ ${e.stageName}`;
+          li.appendChild(label);
+          li.appendChild(meta);
+          this.lineageList.appendChild(li);
         }
       }
     }
