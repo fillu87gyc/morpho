@@ -3,10 +3,10 @@
 // 取りこぼし・タイポをコンパイル時に検出できる。
 
 import type { Tool, GameSnapshot, EvolutionLog, StageId } from './game.js';
-import type { Vec2 } from '@morpho/sim';
+import type { Genome, Vec2 } from '@morpho/sim';
 
 export type ToWorkerMessage =
-  | { type: 'reset'; seed?: number; stageId?: StageId }
+  | { type: 'reset'; seed?: number; stageId?: StageId; parentGenome?: Genome }
   | { type: 'setSpeed'; speed: number }
   | { type: 'setTool'; tool: Tool }
   | { type: 'setBrush'; radius: number }

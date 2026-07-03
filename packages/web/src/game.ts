@@ -11,7 +11,7 @@
 import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, computeTraits,
-  createGenome, applyGenome, computeIndividuality, classifyIndividual,
+  createGenome, createChildGenome, applyGenome, computeIndividuality, classifyIndividual,
   type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
   type Genome, type Individuality, type IndividualTypeInfo,
 } from '@morpho/sim';
@@ -137,18 +137,23 @@ export class Game {
   // (= 一度設置した拠点は「到達対象」として残す)。
   private coloniesTotal = 6;
 
-  constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri') {
+  constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome) {
     this.seed = seed;
-    this.reset(seed, stageId);
+    this.reset(seed, stageId, parentGenome);
   }
 
-  reset(seed = (Math.random() * 1e9) | 0, stageId: StageId = this.stage?.id ?? 'petri'): void {
+  // parentGenome を渡すと「種の採取」(M5) で継承した親の遺伝子を元に、
+  // ステージの過酷さに応じて変異させた子の Genome で始める。
+  // 省略時は従来通り seed から独立に新規生成する。
+  reset(seed = (Math.random() * 1e9) | 0, stageId: StageId = this.stage?.id ?? 'petri', parentGenome?: Genome): void {
     this.seed = seed;
     this.stage = STAGES[stageId];
     this.rng = createRNG(seed);
     // その個体固有の遺伝パラメータを rng から決定的に引く (地形生成より先に
     // 引いて、常に同じ順番で消費されるようにする)。
-    this.genome = createGenome(this.rng);
+    this.genome = parentGenome
+      ? createChildGenome(parentGenome, this.rng, mutationScaleFor(this.stage))
+      : createGenome(this.rng);
     this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
     this.env = new GridEnvironment({
       worldSize: WORLD, fieldSize: FIELD,
@@ -372,6 +377,13 @@ function eraName(day: number): string {
   if (day < 25) return '拡散期';
   if (day < 60) return '変形体期';
   return '成熟期';
+}
+
+// 環境変化と子孫個性の連動 (M5): 自然減衰が速い (=過酷な) ステージほど、
+// 継承した遺伝子の変異が大きくなる。同じ親から採取した種でも、
+// どの土地に植えるかで育つ子の個性の振れ幅が変わる。
+function mutationScaleFor(stage: StageConfig): number {
+  return 0.3 + stage.nutrientDecayPerTick * 220 + stage.moistureRelaxPerTick * 90;
 }
 
 // 「半径以内に既存クラスタの代表点があるか」だけ見る素朴な単一パス

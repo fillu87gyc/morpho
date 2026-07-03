@@ -6,7 +6,7 @@
 
 import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type StageId } from './game.js';
 import type { ToWorkerMessage, FromWorkerMessage } from './worker-protocol.js';
-import type { Vec2 } from '@morpho/sim';
+import type { Genome, Vec2 } from '@morpho/sim';
 
 export class GameProxy {
   private worker: Worker;
@@ -20,7 +20,9 @@ export class GameProxy {
   worldSize = WORLD;
   fieldSize = FIELD;
 
-  constructor() {
+  // parentGenome を渡すと、Worker 起動直後の初期個体をその継承先で始める
+  // (M5: 系統樹の続きをセッションをまたいで再開する)。
+  constructor(parentGenome?: Genome) {
     this.worker = new Worker(new URL('./sim-worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent<FromWorkerMessage>) => {
       const msg = e.data;
@@ -30,6 +32,7 @@ export class GameProxy {
         this.evoLog = msg.evolution;
       }
     };
+    if (parentGenome) this.send({ type: 'reset', parentGenome });
   }
 
   // Worker からの初回スナップショットが届くまでは描画できない。
@@ -49,7 +52,7 @@ export class GameProxy {
   setBrush(r: number): void { this.brushRadius = r; this.send({ type: 'setBrush', radius: r }); }
   setSpeed(s: number): void { this.speed = Math.max(0, s | 0); this.send({ type: 'setSpeed', speed: this.speed }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
-  reset(seed?: number, stageId?: StageId): void { this.send({ type: 'reset', seed, stageId }); }
+  reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void { this.send({ type: 'reset', seed, stageId, parentGenome }); }
 
   snapshot(): GameSnapshot { return this.current(); }
   events(): string[] { return this.recentEvents; }

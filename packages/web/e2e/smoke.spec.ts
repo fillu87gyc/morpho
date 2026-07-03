@@ -194,3 +194,23 @@ test('ホイールでズームしてもクラッシュせず、全体を見る�
   expect(zoomedChecksum).not.toBe(resetChecksum);
   expect(errors).toEqual([]);
 });
+
+test('Day 5 以降に種を採取すると系統樹に記録され、世代が進む', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await expect(page.locator('#harvest-seed')).toBeDisabled();
+  await expect(page.locator('#lineage-gen')).toHaveText('現在 1代目');
+
+  await setSpeedSlider(page, 24);
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThanOrEqual(5);
+
+  await expect(page.locator('#harvest-seed')).toBeEnabled();
+  await page.click('#harvest-seed');
+
+  await expect(page.locator('#lineage-gen')).toHaveText('現在 2代目');
+  await expect(page.locator('#lineage li').first()).toContainText('1代目');
+
+  expect(errors).toEqual([]);
+});
