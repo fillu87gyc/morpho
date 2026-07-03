@@ -17,6 +17,7 @@ import {
 } from '@morpho/sim';
 import { STAGES, type StageId, type StageConfig } from './stages.js';
 import { computeQuests, type QuestStatus } from './quests.js';
+import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 
 export type { StageId } from './stages.js';
 
@@ -41,6 +42,8 @@ export interface WorldInfo {
   networkLinks: number;  // 接続ネットワーク数 = エッジ数
   coloniesReached: number; // 到達した拠点数 = sink ノード数
   coloniesTotal: number;   // 食料拠点の総数 (envの食料エリアの連結成分数)
+  sourceColonies: number;    // M6: 大マップに配置したコロニー (群体) の総数
+  connectedNetworks: number; // M6: 現在の独立ネットワーク数 (1 = 全コロニーが統合済み)
 }
 
 export interface EvolutionLog {
@@ -65,12 +68,22 @@ export interface GameSnapshot {
   stage: { id: StageId; name: string; description: string };
   // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
   landmarks: Vec2[];
+  // M6: ミニマップ用の各コロニー位置 + 現在の統合状態。
+  colonyMarkers: ColonyMarker[];
 }
 
 export const WORLD = 100;
 export const FIELD = 96;
 const TICKS_PER_DAY = 40;
-const DEFAULT_SOURCE: Vec2 = { x: 50, y: 50 };
+
+// M6: 単一 source ではなく、大マップに複数のコロニー (群体) を離して配置する。
+// ズームアウト (zoom=1) すると全コロニーを見渡せ、ズームインすると
+// 1コロニーだけの「個体ビュー」になる。FOOD_POINTS とも十分な間隔を空ける。
+const SOURCE_POINTS: Vec2[] = [
+  { x: 30, y: 30 },
+  { x: 70, y: 30 },
+  { x: 50, y: 75 },
+];
 
 // 皿の外周 6 箇所の固定食料点 (main petri デモと同じ構図)。
 // バイオード生成で岩場をここに重ねないための「避けるべき地点」にも使う。
@@ -164,10 +177,12 @@ export class Game {
     this.bus = new EventBus();
     this.state = createInitialState(seed, WORLD);
 
-    clearAroundSource(this.env, DEFAULT_SOURCE, 4);
-    seedSource(this.state, DEFAULT_SOURCE, 6);
+    for (const p of SOURCE_POINTS) {
+      clearAroundSource(this.env, p, 4);
+      seedSource(this.state, p, 6);
+    }
     for (const f of FOOD_POINTS) this.env.placeFood(f.pos, f.radius, f.amount * this.stage.foodAmountMultiplier);
-    this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [DEFAULT_SOURCE, ...FOOD_POINTS.map((f) => f.pos)]);
+    this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [...SOURCE_POINTS, ...FOOD_POINTS.map((f) => f.pos)]);
 
     this.evoLog = [];
     this.recentEvents = [];
@@ -292,10 +307,14 @@ export class Game {
     const individuality = computeIndividuality(this.state);
     const typeInfo = classifyIndividual(individuality);
     const balance = this.computeBalance();
-    const world = this.computeWorld();
+    const colonies = computeColonyNetworks(this.state, SOURCE_POINTS);
+    const world = this.computeWorld(colonies.networksCount);
     const thickEdges = this.state.edges.filter((e) => e.radius > 1.5).length;
     const day = Math.floor(this.state.tick / TICKS_PER_DAY);
-    const quests = computeQuests({ coloniesReached: world.coloniesReached, coloniesTotal: world.coloniesTotal, traits });
+    const quests = computeQuests({
+      coloniesReached: world.coloniesReached, coloniesTotal: world.coloniesTotal, traits,
+      sourceColonies: world.sourceColonies, connectedNetworks: world.connectedNetworks,
+    });
     return {
       state: this.state, env: this.env, bio: this.bio,
       traits, individuality, typeInfo, genome: this.genome,
@@ -304,6 +323,7 @@ export class Game {
       thickEdges, quests,
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
       landmarks: this.landmarks,
+      colonyMarkers: colonies.markers,
     };
   }
 
@@ -339,7 +359,7 @@ export class Game {
     return { light, temperature, moisture, nutrient, toxin };
   }
 
-  private computeWorld(): WorldInfo {
+  private computeWorld(connectedNetworks: number): WorldInfo {
     // 占有面積: biomass が一定値以上のセル数。世界全体を 100×100 m² とみなす。
     const n = this.fieldSize * this.fieldSize;
     const cellArea = (WORLD * WORLD) / n; // m²/cell
@@ -368,6 +388,8 @@ export class Game {
       networkLinks: this.state.edges.length,
       coloniesReached,
       coloniesTotal,
+      sourceColonies: SOURCE_POINTS.length,
+      connectedNetworks,
     };
   }
 }

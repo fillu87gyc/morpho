@@ -35,11 +35,13 @@ export class Ui {
   private day = el('day');
   private era = el('era');
   private stageName = el('stage-name');
-  // メインクエスト (固定2本)
+  // メインクエスト (固定2本) + M6 ワールド目標 (コロニー統合)
   private qConnectBar = el('q-connect-bar');
   private qConnectN = el('q-connect-n');
   private qExploreBar = el('q-explore-bar');
   private qExploreN = el('q-explore-n');
+  private qUniteBar = el('q-unite-bar');
+  private qUniteN = el('q-unite-n');
   // デイリーチャレンジ
   private chalTitle = el('chal-title');
   private chalDesc = el('chal-desc');
@@ -51,6 +53,9 @@ export class Ui {
   private wLinks = el('w-links');
   private wCr = el('w-cr');
   private wCt = el('w-ct');
+  // M6: ワールドビュー (コロニー数 / 統合ネットワーク数)
+  private wNetworks = el('w-networks');
+  private wColonies = el('w-colonies');
   // env balance (5 axes)
   private eLight = el('e-light');
   private eTemp = el('e-temp');
@@ -194,6 +199,11 @@ export class Ui {
       setBar(this.qExploreBar, exploreQuest.progress);
       setText(this.qExploreN, pct(exploreQuest.progress));
     }
+    const uniteQuest = s.quests.find((q) => q.id === 'unite-colonies');
+    if (uniteQuest) {
+      setBar(this.qUniteBar, uniteQuest.progress);
+      setText(this.qUniteN, pct(uniteQuest.progress));
+    }
 
     // 系統樹: 採取できる日数に達したかどうかだけ見て、変わったときだけ書き換える。
     const harvestable = s.day >= HARVEST_MIN_DAY;
@@ -224,6 +234,8 @@ export class Ui {
     setText(this.wLinks, thou(s.world.networkLinks));
     setText(this.wCr, String(s.world.coloniesReached));
     setText(this.wCt, String(s.world.coloniesTotal));
+    setText(this.wNetworks, String(s.world.connectedNetworks));
+    setText(this.wColonies, String(s.world.sourceColonies));
 
     // 環境バランス (5)
     setBar(this.eLight, s.balance.light);

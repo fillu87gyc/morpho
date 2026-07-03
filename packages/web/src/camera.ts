@@ -49,6 +49,15 @@ export class Camera {
     this.clampCenter();
   }
 
+  // M6: 「個体ビュー」への切り替え。指定したワールド座標 (コロニーの位置など)
+  // を中心にズームインする (ミニマップのクリックから呼ぶ想定)。
+  focusOn(pos: { x: number; y: number }, zoom = 5): void {
+    this.zoom = clamp(zoom, MIN_ZOOM, MAX_ZOOM);
+    this.cx = pos.x;
+    this.cy = pos.y;
+    this.clampCenter();
+  }
+
   pan(canvasSize: number, dxScreen: number, dyScreen: number): void {
     const v = this.view();
     const scale = canvasSize / v.worldSpan;

@@ -7,6 +7,10 @@ export interface QuestInput {
   coloniesReached: number;
   coloniesTotal: number;
   traits: Traits;
+  // M6: 大マップに離れて配置したコロニーの総数と、現在の独立ネットワーク数。
+  // 省略時 (=単一コロニー扱い) は常に達成済みとして扱う。
+  sourceColonies?: number;
+  connectedNetworks?: number;
 }
 
 export interface QuestStatus {
@@ -39,6 +43,16 @@ const QUEST_DEFS: QuestDef[] = [
     title: '大陸の70%を探索する',
     description: '個体を大きく広げて、皿の隅々まで行き渡らせよう',
     progress: (i) => i.traits.exploration / 0.7,
+  },
+  {
+    id: 'unite-colonies',
+    title: '離れたコロニーをひとつに',
+    description: '大マップに芽吹いた複数のコロニーを、ひとつのネットワークへ繋げよう',
+    progress: (i) => {
+      const total = i.sourceColonies ?? 1;
+      const networks = i.connectedNetworks ?? 1;
+      return total > 1 ? (total - networks) / (total - 1) : 1;
+    },
   },
 ];
 

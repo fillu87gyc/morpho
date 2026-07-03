@@ -6,6 +6,7 @@ import { CanvasRenderer } from './render.js';
 import { Ui } from './ui.js';
 import { Timeline } from './timeline.js';
 import { Camera } from './camera.js';
+import { Minimap } from './minimap.js';
 import { Encyclopedia, TOTAL_TYPE_COUNT } from './encyclopedia.js';
 import { Achievements } from './achievements.js';
 import { dailyChallengeFor, DailyChallengeTracker } from './challenges.js';
@@ -31,6 +32,17 @@ const renderer = new CanvasRenderer(canvas, {
 });
 const timeline = new Timeline();
 const camera = new Camera(game.worldSize);
+
+// M6: ミニマップ。クリックした場所のコロニーへズームして「個体ビュー」に切り替える。
+const minimapCanvas = document.getElementById('minimap') as HTMLCanvasElement | null;
+if (!minimapCanvas) throw new Error('#minimap not found');
+const minimap = new Minimap(minimapCanvas, game.worldSize);
+minimapCanvas.addEventListener('click', (e) => {
+  const rect = minimapCanvas.getBoundingClientRect();
+  const px = (e.clientX - rect.left) * (minimapCanvas.width / rect.width);
+  const py = (e.clientY - rect.top) * (minimapCanvas.height / rect.height);
+  camera.focusOn(minimap.toWorld(px, py));
+});
 
 const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage }, {
   onSpeed: (s) => game.setSpeed(s),
@@ -169,6 +181,7 @@ function frame() {
     } : undefined;
     const snap = game.snapshot();
     renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx);
+    minimap.draw(snap.colonyMarkers, camera.view());
     // 育ちが浅いうち (Day 3 未満) は個性が定まっていないので図鑑には記録しない。
     if (snap.day >= 3) {
       encyclopedia.record(snap.typeInfo.id, snap.typeInfo.label, snap.genome, snap.individuality, snap.state.seed, snap.day);

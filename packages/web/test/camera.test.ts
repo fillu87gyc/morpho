@@ -60,6 +60,22 @@ describe('Camera', () => {
     expect(v.worldTop).toBeCloseTo(0);
   });
 
+  it('M6: focusOn は指定座標を中心に指定ズームへ切り替える (個体ビュー)', () => {
+    const cam = new Camera(100);
+    cam.focusOn({ x: 30, y: 30 }, 5);
+    expect(cam.zoom).toBe(5);
+    const v = cam.view();
+    expect(v.worldSpan).toBeCloseTo(20);
+    expect(v.worldLeft).toBeCloseTo(20);
+    expect(v.worldTop).toBeCloseTo(20);
+  });
+
+  it('M6: focusOn のズームも [1, 8] にクランプされる', () => {
+    const cam = new Camera(100);
+    cam.focusOn({ x: 50, y: 50 }, 100);
+    expect(cam.zoom).toBeLessThanOrEqual(8);
+  });
+
   it('reset はズームと中心を初期状態に戻す', () => {
     const cam = new Camera(100);
     cam.zoomAt(200, 100, 100, 4);
