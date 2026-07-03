@@ -75,9 +75,15 @@
   - `web/game.ts` の `mutationScaleFor()`: ステージの自然減衰速度 (`nutrientDecayPerTick` / `moistureRelaxPerTick`) が大きい (=過酷な) ステージほど、継承時の変異幅が大きくなる。同じ親の種でも、植える土地によって子の個性の振れ幅が変わる
 
 ### M6 — World View
-- [ ] 複数ソースを大マップに配置 → ズームアウトで俯瞰、ズームインで個体ビュー
-- [ ] ミニマップ + コロニー数 / 接続ネットワーク数の HUD
-- [ ] 拠点同士の接続が「世界目標」達成度に効く
+- [x] 複数ソースを大マップに配置 → ズームアウトで俯瞰、ズームインで個体ビュー
+  - `web/src/game.ts`: `SOURCE_POINTS` (3箇所) に `seedSource()` を複数回呼ぶだけで実現 (sim 側は元々複数 source を区別なく扱えるため無改修)。既存のズーム範囲 (1〜8倍) がそのまま「zoom=1で全コロニーを俯瞰」「zoom>1で1コロニーに寄った個体ビュー」になる
+  - `web/src/camera.ts`: `Camera.focusOn(pos, zoom)` を追加。ミニマップのクリックで特定コロニーへズームインする「個体ビュー切り替え」に使う
+- [x] ミニマップ + コロニー数 / 接続ネットワーク数の HUD
+  - `web/src/colony-networks.ts`: `computeColonyNetworks()` が Union-Find でエッジを辿り、各コロニーがどの連結成分 (ネットワーク) に属すかを純粋関数として導出 (sim 側に「コロニー」概念を持ち込まない)
+  - `web/src/minimap.ts`: 世界全体のコロニー位置 + 現在のカメラ視野矩形を描く軽量ミニマップ。クリックでそのコロニーへ `camera.focusOn()`
+  - 左ペイン「ワールドビュー」カードに統合ネットワーク数 / コロニー総数を表示
+- [x] 拠点同士の接続が「世界目標」達成度に効く
+  - `web/src/quests.ts`: 新設クエスト `unite-colonies` (「離れたコロニーをひとつに」)。進捗 = `(sourceColonies - connectedNetworks) / (sourceColonies - 1)`。コロニーの growth が物理的に隣のコロニーへ到達しネットワークが1つに統合されるほど進む
 
 ### M7 — 仕上げ
 - [ ] 環境音 + アンビエント BGM (Howler.js or WebAudio 直)

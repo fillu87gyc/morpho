@@ -195,6 +195,26 @@ test('ホイールでズームしてもクラッシュせず、全体を見る�
   expect(errors).toEqual([]);
 });
 
+test('M6: 起動時に3つのコロニーが配置され、ミニマップをクリックすると個体ビューにズームする', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await expect(page.locator('#w-colonies')).toHaveText('3');
+  await expect(page.locator('#w-networks')).toHaveText('3');
+
+  const beforeChecksum = await canvasChecksum(page);
+  const minimap = page.locator('#minimap');
+  const box = await minimap.boundingBox();
+  if (!box) throw new Error('minimap has no bounding box');
+  await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.waitForTimeout(300);
+  const afterChecksum = await canvasChecksum(page);
+
+  expect(afterChecksum).not.toBe(beforeChecksum);
+  expect(errors).toEqual([]);
+});
+
 test('Day 5 以降に種を採取すると系統樹に記録され、世代が進む', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');

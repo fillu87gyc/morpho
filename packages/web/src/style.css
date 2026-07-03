@@ -116,6 +116,15 @@ body { overflow: hidden; }
 .kv dt { color: var(--text-dim); }
 .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 
+.minimap {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
 .log { list-style: none; padding: 0; margin: 0; font-size: 11px; color: var(--text-dim); }
 .log li { padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); }
 .log li:last-child { border-bottom: none; }

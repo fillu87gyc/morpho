@@ -221,6 +221,23 @@ describe('Game', () => {
     expect(g.snapshot().stage.id).toBe('cave');
   });
 
+  it('M6: 起動時に複数のコロニー (source) が大マップに配置される', () => {
+    const g = new Game(5);
+    const s = g.snapshot();
+    const sources = s.state.nodes.filter((n) => n.type === 'source');
+    expect(sources.length).toBe(3);
+    expect(s.world.sourceColonies).toBe(3);
+    expect(s.colonyMarkers.length).toBe(3);
+  });
+
+  it('M6: 起動直後は各コロニーが独立したネットワークとして数えられる', () => {
+    const g = new Game(5);
+    const s = g.snapshot();
+    expect(s.world.connectedNetworks).toBe(3);
+    const ids = new Set(s.colonyMarkers.map((m) => m.networkId));
+    expect(ids.size).toBe(3);
+  });
+
   it('放置すると栄養場の総量が自然に減っていく (自然減衰)', () => {
     const g = new Game(15, 'desert');
     g.setSpeed(1);

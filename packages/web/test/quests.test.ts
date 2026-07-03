@@ -38,4 +38,40 @@ describe('computeQuests', () => {
       expect(q.progress).toBeLessThanOrEqual(1);
     }
   });
+
+  it('unite-colonies: sourceColonies/connectedNetworks を省略すると常に達成扱い', () => {
+    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0) });
+    const unite = quests.find((q) => q.id === 'unite-colonies')!;
+    expect(unite.progress).toBe(1);
+    expect(unite.done).toBe(true);
+  });
+
+  it('unite-colonies: 3コロニーが独立 (ネットワーク数3) だと進捗0', () => {
+    const quests = computeQuests({
+      coloniesReached: 0, coloniesTotal: 6, traits: traits(0),
+      sourceColonies: 3, connectedNetworks: 3,
+    });
+    const unite = quests.find((q) => q.id === 'unite-colonies')!;
+    expect(unite.progress).toBe(0);
+    expect(unite.done).toBe(false);
+  });
+
+  it('unite-colonies: 2つが統合 (ネットワーク数2) だと進捗0.5', () => {
+    const quests = computeQuests({
+      coloniesReached: 0, coloniesTotal: 6, traits: traits(0),
+      sourceColonies: 3, connectedNetworks: 2,
+    });
+    const unite = quests.find((q) => q.id === 'unite-colonies')!;
+    expect(unite.progress).toBeCloseTo(0.5, 5);
+  });
+
+  it('unite-colonies: 全コロニーが1ネットワークに統合されると完了', () => {
+    const quests = computeQuests({
+      coloniesReached: 0, coloniesTotal: 6, traits: traits(0),
+      sourceColonies: 3, connectedNetworks: 1,
+    });
+    const unite = quests.find((q) => q.id === 'unite-colonies')!;
+    expect(unite.progress).toBe(1);
+    expect(unite.done).toBe(true);
+  });
 });
