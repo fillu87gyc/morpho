@@ -37,6 +37,12 @@ const ui = new Ui(game, encyclopedia, {
     document.getElementById('toggle-heat')?.classList.toggle('active', showHeat);
   },
   onResetView: () => camera.reset(),
+  onStageChange: (id) => {
+    game.reset(undefined, id);
+    timeline.reset();
+    camera.reset();
+    fitCanvas();
+  },
 });
 
 let showHeat = false;

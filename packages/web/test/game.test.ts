@@ -147,4 +147,45 @@ describe('Game', () => {
       expect(v).toBeLessThanOrEqual(1);
     }
   });
+
+  it('era が切り替わった節目が進化の記録に残る', () => {
+    const g = new Game(11);
+    g.setSpeed(1);
+    for (let i = 0; i < 400; i++) g.tick();
+    const evo = g.evolution();
+    expect(evo.some((e) => e.text.includes('に入った'))).toBe(true);
+    // 起動直後の胞子期そのものは「切り替わり」ではないので記録されない。
+    expect(evo.some((e) => e.text === '胞子期に入った')).toBe(false);
+  });
+
+  it('ステージを指定して生成でき、snapshot に反映される', () => {
+    const g = new Game(9, 'desert');
+    expect(g.snapshot().stage.id).toBe('desert');
+    expect(g.snapshot().stage.name).toBe('砂漠');
+  });
+
+  it('同じ seed でもステージが違えば地形 (障害物量) が変わりうる', () => {
+    const petri = new Game(3, 'petri');
+    const ruins = new Game(3, 'ruins');
+    const sum = (g: Game) => g.env.obstacle.data.reduce((a, b) => a + b, 0);
+    expect(sum(ruins)).not.toBe(sum(petri));
+  });
+
+  it('reset にステージを渡すとステージが切り替わり、省略すると現在のステージを保つ', () => {
+    const g = new Game(4, 'petri');
+    g.reset(4, 'cave');
+    expect(g.snapshot().stage.id).toBe('cave');
+    g.reset(4);
+    expect(g.snapshot().stage.id).toBe('cave');
+  });
+
+  it('放置すると栄養場の総量が自然に減っていく (自然減衰)', () => {
+    const g = new Game(15, 'desert');
+    g.setSpeed(1);
+    const sumNutrients = () => g.env.nutrients.data.reduce((a, b) => a + b, 0);
+    const before = sumNutrients();
+    for (let i = 0; i < 300; i++) g.tick();
+    const after = sumNutrients();
+    expect(after).toBeLessThan(before);
+  });
 });

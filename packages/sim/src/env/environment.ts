@@ -24,7 +24,12 @@ export interface Environment {
   sampleGrowthContext(pos: Vec2): GrowthContext;
 }
 
-export interface GridEnvironmentInit { worldSize: number; fieldSize?: number; }
+export interface GridEnvironmentInit {
+  worldSize: number;
+  fieldSize?: number;
+  baseMoisture?: number;
+  baseBrightness?: number;
+}
 
 export class GridEnvironment implements Environment {
   worldSize: number;
@@ -33,13 +38,19 @@ export class GridEnvironment implements Environment {
   moisture: FieldGrid;
   brightness: FieldGrid;
   obstacle: FieldGrid;
+  // 「土地本来」の水分/明るさ。decay() が湿度を戻す先の平衡点として使う
+  // (= ステージごとの乾き/湿りやすさは baseMoisture との差で決まる)。
+  baseMoisture: number;
+  baseBrightness: number;
 
   constructor(init: GridEnvironmentInit) {
     this.worldSize = init.worldSize;
     this.fieldSize = init.fieldSize ?? 64;
+    this.baseMoisture = init.baseMoisture ?? 0.3;
+    this.baseBrightness = init.baseBrightness ?? 0.2;
     this.nutrients = makeField(this.fieldSize);
-    this.moisture = makeField(this.fieldSize, 0.3);
-    this.brightness = makeField(this.fieldSize, 0.2);
+    this.moisture = makeField(this.fieldSize, this.baseMoisture);
+    this.brightness = makeField(this.fieldSize, this.baseBrightness);
     this.obstacle = makeField(this.fieldSize);
   }
 
@@ -75,5 +86,19 @@ export class GridEnvironment implements Environment {
   placeStone(pos: Vec2, radius = 3) {
     const fp = this.toField(pos);
     stampObstacle(this.obstacle, fp.x, fp.y, radius);
+  }
+
+  // 自然減衰: 放置すると土地は少しずつ「元の姿」に戻っていく。
+  //   - 栄養は消費/腐敗して減っていく (0 へ)
+  //   - 水分は baseMoisture へじわじわ緩和する (乾いた土地なら乾き、湿地なら湿ったまま)
+  // nutrientRate / moistureRelaxRate は 1 tick あたりの割合。
+  decay(nutrientRate: number, moistureRelaxRate: number): void {
+    const n = this.fieldSize * this.fieldSize;
+    for (let i = 0; i < n; i++) {
+      const nv = this.nutrients.data[i] ?? 0;
+      if (nv > 0) this.nutrients.data[i] = Math.max(0, nv * (1 - nutrientRate));
+      const mv = this.moisture.data[i] ?? 0;
+      this.moisture.data[i] = mv + (this.baseMoisture - mv) * moistureRelaxRate;
+    }
   }
 }

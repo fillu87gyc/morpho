@@ -44,12 +44,16 @@
   - 左ペインの「個体ビュー」カードにタイプ表示 + 6軸バーを追加
 
 ### M3 — 環境に物語を
-- [ ] 複数のステージ (洞窟 / 砂漠 / 都市跡 / 湿地)
-  - 洞窟: 暗い (光ペナルティ無効)、湿度高
-  - 砂漠: 蒸発が早い、エサ希少
-  - 都市跡: 障害物テンプレート + ランダム配置
-- [ ] 「時代」概念 (胞子期 → 拡散期 → 変形体期) と DAY カウンタの紐付け
-- [ ] 環境バランスの自然減衰 (放置するとエサが消費される / 水が乾く)
+- [x] 複数のステージ (洞窟 / 砂漠 / 都市跡 / 湿地)
+  - `web/src/stages.ts`: `StageConfig` (地形生成関数 / baseMoisture・baseBrightness / SimParams 上書き / 自然減衰速度) を5種類定義し、HUD の「ステージ」セレクトで切り替える
+  - 洞窟: 暗い (`brightnessPenalty: 0` で光ペナルティ無効)、湿度高 (`baseMoisture` 高)
+  - 砂漠: 蒸発が早い (`moistureRelaxPerTick` 高)、エサ希少 (`foodAmountMultiplier` 低)
+  - 都市跡: 建物基礎の矩形テンプレート (`placeRuinTemplate`) + ランダムな瓦礫配置
+  - 湿地: 水・栄養に富み乾きにくい (`baseMoisture` 高 / `moistureRelaxPerTick` 低)
+- [x] 「時代」概念 (胞子期 → 拡散期 → 変形体期) と DAY カウンタの紐付け
+  - `game.ts`: `eraName(day)` が DAY から時代名を導出し HUD に表示。切り替わりの節目は `checkEraTransition()` が「進化の記録」に残す
+- [x] 環境バランスの自然減衰 (放置するとエサが消費される / 水が乾く)
+  - `sim/env/environment.ts`: `GridEnvironment.decay()` が栄養を0へ、水分を土地本来の `baseMoisture` へ毎tick緩和する。速度はステージごとに異なる
 
 ### M4 — ゆるい目標
 - [ ] デイリーチャレンジ: 「最短でつなぐ」「最小コストでつなぐ」「障害物を避けてつなぐ」

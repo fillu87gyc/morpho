@@ -2,7 +2,7 @@
 // - 値が変わったところだけ書き換える (textContent が等しければスキップ)。
 // - 数値はモックアップに合わせて千桁区切り。
 
-import type { Tool } from './game.js';
+import type { Tool, StageId } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
 
@@ -30,6 +30,7 @@ export class Ui {
   // header
   private day = el('day');
   private era = el('era');
+  private stageName = el('stage-name');
   // quest
   private questBar = el('quest-bar');
   private questPct = el('quest-pct');
@@ -77,6 +78,7 @@ export class Ui {
   private lastEvoLen = -1;
   private lastEventLen = -1;
   private lastEncyVersion = -1;
+  private lastStageId: StageId | null = null;
 
   constructor(
     private game: GameProxy,
@@ -88,6 +90,7 @@ export class Ui {
       onReset: () => void;
       onToggleHeat: () => void;
       onResetView: () => void;
+      onStageChange: (id: StageId) => void;
     },
   ) {
     // 再生速度: スライダーで連続的に選べる。一時停止ボタンは直前の速度を
@@ -126,6 +129,10 @@ export class Ui {
     (el('reset') as HTMLButtonElement).addEventListener('click', () => this.hooks.onReset());
     (el('toggle-heat') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleHeat());
     (el('reset-view') as HTMLButtonElement).addEventListener('click', () => this.hooks.onResetView());
+    const stageSelect = el('stage-select') as HTMLSelectElement;
+    stageSelect.addEventListener('change', () => {
+      this.hooks.onStageChange(stageSelect.value as StageId);
+    });
 
     document.querySelector<HTMLButtonElement>('button.tool[data-tool="food"]')?.classList.add('active');
   }
@@ -134,6 +141,13 @@ export class Ui {
     const s = this.game.snapshot();
     setText(this.day, String(s.day));
     setText(this.era, s.era);
+    setText(this.stageName, s.stage.name);
+    this.stageName.title = s.stage.description;
+    if (this.lastStageId !== s.stage.id) {
+      this.lastStageId = s.stage.id;
+      const stageSelect = el('stage-select') as HTMLSelectElement;
+      if (stageSelect.value !== s.stage.id) stageSelect.value = s.stage.id;
+    }
 
     // クエスト
     setBar(this.questBar, s.questProgress);

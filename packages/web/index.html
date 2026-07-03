@@ -18,6 +18,7 @@
         <div class="time">
           <div class="day">DAY <span id="day">0</span></div>
           <div class="era" id="era">胞子期</div>
+          <div class="era stage-name" id="stage-name">皿</div>
           <div class="controls">
             <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
             <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
@@ -172,6 +173,14 @@
           </section>
 
           <section class="card actions">
+            <label class="stage-select-label" for="stage-select">ステージ</label>
+            <select id="stage-select">
+              <option value="petri">皿</option>
+              <option value="cave">洞窟</option>
+              <option value="desert">砂漠</option>
+              <option value="ruins">都市跡</option>
+              <option value="wetland">湿地</option>
+            </select>
             <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>
             <button id="reset-view">全体を見る</button>

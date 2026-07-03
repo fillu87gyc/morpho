@@ -26,7 +26,7 @@ let dirty = true;
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
-    case 'reset': game.reset(msg.seed); dirty = true; break;
+    case 'reset': game.reset(msg.seed, msg.stageId); dirty = true; break;
     case 'setSpeed': game.setSpeed(msg.speed); break;
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;

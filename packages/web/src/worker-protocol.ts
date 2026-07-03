@@ -2,11 +2,11 @@
 // 共有するメッセージ形状。両者が同じ型を見ることで、フィールドの
 // 取りこぼし・タイポをコンパイル時に検出できる。
 
-import type { Tool, GameSnapshot, EvolutionLog } from './game.js';
+import type { Tool, GameSnapshot, EvolutionLog, StageId } from './game.js';
 import type { Vec2 } from '@morpho/sim';
 
 export type ToWorkerMessage =
-  | { type: 'reset'; seed?: number }
+  | { type: 'reset'; seed?: number; stageId?: StageId }
   | { type: 'setSpeed'; speed: number }
   | { type: 'setTool'; tool: Tool }
   | { type: 'setBrush'; radius: number }

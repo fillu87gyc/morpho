@@ -154,6 +154,24 @@ test('新しい皿へでリセットすると DAY が0、拠点総数が6に戻�
   expect(errors).toEqual([]);
 });
 
+test('ステージを切り替えると DAY が0に戻り、ステージ名表示が変わる', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await setSpeedSlider(page, 20);
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 15_000 }).toBeGreaterThan(0);
+
+  await page.click('#pause-toggle');
+  await expect(page.locator('#pause-toggle')).toHaveClass(/active/);
+
+  await page.selectOption('#stage-select', 'desert');
+  await expect(page.locator('#day')).toHaveText('0');
+  await expect(page.locator('#stage-name')).toHaveText('砂漠');
+
+  expect(errors).toEqual([]);
+});
+
 test('ホイールでズームしてもクラッシュせず、全体を見るボタンで復帰できる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');
