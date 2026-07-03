@@ -75,7 +75,18 @@
           </section>
 
           <section class="card">
-            <h2>個性</h2>
+            <h2>個体ビュー</h2>
+            <div class="ind-type"><span class="ind-type-lbl">タイプ</span><span id="ind-type-n" class="ind-type-n">—</span></div>
+            <div class="trait">
+              <span class="lbl">健康度</span>
+              <div class="progress"><div id="t-health" class="bar"></div></div>
+              <span class="num" id="t-health-n">0%</span>
+            </div>
+            <div class="trait">
+              <span class="lbl">活力</span>
+              <div class="progress"><div id="t-vitality" class="bar"></div></div>
+              <span class="num" id="t-vitality-n">0%</span>
+            </div>
             <div class="trait">
               <span class="lbl">探索性</span>
               <div class="progress"><div id="t-explore" class="bar"></div></div>
@@ -90,6 +101,11 @@
               <span class="lbl">安定性</span>
               <div class="progress"><div id="t-stable" class="bar"></div></div>
               <span class="num" id="t-stable-n">0%</span>
+            </div>
+            <div class="trait">
+              <span class="lbl">適応性</span>
+              <div class="progress"><div id="t-adapt" class="bar"></div></div>
+              <span class="num" id="t-adapt-n">0%</span>
             </div>
           </section>
         </aside>
@@ -146,6 +162,13 @@
           <section class="card">
             <h2>最近の出来事</h2>
             <ul id="log" class="log"></ul>
+          </section>
+
+          <section class="card">
+            <h2>図鑑 <span id="ency-progress" class="ency-progress">0/5</span></h2>
+            <ul id="ency" class="ency">
+              <li class="empty">まだ何も発見していない…</li>
+            </ul>
           </section>
 
           <section class="card actions">

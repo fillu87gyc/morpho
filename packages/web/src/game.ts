@@ -11,7 +11,9 @@
 import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, computeTraits,
+  createGenome, applyGenome, computeIndividuality, classifyIndividual,
   type SimState, type SimParams, type Vec2, type Traits, type SimEvent, type SeededRNG,
+  type Genome, type Individuality, type IndividualTypeInfo,
 } from '@morpho/sim';
 
 export type Tool = 'food' | 'light' | 'water' | 'stone' | 'erase';
@@ -47,6 +49,9 @@ export interface GameSnapshot {
   env: GridEnvironment;
   bio: BiomassField;
   traits: Traits;
+  individuality: Individuality;
+  typeInfo: IndividualTypeInfo;
+  genome: Genome;
   balance: EnvBalance;
   world: WorldInfo;
   day: number;
@@ -100,6 +105,8 @@ export class Game {
   act!: ActivityField;
   bio!: BiomassField;
   bus!: EventBus;
+  genome!: Genome;
+  private params!: SimParams;
   private rng!: ReturnType<typeof createRNG>;
   private seed: number;
 
@@ -128,6 +135,10 @@ export class Game {
   reset(seed = (Math.random() * 1e9) | 0): void {
     this.seed = seed;
     this.rng = createRNG(seed);
+    // その個体固有の遺伝パラメータを rng から決定的に引く (地形生成より先に
+    // 引いて、常に同じ順番で消費されるようにする)。
+    this.genome = createGenome(this.rng);
+    this.params = applyGenome(PETRI_PARAMS, this.genome);
     this.env = new GridEnvironment({ worldSize: WORLD, fieldSize: FIELD });
     this.act = new ActivityField(WORLD, FIELD);
     this.bio = new BiomassField(WORLD, FIELD);
@@ -153,7 +164,7 @@ export class Game {
 
   tick(): void {
     for (let i = 0; i < this.speed; i++) {
-      step(this.state, this.env, this.act, this.bio, PETRI_PARAMS, this.rng, this.bus);
+      step(this.state, this.env, this.act, this.bio, this.params, this.rng, this.bus);
     }
     this.drainBus();
   }
@@ -245,6 +256,8 @@ export class Game {
 
   snapshot(): GameSnapshot {
     const traits = computeTraits(this.state);
+    const individuality = computeIndividuality(this.state);
+    const typeInfo = classifyIndividual(individuality);
     const balance = this.computeBalance();
     const world = this.computeWorld();
     const thickEdges = this.state.edges.filter((e) => e.radius > 1.5).length;
@@ -255,7 +268,8 @@ export class Game {
     const questProgress = Math.min(1, reachRatio * 0.7 + thickRatio * 0.3);
     return {
       state: this.state, env: this.env, bio: this.bio,
-      traits, balance, world,
+      traits, individuality, typeInfo, genome: this.genome,
+      balance, world,
       day, era: eraName(day),
       thickEdges, questProgress,
     };

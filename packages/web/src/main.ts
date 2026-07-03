@@ -6,6 +6,7 @@ import { CanvasRenderer } from './render.js';
 import { Ui } from './ui.js';
 import { Timeline } from './timeline.js';
 import { Camera } from './camera.js';
+import { Encyclopedia } from './encyclopedia.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -18,8 +19,9 @@ const renderer = new CanvasRenderer(canvas, {
 });
 const timeline = new Timeline();
 const camera = new Camera(game.worldSize);
+const encyclopedia = new Encyclopedia();
 
-const ui = new Ui(game, {
+const ui = new Ui(game, encyclopedia, {
   onSpeed: (s) => game.setSpeed(s),
   onTool: (t) => game.setTool(t),
   onBrush: (r) => game.setBrush(r),
@@ -135,8 +137,12 @@ function frame() {
       tool: game.tool as Tool,
     } : undefined;
     renderer.draw(game.snapshot().state, game.env, game.bio, camera.view(), hoverPx);
-    ui.render();
     const snap = game.snapshot();
+    // 育ちが浅いうち (Day 3 未満) は個性が定まっていないので図鑑には記録しない。
+    if (snap.day >= 3) {
+      encyclopedia.record(snap.typeInfo.id, snap.typeInfo.label, snap.genome, snap.individuality, snap.state.seed, snap.day);
+    }
+    ui.render();
     timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, 96));
     renderTimeline();
   }

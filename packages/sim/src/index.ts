@@ -18,6 +18,8 @@ export * from './events/bus.js';
 export * from './graph/params.js';
 export * from './graph/init.js';
 export * from './graph/traits.js';
+export * from './graph/genome.js';
+export * from './graph/individuality.js';
 export * from './graph/step.js';
 
 // 膜系シミュレーション (graph とは独立した別モデル)
