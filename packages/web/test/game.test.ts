@@ -126,8 +126,24 @@ describe('Game', () => {
     }
     expect(s.traits.exploration).toBeGreaterThanOrEqual(0);
     expect(s.traits.exploration).toBeLessThanOrEqual(1);
-    expect(s.questProgress).toBeGreaterThanOrEqual(0);
-    expect(s.questProgress).toBeLessThanOrEqual(1);
+    expect(s.quests.length).toBeGreaterThan(0);
+    for (const q of s.quests) {
+      expect(q.progress).toBeGreaterThanOrEqual(0);
+      expect(q.progress).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('メインクエストは拠点接続と探索度から進捗が計算される', () => {
+    const g = new Game(21);
+    g.setSpeed(1);
+    for (let i = 0; i < 100; i++) g.tick();
+    const s = g.snapshot();
+    const connect = s.quests.find((q) => q.id === 'connect-all');
+    const explore = s.quests.find((q) => q.id === 'explore-70');
+    expect(connect).toBeDefined();
+    expect(explore).toBeDefined();
+    expect(connect!.done).toBe(connect!.progress >= 1);
+    expect(explore!.done).toBe(explore!.progress >= 1);
   });
 
   it('同じ seed なら同じ genome / タイプが再現される', () => {

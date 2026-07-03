@@ -16,6 +16,7 @@ import {
   type Genome, type Individuality, type IndividualTypeInfo,
 } from '@morpho/sim';
 import { STAGES, type StageId, type StageConfig } from './stages.js';
+import { computeQuests, type QuestStatus } from './quests.js';
 
 export type { StageId } from './stages.js';
 
@@ -60,7 +61,7 @@ export interface GameSnapshot {
   day: number;
   era: string;
   thickEdges: number;
-  questProgress: number; // [0,1]
+  quests: QuestStatus[];
   stage: { id: StageId; name: string; description: string };
   // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
   landmarks: Vec2[];
@@ -289,16 +290,13 @@ export class Game {
     const world = this.computeWorld();
     const thickEdges = this.state.edges.filter((e) => e.radius > 1.5).length;
     const day = Math.floor(this.state.tick / TICKS_PER_DAY);
-    // クエスト: 「拠点に到達 ÷ 総拠点」を基準に、軸を増やすと深掘れる。
-    const reachRatio = world.coloniesTotal > 0 ? world.coloniesReached / world.coloniesTotal : 0;
-    const thickRatio = Math.min(1, thickEdges / 30);
-    const questProgress = Math.min(1, reachRatio * 0.7 + thickRatio * 0.3);
+    const quests = computeQuests({ coloniesReached: world.coloniesReached, coloniesTotal: world.coloniesTotal, traits });
     return {
       state: this.state, env: this.env, bio: this.bio,
       traits, individuality, typeInfo, genome: this.genome,
       balance, world,
       day, era: eraName(day),
-      thickEdges, questProgress,
+      thickEdges, quests,
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
       landmarks: this.landmarks,
     };
