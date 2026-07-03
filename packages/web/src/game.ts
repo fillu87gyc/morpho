@@ -62,6 +62,8 @@ export interface GameSnapshot {
   thickEdges: number;
   questProgress: number; // [0,1]
   stage: { id: StageId; name: string; description: string };
+  // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
+  landmarks: Vec2[];
 }
 
 export const WORLD = 100;
@@ -115,6 +117,7 @@ export class Game {
   private seed: number;
   private stage!: StageConfig;
   private lastEra = '';
+  private landmarks: Vec2[] = [];
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -158,7 +161,7 @@ export class Game {
     clearAroundSource(this.env, DEFAULT_SOURCE, 4);
     seedSource(this.state, DEFAULT_SOURCE, 6);
     for (const f of FOOD_POINTS) this.env.placeFood(f.pos, f.radius, f.amount * this.stage.foodAmountMultiplier);
-    this.stage.generateTerrain(this.env, this.rng, WORLD, [DEFAULT_SOURCE, ...FOOD_POINTS.map((f) => f.pos)]);
+    this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [DEFAULT_SOURCE, ...FOOD_POINTS.map((f) => f.pos)]);
 
     this.evoLog = [];
     this.recentEvents = [];
@@ -297,6 +300,7 @@ export class Game {
       day, era: eraName(day),
       thickEdges, questProgress,
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
+      landmarks: this.landmarks,
     };
   }
 

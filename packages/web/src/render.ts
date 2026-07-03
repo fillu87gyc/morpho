@@ -17,8 +17,10 @@ import type {
   SimState,
   GridEnvironment,
   BiomassField,
+  Vec2,
 } from '@morpho/sim';
 import type { WorldView } from './camera.js';
+import type { StageId } from './stages.js';
 import { MultiLayerDirtyTracker } from './field-diff.js';
 
 export interface RenderOptions {
@@ -46,6 +48,36 @@ const TUBE_DARK:   [number, number, number] = [200, 120, 50];  // 太い幹 (オ
 const SOURCE_DOT:  [number, number, number] = [170, 220, 255];
 const SINK_DOT:    [number, number, number] = [170, 255, 170];
 
+// ステージごとの背景トーンと障害物 (石) の色味。「洞窟の岩」「砂漠の岩」
+// 「都市跡の風化した石材」を見分けられるよう、ステージごとに変える。
+const STAGE_BG: Record<StageId, { inner: [number, number, number]; outer: [number, number, number] }> = {
+  petri:   { inner: [14, 20, 17], outer: [6, 8, 10] },
+  cave:    { inner: [11, 15, 22], outer: [3, 4, 7] },
+  desert:  { inner: [30, 23, 15], outer: [13, 10, 7] },
+  ruins:   { inner: [25, 21, 17], outer: [10, 8, 7] },
+  wetland: { inner: [10, 21, 18], outer: [4, 9, 8] },
+};
+
+const STAGE_ROCK_COLOR: Record<StageId, [number, number, number]> = {
+  petri:   [70, 65, 75],
+  cave:    [58, 64, 78],
+  desert:  [124, 98, 66],
+  ruins:   [156, 132, 98], // 風化した石材 (暖かいベージュ)
+  wetland: [72, 78, 68],
+};
+
+// 角丸矩形のパスを作る (Canvas の roundRect API は環境依存が残るため自前実装)。
+function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
 export class CanvasRenderer {
   private ctx: CanvasRenderingContext2D;
   private fieldImage: ImageData;
@@ -61,6 +93,7 @@ export class CanvasRenderer {
   private tracker: MultiLayerDirtyTracker;
   private prevMaxBio = -1;
   private prevShowHeat: boolean | null = null;
+  private prevStageId: StageId | null = null;
 
   constructor(private canvas: HTMLCanvasElement, private opts: RenderOptions) {
     const ctx = canvas.getContext('2d');
@@ -90,7 +123,7 @@ export class CanvasRenderer {
 
   setShowHeat(v: boolean): void { this.opts.showHeat = v; }
 
-  draw(state: SimState, env: GridEnvironment, bio: BiomassField, view: WorldView, hoverPx?: { x: number; y: number; radius: number; tool: string }): void {
+  draw(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], view: WorldView, hoverPx?: { x: number; y: number; radius: number; tool: string }): void {
     const { ctx } = this;
     const cssW = this.canvas.width / this.dpr;
     const cssH = this.canvas.height / this.dpr;
@@ -100,17 +133,18 @@ export class CanvasRenderer {
     const left = cx - side / 2;
     const top = cy - side / 2;
 
-    // 1. 暗いラジアル背景 (中央ほど少し明るい — 「ステージ」感)
+    // 1. 暗いラジアル背景 (中央ほど少し明るい — ステージごとのトーンに寄せる)
+    const bgTone = STAGE_BG[stageId];
     const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, side * 0.6);
-    bg.addColorStop(0, rgb(BG_INNER));
-    bg.addColorStop(1, rgb(BG_OUTER));
+    bg.addColorStop(0, rgb(bgTone.inner));
+    bg.addColorStop(1, rgb(bgTone.outer));
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, cssW, cssH);
 
     // 2. 場系を焼いて貼る。view (カメラのズーム/パン) に応じて
     //    fieldCanvas (常に世界全体を焼いた1枚) から必要な矩形だけを
     //    切り出して拡大する。zoom=1 のときは全体をそのまま貼るのと同じ。
-    this.paintFieldLayer(env, bio);
+    this.paintFieldLayer(env, bio, stageId);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     const fieldScale = this.opts.fieldSize / this.opts.worldSize;
@@ -121,16 +155,19 @@ export class CanvasRenderer {
       left, top, side, side,
     );
 
-    // 3. 脈管網
+    // 3. ステージの装飾アイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
     const scale = side / view.worldSpan;
     const offX = left - view.worldLeft * scale;
     const offY = top - view.worldTop * scale;
+    this.drawLandmarks(ctx, landmarks, stageId, scale, offX, offY);
+
+    // 4. 脈管網
     this.drawEdges(ctx, state, scale, offX, offY);
 
-    // 4. source / sink
+    // 5. source / sink
     this.drawNodes(ctx, state, scale, offX, offY);
 
-    // 5. カーソル
+    // 6. カーソル
     if (hoverPx) this.drawHover(hoverPx);
   }
 
@@ -140,24 +177,25 @@ export class CanvasRenderer {
   // 一致している前提 (main.ts は同じフレーム内で同じスナップショットを
   // draw() → renderThumbnail() の順に渡す) で呼ぶこと。異なるスナップショットを
   // 渡すと、直前に描かれた絵との差分だけが焼き足される。
-  renderThumbnail(state: SimState, env: GridEnvironment, bio: BiomassField, size: number): string {
+  renderThumbnail(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], size: number): string {
     const thumb = document.createElement('canvas');
     thumb.width = size;
     thumb.height = size;
     const tctx = thumb.getContext('2d');
     if (!tctx) return '';
-    this.paintFieldLayer(env, bio);
-    tctx.fillStyle = rgb(BG_INNER);
+    this.paintFieldLayer(env, bio, stageId);
+    tctx.fillStyle = rgb(STAGE_BG[stageId].inner);
     tctx.fillRect(0, 0, size, size);
     tctx.imageSmoothingEnabled = true;
     tctx.drawImage(this.fieldCanvas, 0, 0, size, size);
     const scale = size / this.opts.worldSize;
+    this.drawLandmarks(tctx, landmarks, stageId, scale, 0, 0);
     this.drawEdges(tctx, state, scale, 0, 0);
     this.drawNodes(tctx, state, scale, 0, 0);
     return thumb.toDataURL('image/png');
   }
 
-  private paintFieldLayer(env: GridEnvironment, bio: BiomassField): void {
+  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): void {
     const data = this.fieldImage.data;
     const bioData = bio.field.data;
     const nutData = env.nutrients.data;
@@ -179,7 +217,9 @@ export class CanvasRenderer {
     const maxBioJumped = this.prevMaxBio < 0
       || Math.abs(maxBio - this.prevMaxBio) / Math.max(this.prevMaxBio, 1e-6) > 0.02;
     const heatChanged = this.prevShowHeat !== this.opts.showHeat;
-    const full = !this.tracker.initialized || maxBioJumped || heatChanged;
+    const stageChanged = this.prevStageId !== null && this.prevStageId !== stageId;
+    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged;
+    const rockColor = STAGE_ROCK_COLOR[stageId];
 
     const dirty = this.tracker.update(
       [bioData, nutData, moiData, briData, obData],
@@ -230,10 +270,10 @@ export class CanvasRenderer {
           }
         }
 
-        // 障害物 — 暗いグレーの石 (背景より少し明るい程度に)
+        // 障害物 — ステージごとの石材色 (洞窟は青灰、砂漠は赤茶、都市跡は風化ベージュ)
         const ob = obData[i] ?? 0;
         if (ob > 0.5) {
-          [r, g, b] = blend(r, g, b, 70, 65, 75, 0.85);
+          [r, g, b] = blend(r, g, b, rockColor[0], rockColor[1], rockColor[2], 0.85);
           a = Math.max(a, 0.85);
         }
 
@@ -275,6 +315,7 @@ export class CanvasRenderer {
 
     this.prevMaxBio = maxBio;
     this.prevShowHeat = this.opts.showHeat;
+    this.prevStageId = stageId;
   }
 
   private drawEdges(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
@@ -327,6 +368,152 @@ export class CanvasRenderer {
       ctx.arc(cx, cy, r * 0.6, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  // ステージの装飾アイコン。地形の色味だけでは「ここは廃墟/洞窟/砂漠/湿地」
+  // と一目で伝わりにくいので、認識しやすいピクトグラムを目印座標に描く。
+  private drawLandmarks(ctx: CanvasRenderingContext2D, landmarks: Vec2[], stageId: StageId, scale: number, offX: number, offY: number): void {
+    if (landmarks.length === 0) return;
+    for (const p of landmarks) {
+      const x = offX + p.x * scale;
+      const y = offY + p.y * scale;
+      switch (stageId) {
+        case 'ruins': this.drawRuinPillar(ctx, x, y, scale); break;
+        case 'cave': this.drawCrystalCluster(ctx, x, y, scale); break;
+        case 'desert': this.drawCactus(ctx, x, y, scale); break;
+        case 'wetland': this.drawReeds(ctx, x, y, scale); break;
+        default: break;
+      }
+    }
+  }
+
+  // 都市跡: 崩れた石柱 + 転がった瓦礫塊。暖色の風化した石材で「人工物の廃墟」感を出す。
+  private drawRuinPillar(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
+    const w = 1.5 * scale, h = 4.4 * scale;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + w * 0.15, w * 1.5, w * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 柱本体 (上端がギザギザに欠けている = 崩れた柱)
+    const grad = ctx.createLinearGradient(x - w / 2, y - h, x + w / 2, y);
+    grad.addColorStop(0, 'rgba(198, 178, 142, 0.95)');
+    grad.addColorStop(1, 'rgba(134, 114, 86, 0.95)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2, y);
+    ctx.lineTo(x - w / 2, y - h * 0.62);
+    ctx.lineTo(x - w * 0.15, y - h * 0.78);
+    ctx.lineTo(x - w * 0.38, y - h);
+    ctx.lineTo(x + w * 0.1, y - h * 0.86);
+    ctx.lineTo(x + w / 2, y - h * 0.66);
+    ctx.lineTo(x + w / 2, y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 縦の溝 (フルーティング) で列柱らしさを出す
+    ctx.strokeStyle = 'rgba(90, 76, 58, 0.55)';
+    ctx.lineWidth = Math.max(0.5, scale * 0.05);
+    for (const dx of [-0.28, 0, 0.28]) {
+      ctx.beginPath();
+      ctx.moveTo(x + dx * w, y);
+      ctx.lineTo(x + dx * w, y - h * 0.6);
+      ctx.stroke();
+    }
+
+    // 根本に転がった瓦礫塊
+    ctx.fillStyle = 'rgba(122, 104, 80, 0.9)';
+    roundedRectPath(ctx, x + w * 0.75, y - w * 0.4, w * 1.1, w * 0.55, w * 0.2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 洞窟: 冷たい青緑の水晶クラスタ。地下の閉じた空間らしさを出す。
+  private drawCrystalCluster(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
+    const shards: { dx: number; h: number; w: number }[] = [
+      { dx: -0.7, h: 2.4, w: 0.55 },
+      { dx: 0, h: 3.4, w: 0.7 },
+      { dx: 0.65, h: 2.0, w: 0.5 },
+    ];
+    ctx.save();
+    ctx.shadowColor = 'rgba(120, 200, 220, 0.6)';
+    ctx.shadowBlur = scale * 0.8;
+    for (const s of shards) {
+      const cx = x + s.dx * scale;
+      const h = s.h * scale, w = s.w * scale;
+      const grad = ctx.createLinearGradient(cx, y - h, cx, y);
+      grad.addColorStop(0, 'rgba(210, 245, 250, 0.95)');
+      grad.addColorStop(1, 'rgba(70, 130, 160, 0.85)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(cx, y - h);
+      ctx.lineTo(cx + w / 2, y - h * 0.25);
+      ctx.lineTo(cx + w * 0.3, y);
+      ctx.lineTo(cx - w * 0.3, y);
+      ctx.lineTo(cx - w / 2, y - h * 0.25);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 砂漠: サボテンのシルエット。乾いた土地の目印として分かりやすい形にする。
+  private drawCactus(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
+    const w = 0.85 * scale, h = 3.4 * scale;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + w * 0.1, w * 1.6, w * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(78, 148, 92, 0.92)';
+    roundedRectPath(ctx, x - w / 2, y - h, w, h, w / 2);
+    ctx.fill();
+    roundedRectPath(ctx, x - w * 1.55, y - h * 0.6, w * 0.7, h * 0.42, w * 0.35);
+    ctx.fill();
+    roundedRectPath(ctx, x + w * 0.85, y - h * 0.78, w * 0.65, h * 0.4, w * 0.3);
+    ctx.fill();
+
+    // 棘: 短い縦線を数本
+    ctx.strokeStyle = 'rgba(224, 250, 214, 0.55)';
+    ctx.lineWidth = Math.max(0.4, scale * 0.035);
+    for (let i = 0; i < 5; i++) {
+      const yy = y - h * 0.12 - (i * h * 0.7) / 5;
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.5, yy);
+      ctx.lineTo(x - w * 0.72, yy - scale * 0.12);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.5, yy);
+      ctx.lineTo(x + w * 0.72, yy - scale * 0.12);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 湿地: 水辺の葦とガマ。水気の多さを植生で示す。
+  private drawReeds(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
+    const blades = [-0.5, -0.2, 0.1, 0.4];
+    ctx.save();
+    ctx.strokeStyle = 'rgba(96, 150, 90, 0.85)';
+    ctx.lineWidth = Math.max(0.5, scale * 0.055);
+    ctx.lineCap = 'round';
+    for (const dx of blades) {
+      const h = (2.4 + Math.abs(dx) * 1.2) * scale;
+      ctx.beginPath();
+      ctx.moveTo(x + dx * scale * 0.6, y);
+      ctx.quadraticCurveTo(x + dx * scale * 1.4, y - h * 0.6, x + dx * scale * 0.9, y - h);
+      ctx.stroke();
+    }
+    // ガマの穂
+    const tailX = x + blades[1]! * scale * 0.6;
+    const tailY = y - (2.4 + Math.abs(blades[1]!) * 1.2) * scale;
+    ctx.fillStyle = 'rgba(120, 90, 55, 0.9)';
+    ctx.beginPath();
+    ctx.ellipse(tailX, tailY + scale * 0.3, scale * 0.16, scale * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   private drawHover(h: { x: number; y: number; radius: number; tool: string }): void {

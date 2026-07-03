@@ -21,7 +21,10 @@ export interface StageConfig {
   // baseMoisture へ緩和していく。
   nutrientDecayPerTick: number;
   moistureRelaxPerTick: number;
-  generateTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void;
+  // 地形を生成し、レンダラがステージ固有のアイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
+  // を描く目印として使う座標を返す。ステージの「らしさ」を一目で伝えるための
+  // 装飾用途のみで、sim の判定には一切影響しない。
+  generateTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[];
 }
 
 export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland'];
@@ -63,7 +66,7 @@ function placeRockCluster(env: GridEnvironment, rng: SeededRNG, center: Vec2, pa
   }
 }
 
-function generatePetriTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void {
+function generatePetriTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[] {
   const patchCount = rng.int(9, 14);
   const avoidRadius = 9; // source / 固定食料点の近くには岩を置かない (通行止め防止)
 
@@ -95,34 +98,42 @@ function generatePetriTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: n
         break;
     }
   }
+  return [];
 }
 
 // ── 洞窟: 暗く (光ペナルティ無効)、湿度が高い。岩壁と水たまりが主体 ──
 
-function generateCaveTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void {
+function generateCaveTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[] {
   const avoidRadius = 9;
+  const landmarks: Vec2[] = [];
   const rockClusters = rng.int(10, 15);
   for (let i = 0; i < rockClusters; i++) {
     const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
     if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
     placeRockCluster(env, rng, center, rng.range(10, 22), avoidPoints, avoidRadius);
+    if (rng.next() < 0.5) landmarks.push(center); // 岩塊の一部を鍾乳石/石筍として描く
   }
   const poolCount = rng.int(5, 8);
   for (let i = 0; i < poolCount; i++) {
     const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
     env.placeWater(center, rng.range(6, 14), rng.range(0.35, 0.55));
   }
+  return landmarks;
 }
 
 // ── 砂漠: 蒸発が早く、エサ希少。砂地が主体で稀にオアシス ──
 
-function generateDesertTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void {
+function generateDesertTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[] {
   const avoidRadius = 9;
+  const landmarks: Vec2[] = [];
   const sandPatches = rng.int(10, 16);
   for (let i = 0; i < sandPatches; i++) {
     const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
     env.placeLight(center, rng.range(10, 22), rng.range(0.20, 0.35));
     env.placeWater(center, rng.range(8, 18), -rng.range(0.05, 0.10));
+    if (rng.next() < 0.35 && !avoidPoints.some((p) => dist(p, center) < avoidRadius)) {
+      landmarks.push(center); // 砂丘のそばにサボテンを立てる
+    }
   }
   const oasisCount = rng.int(1, 3);
   for (let i = 0; i < oasisCount; i++) {
@@ -137,6 +148,7 @@ function generateDesertTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: 
     if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
     placeRockCluster(env, rng, center, rng.range(6, 12), avoidPoints, avoidRadius);
   }
+  return landmarks;
 }
 
 // ── 都市跡: 障害物テンプレート (建物の基礎跡) + ランダムな瓦礫 ──
@@ -158,13 +170,15 @@ function placeRuinTemplate(env: GridEnvironment, rng: SeededRNG, center: Vec2): 
   }
 }
 
-function generateRuinsTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void {
+function generateRuinsTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[] {
   const avoidRadius = 11;
+  const landmarks: Vec2[] = [];
   const templateCount = rng.int(3, 5);
   for (let i = 0; i < templateCount; i++) {
     const center: Vec2 = { x: rng.range(worldSize * 0.15, worldSize * 0.85), y: rng.range(worldSize * 0.15, worldSize * 0.85) };
     if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
     placeRuinTemplate(env, rng, center);
+    landmarks.push(center); // 崩れた柱をこの区画の中心に描く
   }
   // 瓦礫: ランダムな小石をばら撒く
   const rubbleCount = rng.int(14, 22);
@@ -180,17 +194,20 @@ function generateRuinsTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: n
     env.placeWater(center, rng.range(6, 12), rng.range(0.08, 0.16));
     env.placeFood(center, rng.range(3, 6), rng.range(0.10, 0.20));
   }
+  return landmarks;
 }
 
 // ── 湿地: 水と栄養が豊かで、乾きにくい ──
 
-function generateWetlandTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): void {
+function generateWetlandTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[] {
   const avoidRadius = 9;
+  const landmarks: Vec2[] = [];
   const waterPatches = rng.int(10, 15);
   for (let i = 0; i < waterPatches; i++) {
     const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
     env.placeWater(center, rng.range(10, 20), rng.range(0.25, 0.45));
     if (rng.next() < 0.6) env.placeFood(center, rng.range(4, 9), rng.range(0.12, 0.25));
+    if (rng.next() < 0.45) landmarks.push(center); // 水辺に葦の茂みを描く
   }
   const rockCount = rng.int(1, 3);
   for (let i = 0; i < rockCount; i++) {
@@ -198,6 +215,7 @@ function generateWetlandTerrain(env: GridEnvironment, rng: SeededRNG, worldSize:
     if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
     placeRockCluster(env, rng, center, rng.range(6, 10), avoidPoints, avoidRadius);
   }
+  return landmarks;
 }
 
 export const STAGES: Record<StageId, StageConfig> = {
