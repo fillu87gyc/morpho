@@ -1,0 +1,149 @@
+// 再現可能な性能ベンチ (M8 P0)。
+//
+//   pnpm run bench            -- フルレポート: tick コストの成長カーブ + サブステップ内訳
+//   pnpm run bench -- --smoke -- CI 向け: 短時間走らせて極端な回帰だけを検出する
+//
+// 「計測基盤が何もない」状態だったので、まずこれを用意する。
+// サブステップ (index/flux/activity/biomass/radius/growth/prune) 毎の
+// 内訳を見たいので、step() を経由せず graph/ 配下の関数を直接呼ぶ
+// (step() 自体は buildIndex キャッシュを持つが、ベンチでは常に素の
+// コストを見たいので毎tick buildIndex し直す)。
+
+import {
+  createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
+  ActivityField, BiomassField, EventBus, DEFAULT_PARAMS,
+  type SimParams,
+} from '../src/index.js';
+import { buildIndex } from '../src/graph/index-utils.js';
+import { updateFlux } from '../src/graph/flux.js';
+import { updateActivity, updateBiomass, updateRadius } from '../src/graph/life.js';
+import { growthStep } from '../src/graph/growth.js';
+import { prune } from '../src/graph/prune.js';
+
+const WORLD = 100;
+const FIELD = 64;
+
+// game.ts の petri ステージと同じ構図 (3コロニー + 6食料点) を
+// sim パッケージ単体で再現する (web への依存は持ち込まない)。
+const SOURCE_POINTS = [{ x: 30, y: 30 }, { x: 70, y: 30 }, { x: 50, y: 75 }];
+const FOOD_POINTS = [
+  { pos: { x: 22, y: 22 }, radius: 4.5 },
+  { pos: { x: 78, y: 22 }, radius: 5.0 },
+  { pos: { x: 82, y: 55 }, radius: 4.0 },
+  { pos: { x: 78, y: 80 }, radius: 5.0 },
+  { pos: { x: 22, y: 78 }, radius: 4.5 },
+  { pos: { x: 18, y: 50 }, radius: 4.0 },
+];
+
+function setup(seed: number) {
+  const rng = createRNG(seed);
+  const env = new GridEnvironment({ worldSize: WORLD, fieldSize: FIELD });
+  for (const f of FOOD_POINTS) env.placeFood(f.pos, f.radius, 1.0);
+  const act = new ActivityField(WORLD, FIELD);
+  const bio = new BiomassField(WORLD, FIELD);
+  const state = createInitialState(seed, WORLD);
+  for (const p of SOURCE_POINTS) { clearAroundSource(env, p, 4); seedSource(state, p, 6); }
+  const bus = new EventBus();
+  return { state, env, act, bio, rng, bus };
+}
+
+type Setup = ReturnType<typeof setup>;
+
+interface SubTimes {
+  index: number; flux: number; activity: number; biomass: number;
+  radius: number; growth: number; prune: number;
+}
+function zeroTimes(): SubTimes {
+  return { index: 0, flux: 0, activity: 0, biomass: 0, radius: 0, growth: 0, prune: 0 };
+}
+
+function stepWithTiming(
+  ctx: Setup, params: SimParams, acc: SubTimes,
+): void {
+  const { state, env, act, bio, rng, bus } = ctx;
+  state.tick++;
+
+  let t0 = performance.now();
+  const idx = buildIndex(state);
+  acc.index += performance.now() - t0;
+
+  t0 = performance.now();
+  updateFlux(state, params, idx);
+  acc.flux += performance.now() - t0;
+
+  t0 = performance.now();
+  updateActivity(state, env, act, params, idx);
+  acc.activity += performance.now() - t0;
+
+  t0 = performance.now();
+  updateBiomass(state, bio, params, idx);
+  acc.biomass += performance.now() - t0;
+
+  if (state.tick % 4 === 0) {
+    t0 = performance.now();
+    updateRadius(state, params, bus);
+    acc.radius += performance.now() - t0;
+  }
+  if (state.tick % 12 === 0) {
+    t0 = performance.now();
+    growthStep(state, env, bio, params, rng, bus, idx);
+    acc.growth += performance.now() - t0;
+  }
+  if (state.tick % 60 === 0) {
+    t0 = performance.now();
+    prune(state, params, bus);
+    acc.prune += performance.now() - t0;
+  }
+  bus.drain(); // 溜め続けると無駄にメモリを食うだけなので毎tick捨てる
+}
+
+const fmt = (n: number) => n.toFixed(3).padStart(7);
+
+function runReport(totalTicks: number, reportEvery: number): void {
+  const ctx = setup(7);
+  console.log(
+    'tick  nodes  edges |   index    flux activity biomass  radius  growth   prune | ms/tick',
+  );
+  let acc = zeroTimes();
+  let windowStart = 0;
+  for (let t = 1; t <= totalTicks; t++) {
+    stepWithTiming(ctx, DEFAULT_PARAMS, acc);
+    if (t % reportEvery === 0) {
+      const span = t - windowStart;
+      const total = acc.index + acc.flux + acc.activity + acc.biomass + acc.radius + acc.growth + acc.prune;
+      console.log(
+        `${String(t).padStart(5)} ${String(ctx.state.nodes.length).padStart(6)} ${String(ctx.state.edges.length).padStart(6)} | ` +
+        `${fmt(acc.index / span)} ${fmt(acc.flux / span)} ${fmt(acc.activity / span)} ${fmt(acc.biomass / span)} ` +
+        `${fmt(acc.radius / span)} ${fmt(acc.growth / span)} ${fmt(acc.prune / span)} | ${fmt(total / span)}`,
+      );
+      acc = zeroTimes();
+      windowStart = t;
+    }
+  }
+}
+
+// CI 向け: 短時間走らせて「壊滅的な回帰」(O(n^2) 化のバグ混入など) だけを
+// 検出する。閾値は意図的に緩い (通常の実測は 1〜2ms/tick 程度)。
+// CI ランナーの速度差やノイズで揺れて false positive にならないことを優先する。
+function runSmoke(): void {
+  const ctx = setup(7);
+  const TICKS = 600;
+  const acc = zeroTimes();
+  const t0 = performance.now();
+  for (let t = 0; t < TICKS; t++) stepWithTiming(ctx, DEFAULT_PARAMS, acc);
+  const elapsed = performance.now() - t0;
+  const perTick = elapsed / TICKS;
+  console.log(
+    `smoke: ${TICKS} ticks in ${elapsed.toFixed(1)}ms (${perTick.toFixed(3)}ms/tick avg), ` +
+    `nodes=${ctx.state.nodes.length} edges=${ctx.state.edges.length}`,
+  );
+  const THRESHOLD_MS = 30;
+  if (perTick > THRESHOLD_MS) {
+    console.error(`NG: ${perTick.toFixed(3)}ms/tick average exceeds smoke threshold (${THRESHOLD_MS}ms)`);
+    process.exit(1);
+  }
+  console.log('OK');
+}
+
+if (process.argv.includes('--smoke')) runSmoke();
+else runReport(1500, 100);

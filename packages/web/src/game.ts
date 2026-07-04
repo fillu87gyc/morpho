@@ -10,10 +10,10 @@
 
 import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
-  ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, computeTraits,
+  ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, createStepCache, computeTraits,
   createGenome, createChildGenome, applyGenome, computeIndividuality, classifyIndividual,
   type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
-  type Genome, type Individuality, type IndividualTypeInfo,
+  type Genome, type Individuality, type IndividualTypeInfo, type StepCache,
 } from '@morpho/sim';
 import { STAGES, type StageId, type StageConfig } from './stages.js';
 import { computeQuests, type QuestStatus } from './quests.js';
@@ -130,6 +130,9 @@ export class Game {
   private rng!: ReturnType<typeof createRNG>;
   private seed: number;
   private stage!: StageConfig;
+  // tick を跨いで buildIndex の結果を使い回すためのキャッシュ (M8 P1)。
+  // reset() の度に作り直す (新しい state に紐付け直す)。
+  private stepCache!: StepCache;
   private lastEra = '';
   private landmarks: Vec2[] = [];
 
@@ -176,6 +179,7 @@ export class Game {
     this.bio = new BiomassField(WORLD, FIELD);
     this.bus = new EventBus();
     this.state = createInitialState(seed, WORLD);
+    this.stepCache = createStepCache();
 
     for (const p of SOURCE_POINTS) {
       clearAroundSource(this.env, p, 4);
@@ -199,7 +203,7 @@ export class Game {
 
   tick(): void {
     for (let i = 0; i < this.speed; i++) {
-      step(this.state, this.env, this.act, this.bio, this.params, this.rng, this.bus);
+      step(this.state, this.env, this.act, this.bio, this.params, this.rng, this.bus, this.stepCache);
       this.env.decay(this.stage.nutrientDecayPerTick, this.stage.moistureRelaxPerTick);
     }
     this.drainBus();

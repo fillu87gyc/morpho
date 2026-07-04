@@ -122,18 +122,29 @@
 - `web/src/render.ts` `drawEdges()` — 毎フレーム `new Map(nodes)` + `[...edges].sort()` + エッジ毎に `strokeStyle` 設定と `stroke()` 呼び出し (スタイルバッチなし)。`drawNodes()` も毎フレーム radial gradient を生成
 - `web/src/main.ts` `frame()` — `ui.render()` / achievements / scoreboard / challenge 判定を差分有無に関わらず毎 RAF 実行
 
+> P0 (計測基盤) と P1 の一部 (`crowdingAt` のグリッド化 / `updateFlux` のマルチソース BFS化 /
+> `buildIndex` のキャッシュ化) を実施済み。以後の実測は `pnpm --filter @morpho/sim run bench`
+> (`sim/scripts/bench.ts`) で追える。上表は変更前のベースラインとして残す。
+
 #### 足りないもの (このマイルストーンで揃える)
 
-- [ ] **P0: 計測基盤** — 何もない状態なので最初に揃える
-  - [ ] perf HUD (ms/tick, 描画ms, FPS, 実効速度倍率をオーバーレイ表示。`?debug` で有効化)
-  - [ ] `sim/scripts/bench.ts` (tick コストの成長カーブ + サブステップ内訳を出力する再現可能ベンチ)
-  - [ ] CI にベンチのスモーク実行を追加 (極端な回帰の検出。閾値は緩めに)
+- [x] **P0: 計測基盤** — 何もない状態なので最初に揃える
+  - [x] perf HUD (ms/tick, 描画ms, FPS, 実効速度倍率をオーバーレイ表示。`?debug` で有効化)
+    - `web/src/perf-hud.ts`: `PerfHud` が画面左上に計測値を表示。tick 計測は `sim-worker.ts` (`game.tick()` を計測し `PerfInfo` として snapshot と一緒に送る)、描画計測は `main.ts` の `frame()` が担う
+  - [x] `sim/scripts/bench.ts` (tick コストの成長カーブ + サブステップ内訳を出力する再現可能ベンチ)
+    - `pnpm run bench` でフルレポート、`pnpm run bench -- --smoke` で CI 向けの短時間実行
+  - [x] CI にベンチのスモーク実行を追加 (極端な回帰の検出。閾値は緩めに)
+    - `.github/workflows/ci.yml` の `sim` ジョブに `Bench smoke` ステップを追加 (閾値 30ms/tick というかなり緩い基準で O(n^2) 化などの壊滅的回帰だけを検出)
 - [ ] **P1: sim の熱いループ** — 目標: 1 tick を 0.5ms 以下 (×24 が 16ms 予算に収まる = 24×0.5+描画で間に合う)
-  - [ ] `crowdingAt` の O(E×N) を撤廃: ノード密度を粗いグリッド場に毎tick一度だけ焼き、エッジはそれを sample する (O(N+E) 化)
-  - [ ] `updateFlux` の sink毎BFS を、全 sink を起点にした 1 回のマルチソース BFS に統合。頻度も 2〜4 tick 毎へ (flux は減衰項があるので視覚上の差は小さい)
-  - [ ] `buildIndex` の増分更新 (growth/prune 時だけ差分適用。まず prune 直後だけ再構築でも大きい)
-  - [ ] activity / biomass の全面 `diffuse()` を 2 tick 毎に間引く (係数を等価調整して見た目を保つ)
-  - [ ] `depositSegment` のディスク重ね塗りを line-stamp 一発 (距離場ベース) に置き換え
+  - [x] `crowdingAt` の O(E×N) を撤廃: ノード密度を粗いグリッド場に毎tick一度だけ焼き、エッジはそれを sample する (O(N+E) 化)
+    - `sim/graph/index-utils.ts`: `buildDensityGrid()` が cellSize == radius の一様グリッドへノードをバケツ分けし、`crowdingAt()` は 3x3 近傍だけを見る (元の「半径内に厳密に入っているか」の判定は変えず、候補を絞るだけなので結果は不変)
+  - [x] `updateFlux` の sink毎BFS を、全 sink を起点にした 1 回のマルチソース BFS に統合
+    - `sim/graph/flux.ts`: 全 source を起点にした 1 回の BFS で「各ノードから見て最も近い source」を求め、各 sink はその経路を辿るだけにした (O(sink数×(V+E)) → O(V+E))
+    - 頻度の間引き (2〜4 tick毎) は見送り: 挙動が変わるため今回はスコープ外
+  - [x] `buildIndex` の増分更新 (growth/prune 時だけ差分適用。まず prune 直後だけ再構築でも大きい)
+    - `sim/graph/step.ts`: `StepCache` (`createStepCache()`) が `buildIndex` の結果を tick を跨いで使い回す。growth (12 tick毎) は元々 idx を差分更新済みなのでそのまま活かし、prune (60 tick毎) の直後だけ無効化して次 tick で再構築する。`Game` (web) は `reset()` で作った `StepCache` を tick ループ全体で使い回す
+  - [ ] activity / biomass の全面 `diffuse()` を 2 tick 毎に間引く (係数を等価調整して見た目を保つ) — 挙動調整が要るため次回
+  - [ ] `depositSegment` のディスク重ね塗りを line-stamp 一発 (距離場ベース) に置き換え — 次回
 - [ ] **P2: Worker ⇄ メインのパイプライン** — 目標: snapshot 送信を 60Hz クローンから「描画に必要な最小データの transfer」へ
   - [ ] 時間予算スケジューラ: 16ms 予算内で回せるだけ tick を回し、間に合わない分は繰り越す。実効速度を HUD に出す (「×24 と言いつつ ×8」の可視化と解消)
   - [ ] 描画用スナップショットを typed array 化 (nodes/edges を Float32Array にパック) して postMessage の transferable で渡す (クローンゼロ化)。env/bio の Float32Array も transfer + Worker 側でダブルバッファ

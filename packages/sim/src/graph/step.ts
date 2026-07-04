@@ -18,30 +18,49 @@ import type { BiomassField } from '../env/biomass-field.js';
 import type { SeededRNG } from '../rng.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
-import { buildIndex } from './index-utils.js';
+import { buildIndex, type NodeIndex } from './index-utils.js';
 import { updateFlux } from './flux.js';
 import { updateActivity, updateBiomass, updateRadius } from './life.js';
 import { growthStep } from './growth.js';
 import { prune } from './prune.js';
 
+// buildIndex は state.nodes/edges 全体から Map/Set を組み直す O(N+E) の処理。
+// 構造 (ノード/エッジの追加削除) が変わるのは growth (12 tick毎、既に idx を
+// 差分更新している) と prune (60 tick毎、配列を直接 filter するだけ) だけ。
+// なので毎 tick 組み直す必要はなく、prune の直後にだけ無効化して次 tick で
+// 再構築すれば良い。呼び出し側 (Game など) はこのキャッシュを tick を跨いで
+// 使い回すことで、buildIndex の頻度を「毎tick」から「~60tick に1回」へ落とせる。
+export interface StepCache { idx: NodeIndex | null }
+
+export function createStepCache(): StepCache {
+  return { idx: null };
+}
+
 export function step(
   state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
-  params: SimParams, rng: SeededRNG, bus: EventBus,
+  params: SimParams, rng: SeededRNG, bus: EventBus, cache: StepCache = createStepCache(),
 ): void {
   state.tick++;
-  const idx = buildIndex(state);
+  if (!cache.idx) cache.idx = buildIndex(state);
+  const idx = cache.idx;
   updateFlux(state, params, idx);
   updateActivity(state, env, actField, params, idx);
   // Biomass は毎 tick: 場が拡散・減衰しながら膜のかたちを保つ。
   updateBiomass(state, bioField, params, idx);
   if (state.tick % 4 === 0)  updateRadius(state, params, bus);
   if (state.tick % 12 === 0) growthStep(state, env, bioField, params, rng, bus, idx);
-  if (state.tick % 60 === 0) prune(state, params, bus);
+  if (state.tick % 60 === 0) {
+    prune(state, params, bus);
+    // prune は state.nodes/edges を直接 filter するため idx と食い違う。
+    // 次 tick の buildIndex で組み直す。
+    cache.idx = null;
+  }
 }
 
 export function run(
   state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
   params: SimParams, rng: SeededRNG, bus: EventBus, ticks: number,
 ): void {
-  for (let i = 0; i < ticks; i++) step(state, env, actField, bioField, params, rng, bus);
+  const cache = createStepCache();
+  for (let i = 0; i < ticks; i++) step(state, env, actField, bioField, params, rng, bus, cache);
 }
