@@ -31,6 +31,7 @@ async function waitForReady(page: Page): Promise<void> {
 
 test('1本指タップでツールが配置される (タッチでもマウスクリックと同じ経路)', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
@@ -45,6 +46,7 @@ test('1本指タップでツールが配置される (タッチでもマウス�
 
 test('2本指ピンチでズームでき、ツールは誤配置されない', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
@@ -77,4 +79,47 @@ test('2本指ピンチでズームでき、ツールは誤配置されない', a
   await expect(page.locator('#w-ct')).toHaveText(String(before));
 
   expect(errors).toEqual([]);
+});
+
+// M15: 縦持ちビューポートで「オンボーディング → デイループ1周 → 図鑑を開く」の
+// 一連の流れが通ることを確認する。
+test.describe('縦画面レイアウト (M15)', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('オンボーディングを完了 → デイループ1周 → ハンバーガーから図鑑を開く', async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+    await page.goto('/');
+
+    // ① オンボーディング (コンセプトの3ステップ) を最後まで進める。
+    await expect(page.locator('#onboarding')).toBeVisible();
+    await page.click('#onboarding-next');
+    await page.click('#onboarding-next');
+    await page.click('#onboarding-next');
+    await expect(page.locator('#onboarding')).toBeHidden();
+
+    await waitForReady(page);
+
+    // 下部ツールバーが常時見えている (縦画面レイアウト)。
+    await expect(page.locator('#mobile-toolbar')).toBeVisible();
+    await expect(page.locator('#mobile-toolbar button.tool[data-tool="food"]')).toBeVisible();
+
+    // ② デイループへ切り替えて1日ぶん委ねる。
+    await page.click('#day-loop-mode-toggle');
+    await expect(page.locator('#day-loop-bar')).toBeVisible();
+    await page.click('#begin-observe');
+    await expect(page.locator('#day-result-modal')).toBeVisible({ timeout: 20_000 });
+    await page.click('#dr-next');
+    await expect(page.locator('#day-result-modal')).toBeHidden();
+
+    // ③ ハンバーガーからドロワーを開き、図鑑カードを見る。
+    await expect(page.locator('.panel.right')).toBeHidden();
+    await page.click('#menu-toggle');
+    await expect(page.locator('.panel.right')).toBeVisible();
+    await expect(page.locator('#ency')).toBeVisible();
+
+    await page.click('#menu-toggle');
+    await expect(page.locator('.panel.right')).toBeHidden();
+
+    expect(errors).toEqual([]);
+  });
 });

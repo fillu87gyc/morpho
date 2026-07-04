@@ -15,6 +15,7 @@
   <body>
     <div id="app">
       <header class="topbar">
+        <button id="menu-toggle" class="menu-toggle" title="メニュー" aria-label="メニュー">☰</button>
         <div class="title">
           <h1>モルフォ</h1>
           <span class="subtitle">委ねて、育ついのち</span>
@@ -300,6 +301,22 @@
         </aside>
       </main>
 
+      <!-- M15: モバイル縦画面用の下部ツールバー。デスクトップでは常に非表示 (CSS)。
+           ツールボタンは右パネルのものと同じ data-tool/class を持つ複製で、
+           main.ts/ui.ts のツール配線は `document.querySelectorAll('button.tool')`
+           に対して汎用的に効くため、JS側の変更は不要。 -->
+      <div id="mobile-toolbar" class="mobile-toolbar">
+        <button class="tool" data-tool="food" title="栄養を撒く"><span class="ico ico-food"></span><span>エサ</span></button>
+        <button class="tool" data-tool="light" title="光を当てる"><span class="ico ico-light"></span><span>光</span></button>
+        <button class="tool" data-tool="water" title="水を引く"><span class="ico ico-water"></span><span>水</span></button>
+        <button class="tool" data-tool="drain" title="水を止める (乾かす)"><span class="ico ico-drain"></span><span>乾燥</span></button>
+        <button class="tool" data-tool="stone" title="障害物を置く"><span class="ico ico-stone"></span><span>石</span></button>
+        <button class="tool" data-tool="heat" title="温度を上げる"><span class="ico ico-heat"></span><span>加温</span></button>
+        <button class="tool" data-tool="cool" title="温度を下げる"><span class="ico ico-cool"></span><span>冷却</span></button>
+        <button class="tool" data-tool="toxin" title="毒素をまく"><span class="ico ico-toxin"></span><span>毒素</span></button>
+        <button class="tool" data-tool="erase" title="土地をならす"><span class="ico ico-erase"></span><span>消す</span></button>
+      </div>
+
       <footer class="footnote">
         制御するのではなく、条件を整え、振る舞いを引き出す。
       </footer>
@@ -329,6 +346,18 @@
           <div class="dr-actions">
             <button id="dr-album" title="今日の姿をアルバムへ保存する">📷 アルバムへ</button>
             <button id="dr-next" class="harvest-btn">つぎの日へ ▶</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="onboarding" class="modal-overlay onboarding-overlay" hidden>
+        <div class="modal card onboarding-card">
+          <span class="onboarding-step" id="onboarding-step-n">1/3</span>
+          <h2 id="onboarding-title"></h2>
+          <p id="onboarding-body"></p>
+          <div class="dr-actions">
+            <button id="onboarding-skip" title="オンボーディングをスキップする">スキップ</button>
+            <button id="onboarding-next" class="harvest-btn">次へ ▶</button>
           </div>
         </div>
       </div>

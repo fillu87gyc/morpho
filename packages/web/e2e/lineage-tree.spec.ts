@@ -34,6 +34,7 @@ async function setSpeedSlider(page: Page, value: number): Promise<void> {
 
 test('1つの親から2匹の子を育てると系統樹が枝分かれして表示される', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 

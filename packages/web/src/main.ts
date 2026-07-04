@@ -25,6 +25,7 @@ import { starsOf, traitChipsFor, environmentTagsFor } from './trait-labels.js';
 import { CatalogueThumbs } from './catalogue-thumbs.js';
 import type { CatalogueContext } from './catalogue.js';
 import { localTimeFor, nightFactorFor } from './daytime.js';
+import { ONBOARDING_STEPS, hasSeenOnboarding, markOnboardingSeen } from './onboarding.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -184,6 +185,50 @@ window.addEventListener('keydown', (e) => {
     undoUsedCount++;
   }
 });
+
+// ── M15: モバイル縦画面のハンバーガー (パネル類のドロワー開閉) ──────────
+const menuToggleBtn = document.getElementById('menu-toggle') as HTMLButtonElement;
+menuToggleBtn.addEventListener('click', () => {
+  document.body.classList.toggle('drawer-open');
+});
+
+// ── M15: 初回オンボーディング (3ステップのコーチマーク) ────────────────
+const onboardingEl = document.getElementById('onboarding') as HTMLElement;
+const onboardingTitleEl = document.getElementById('onboarding-title') as HTMLElement;
+const onboardingBodyEl = document.getElementById('onboarding-body') as HTMLElement;
+const onboardingStepNEl = document.getElementById('onboarding-step-n') as HTMLElement;
+const onboardingNextBtn = document.getElementById('onboarding-next') as HTMLButtonElement;
+const onboardingSkipBtn = document.getElementById('onboarding-skip') as HTMLButtonElement;
+let onboardingStepIndex = 0;
+
+function renderOnboardingStep(): void {
+  const step = ONBOARDING_STEPS[onboardingStepIndex];
+  if (!step) return;
+  onboardingTitleEl.textContent = step.title;
+  onboardingBodyEl.textContent = step.body;
+  onboardingStepNEl.textContent = `${onboardingStepIndex + 1}/${ONBOARDING_STEPS.length}`;
+  onboardingNextBtn.textContent = onboardingStepIndex === ONBOARDING_STEPS.length - 1 ? 'はじめる ▶' : '次へ ▶';
+}
+
+function closeOnboarding(): void {
+  onboardingEl.hidden = true;
+  markOnboardingSeen();
+}
+
+onboardingNextBtn.addEventListener('click', () => {
+  if (onboardingStepIndex >= ONBOARDING_STEPS.length - 1) {
+    closeOnboarding();
+    return;
+  }
+  onboardingStepIndex++;
+  renderOnboardingStep();
+});
+onboardingSkipBtn.addEventListener('click', () => closeOnboarding());
+
+if (!hasSeenOnboarding()) {
+  onboardingEl.hidden = false;
+  renderOnboardingStep();
+}
 
 // ── M11: 通貨HUD ──────────────────────────────────────
 const CURRENCY_ICON: Record<CurrencyKind, string> = { sizuku: '🪙', wakaba: '🍃', horoishi: '🍄' };

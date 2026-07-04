@@ -35,6 +35,7 @@ async function setSpeedSlider(page: Page, value: number): Promise<void> {
 
 test('大陸ステージへ切り替えると拠点が20を超え、専用クエストが表示されて進行する', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 

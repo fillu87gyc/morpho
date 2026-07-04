@@ -26,6 +26,7 @@ async function waitForReady(page: Page): Promise<void> {
 
 test('エサを配置するとしずくが減り、ゆるいデイリーとチャレンジが3件ずつ表示される', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 

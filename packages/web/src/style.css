@@ -41,6 +41,15 @@ body { overflow: hidden; }
 .title h1 { margin: 0; font-size: 20px; letter-spacing: 0.08em; }
 .title .subtitle { color: var(--text-dim); font-size: 12px; margin-left: 6px; }
 
+/* M15: モバイル縦画面のハンバーガー (パネル類をドロワーで開閉する)。
+   デスクトップでは常に隠す (900px 以下でのみ表示、下のメディアクエリで上書き)。 */
+.menu-toggle {
+  display: none;
+  background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
+  width: 34px; height: 34px; border-radius: 8px; font-size: 16px; cursor: pointer;
+  flex-shrink: 0;
+}
+
 /* M11: 通貨HUD */
 .wallet-bar { display: flex; gap: 8px; }
 .wallet-chip {
@@ -111,6 +120,14 @@ body { overflow: hidden; }
 .dr-events li:last-child { border-bottom: none; }
 .dr-actions { display: flex; gap: 8px; }
 .dr-actions button { flex: 1; }
+
+/* M15: 初回オンボーディング (コンセプトの3ステップ)。#day-result-modal と
+   同じ .modal-overlay/.modal.card の土台を再利用する。 */
+.onboarding-step {
+  display: inline-block; font-size: 11px; color: var(--text-dim);
+  margin-bottom: 8px; font-variant-numeric: tabular-nums;
+}
+.onboarding-card p { font-size: 13px; line-height: 1.6; color: var(--text); margin: 0 0 14px; }
 #dr-album {
   background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
   border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12px;
@@ -507,12 +524,73 @@ body { overflow: hidden; }
 
 .footnote { text-align: center; color: var(--text-dim); font-size: 11px; padding: 8px 0 calc(12px + env(safe-area-inset-bottom)); }
 
-/* スマホ: 縦並びにする (M0 では最低限) */
+/* M15: モバイル縦画面用の下部ツールバー。デスクトップでは常に非表示。
+   ボタン自体は右パネルの「環境を整える」カードと同じ .tool 複製 (data-tool
+   も同じ) なので、main.ts/ui.ts の汎用な querySelectorAll('button.tool')
+   経由の配線がそのまま両方に効く。 */
+.mobile-toolbar { display: none; }
+
+/* スマホ縦画面 (M15): カードを並べるだけの応急処置をやめ、
+   ハンバーガーで開閉するドロワー + 下部ツールバーの3層構成にする。 */
 @media (max-width: 900px) {
-  .stage { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
-  .panel { max-height: 30vh; flex-direction: row; flex-wrap: wrap; }
-  .panel .card { flex: 1 1 220px; }
+  .menu-toggle { display: flex; align-items: center; justify-content: center; }
+  /* ドロワー (.panel) は inset:0 で画面全体を覆うので、ヘッダを常にその上に
+     重ねてハンバーガー自体を押せなくならないようにする。 */
+  .topbar { position: relative; z-index: 900; background: var(--bg); }
+
+  .stage { grid-template-columns: 1fr; grid-template-rows: 1fr; padding: 10px 10px calc(78px + env(safe-area-inset-bottom)); }
   #canvas { width: 100%; height: auto; }
+
+  /* パネル類 (クエスト/図鑑/系統樹/アルバム/設定 等) はハンバーガーから開く
+     全画面ドロワーへ移動する。position:fixed に transform を使わないのは、
+     [hidden] の代わりに使う display:none/flex 切り替えを素直に効かせるため。 */
+  .panel.left, .panel.right {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 800;
+    max-height: none;
+    background: var(--bg);
+    padding: calc(60px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+    flex-direction: column;
+    flex-wrap: nowrap;
+    overflow-y: auto;
+  }
+  .panel.right { z-index: 801; }
+  body.drawer-open .panel.left,
+  body.drawer-open .panel.right {
+    display: flex;
+  }
+  .panel .card { flex: none; }
+
+  /* 下部ツールバー: ツール一式を常時表示 (M9 の prepare 中は「観察をはじめる」
+     大ボタンをその直上に固定する)。 */
+  #mobile-toolbar {
+    display: flex;
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 700;
+    gap: 4px;
+    padding: 6px calc(6px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(6px + env(safe-area-inset-left));
+    background: var(--panel);
+    border-top: 1px solid var(--panel-edge);
+    backdrop-filter: blur(8px);
+    overflow-x: auto;
+  }
+  #mobile-toolbar .tool { flex: 1 0 44px; padding: 6px 0; }
+  #mobile-toolbar .tool span:last-child { font-size: 9px; }
+
+  #day-loop-bar:not([hidden]) {
+    position: fixed;
+    left: 0; right: 0;
+    bottom: calc(56px + env(safe-area-inset-bottom));
+    z-index: 699;
+    border-bottom: none;
+    border-top: 1px solid var(--panel-edge);
+    background: var(--panel);
+    backdrop-filter: blur(8px);
+    justify-content: center;
+  }
 }
 
 /* M8 P0: perf HUD (`?debug` でのみ生成される) */

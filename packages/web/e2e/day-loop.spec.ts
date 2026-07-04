@@ -28,6 +28,7 @@ async function waitForReady(page: Page): Promise<void> {
 
 test('デイループ: 1日を仕込む→委ねる→結果を受け取る→つぎの日へ、が1周する', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
@@ -74,6 +75,7 @@ test('デイループ: 1日を仕込む→委ねる→結果を受け取る→�
 
 test('デイループ: 見守り (連続) に戻すと自動で進み続ける', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 

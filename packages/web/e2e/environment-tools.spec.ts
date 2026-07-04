@@ -26,6 +26,7 @@ async function waitForReady(page: Page): Promise<void> {
 
 test('毒素をまくと環境バランスの毒素表示が上がり、消すツールで戻せる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
@@ -44,6 +45,7 @@ test('毒素をまくと環境バランスの毒素表示が上がり、消す�
 
 test('石を置き間違えても「やり直す」(Ctrl+Z) で取り消せる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
@@ -65,6 +67,7 @@ test('石を置き間違えても「やり直す」(Ctrl+Z) で取り消せる',
 
 test('温度ツール (加温/冷却) を使ってもクラッシュせず、ヒート表示で温度レイヤーが見える', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
@@ -85,6 +88,7 @@ test('温度ツール (加温/冷却) を使ってもクラッシュせず、ヒ
 
 test('水を止める (drain) ツールも適用できる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 

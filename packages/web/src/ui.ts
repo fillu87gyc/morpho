@@ -194,7 +194,8 @@ export class Ui {
       this.hooks.onStageChange(stageSelect.value as StageId);
     });
 
-    document.querySelector<HTMLButtonElement>('button.tool[data-tool="food"]')?.classList.add('active');
+    // M15: モバイル下部ツールバーの複製ボタンも含めて全件に active を付ける。
+    document.querySelectorAll<HTMLButtonElement>('button.tool[data-tool="food"]').forEach((b) => b.classList.add('active'));
   }
 
   render(): void {

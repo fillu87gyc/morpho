@@ -34,6 +34,7 @@ async function setSpeedSlider(page: Page, value: number): Promise<void> {
 
 test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見してサムネイルとカウントが更新される', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
@@ -62,6 +63,7 @@ test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見�
 
 test('実績はバッジグリッドで12個表示され、達成すると解除アイコンに変わる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
   await page.goto('/');
   await waitForReady(page);
 
