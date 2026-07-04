@@ -149,9 +149,14 @@
   - [x] `depositSegment` のディスク重ね塗りを line-stamp 一発 (距離場ベース) に置き換え
     - `sim/env/biomass-field.ts`: 線分を何個ものディスクで重ね塗りする代わりに、線分のバウンディングボックスを1回走査し、セル毎に線分までの最短距離 (射影点との距離) から重みを直接計算する。重なり範囲を何度も塗り直す無駄がなくなり、結果は同じ capsule 形状
 - [ ] **P2: Worker ⇄ メインのパイプライン** — 目標: snapshot 送信を 60Hz クローンから「描画に必要な最小データの transfer」へ
-  - [ ] 時間予算スケジューラ: 16ms 予算内で回せるだけ tick を回し、間に合わない分は繰り越す。実効速度を HUD に出す (「×24 と言いつつ ×8」の可視化と解消)
+  - [x] 時間予算スケジューラ: 16ms 予算内で回せるだけ tick を回し、間に合わない分は繰り越す。実効速度を HUD に出す (「×24 と言いつつ ×8」の可視化と解消)
+    - `web/src/tick-scheduler.ts`: `TickScheduler` が純粋なステートマシンとして「借金 (debt)」を管理。tick コストの実測 EMA から今回回せる tick 数を見積もり、間に合わなかった分は次フレームへ繰り越す。借金には上限 (`maxDebtTicks`) を設け、タブ復帰直後などの一気読みを防ぐ
+    - `web/src/sim-worker.ts`: 従来の `for (i < speed)` 固定ループを `scheduler.planSteps(game.speed)` の結果に置き換え。`Game.tick(steps)` に明示的な tick 数を渡せるようにした (`web/src/game.ts`)
   - [ ] 描画用スナップショットを typed array 化 (nodes/edges を Float32Array にパック) して postMessage の transferable で渡す (クローンゼロ化)。env/bio の Float32Array も transfer + Worker 側でダブルバッファ
-  - [ ] 派生計算 (traits / individuality / colonyNetworks / balance / world / quests) を「tick が進んだときだけ + 250ms 毎」に間引く (描画データと別チャンネルで低頻度送信)
+  - [x] 派生計算 (traits / individuality / colonyNetworks / balance / world / quests) を「tick が進んだときだけ + 250ms 毎」に間引く
+    - `web/src/game.ts`: `snapshot()` を `snapshotFast()` (state/env/bio など毎tick必要な部分) と `snapshotDerived()` (traits 以下の派生計算) に分割
+    - `web/src/sim-worker.ts`: `snapshotDerived()` は reset/apply 直後のみ即時再計算し、それ以外は 250ms 毎に間引いて使い回す。`snapshotFast()` は引き続き毎 tick 作り直す
+    - 「描画データと別チャンネルで低頻度送信」(postMessage の payload 自体を分離してクローン量を削る) は見送り: 効果は typed array 化 (未着手の項目) の方が大きく、protocol/GameProxy への影響も大きいためスコープ外
 - [ ] **P3: 描画** — 目標: 描画 3ms/frame 以下 (モバイル込み)
   - [ ] `drawEdges`: nodeMap を snapshot 間で再利用し、sort を radius バケツ分け (数段階) に置き換え、同スタイルのエッジを 1 path にバッチ
   - [ ] `drawNodes`: グロー gradient をオフスクリーン sprite に一度だけ焼いて `drawImage` する
