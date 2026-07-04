@@ -13,6 +13,9 @@ export interface Genome {
   moisturePref: number;   // 湿気への嗜好
   lightAvoidance: number; // 光を避ける強さ
   growthVigor: number;    // 伸長の勢い
+  // M10: 環境耐性2軸。値が大きいほど耐性が高い (>1 で頑健、<1 で脆弱)。
+  heatTolerance: number;   // 高いほど tempTolerance が広がり、暑さに強い
+  toxinResistance: number; // 高いほど toxinPenalty が軽くなり、毒に鈍感
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -28,6 +31,8 @@ const GENE_SPREAD: Record<keyof Genome, number> = {
   moisturePref: 0.22,
   lightAvoidance: 0.22,
   growthVigor: 0.16,
+  heatTolerance: 0.25,
+  toxinResistance: 0.25,
 };
 
 export function createGenome(rng: SeededRNG): Genome {
@@ -39,6 +44,8 @@ export function createGenome(rng: SeededRNG): Genome {
     moisturePref: gene(GENE_SPREAD.moisturePref),
     lightAvoidance: gene(GENE_SPREAD.lightAvoidance),
     growthVigor: gene(GENE_SPREAD.growthVigor),
+    heatTolerance: gene(GENE_SPREAD.heatTolerance),
+    toxinResistance: gene(GENE_SPREAD.toxinResistance),
   };
 }
 
@@ -56,6 +63,8 @@ export function createChildGenome(parent: Genome, rng: SeededRNG, mutationScale 
     moisturePref: gene(parent.moisturePref, GENE_SPREAD.moisturePref),
     lightAvoidance: gene(parent.lightAvoidance, GENE_SPREAD.lightAvoidance),
     growthVigor: gene(parent.growthVigor, GENE_SPREAD.growthVigor),
+    heatTolerance: gene(parent.heatTolerance, GENE_SPREAD.heatTolerance),
+    toxinResistance: gene(parent.toxinResistance, GENE_SPREAD.toxinResistance),
   };
 }
 
@@ -69,5 +78,9 @@ export function applyGenome(base: SimParams, genome: Genome): SimParams {
     moistureBias: base.moistureBias * genome.moisturePref,
     brightnessPenalty: base.brightnessPenalty * genome.lightAvoidance,
     growthStep: base.growthStep * genome.growthVigor,
+    // M10: heatTolerance が高いほど許容温度域が広がり、toxinResistance が
+    // 高いほど毒素ペナルティが軽くなる。
+    tempTolerance: base.tempTolerance * genome.heatTolerance,
+    toxinPenalty: base.toxinPenalty / genome.toxinResistance,
   };
 }

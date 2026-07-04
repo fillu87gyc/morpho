@@ -15,20 +15,40 @@
   <body>
     <div id="app">
       <header class="topbar">
+        <button id="menu-toggle" class="menu-toggle" title="メニュー" aria-label="メニュー">☰</button>
         <div class="title">
           <h1>モルフォ</h1>
           <span class="subtitle">委ねて、育ついのち</span>
         </div>
+        <div class="wallet-bar" id="wallet-bar">
+          <span class="wallet-chip" title="しずく — ツール使用の基軸通貨。減っても時間経過で下限まで自動回復する">
+            <span class="wallet-ico">🪙</span><span id="cur-sizuku">0</span>
+          </span>
+          <span class="wallet-chip" title="若葉 — デイリー/チャレンジの報酬。温度・毒素ツールのコスト">
+            <span class="wallet-ico">🍃</span><span id="cur-wakaba">0</span>
+          </span>
+          <span class="wallet-chip" title="胞子石 — 実績解除で得られる希少な通貨">
+            <span class="wallet-ico">🍄</span><span id="cur-horoishi">0</span>
+          </span>
+        </div>
         <div class="time">
           <div class="day">DAY <span id="day">0</span></div>
-          <div class="era" id="era">胞子期</div>
+          <div class="era-wrap" title="時代の達成条件への進捗">
+            <span id="era-ring" class="era-ring"></span>
+            <span class="era" id="era">胞子期</span>
+          </div>
           <div class="era stage-name" id="stage-name">皿</div>
           <div class="controls">
             <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
             <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
             <span class="speed-n">×<span id="speed-n">1</span></span>
             <button id="fast-forward" class="pause-toggle" title="早送り (描画を10fpsに間引いて浮いた分をtickに回す)">⏩</button>
+            <button id="day-loop-mode-toggle" class="pause-toggle" title="デイループ (仕込む→委ねる→受け取る) / 見守り (連続再生) を切り替える">🔁 見守り</button>
           </div>
+        </div>
+        <div id="day-loop-bar" class="day-loop-bar" hidden>
+          <button id="begin-observe" class="harvest-btn day-loop-btn">観察をはじめる ▶</button>
+          <span id="day-loop-remaining" class="day-loop-remaining" hidden>残り <span id="day-loop-remaining-n">--:--</span></span>
         </div>
       </header>
 
@@ -44,16 +64,21 @@
               <div class="quest-head"><span class="quest-title">大陸の70%を探索する</span><span class="num" id="q-explore-n">0%</span></div>
               <div class="progress"><div id="q-explore-bar" class="bar"></div></div>
             </div>
+            <div class="quest-item" id="q-continent-item" hidden>
+              <div class="quest-head"><span class="quest-title">大陸全体に栄養を届けよう</span><span class="num" id="q-continent-n">0%</span></div>
+              <div class="progress"><div id="q-continent-bar" class="bar"></div></div>
+            </div>
           </section>
 
           <section class="card">
-            <h2>デイリーチャレンジ</h2>
-            <div class="challenge">
-              <div class="challenge-title" id="chal-title">—</div>
-              <div class="challenge-desc" id="chal-desc"></div>
-              <div class="challenge-goal" id="chal-goal"></div>
-              <div class="challenge-status" id="chal-status">挑戦中…</div>
-            </div>
+            <h2>チャレンジ <span id="chal-progress" class="badge">0/3</span></h2>
+            <ul id="chal-list" class="chal-list"></ul>
+          </section>
+
+          <section class="card">
+            <h2>ゆるいデイリー</h2>
+            <ul id="dailies" class="dailies"></ul>
+            <p class="dailies-hint">やらなくても大丈夫。あなたのペースで粘菌は育っていきます。</p>
           </section>
 
           <section class="card">
@@ -109,6 +134,14 @@
 
           <section class="card">
             <h2>個体ビュー</h2>
+            <div class="ind-header">
+              <button id="ind-name" class="ind-name" title="タップして名前を変える">ねばりのこ #1</button>
+              <span id="ind-stars" class="ind-stars" title="個性の総合評価">★★★☆☆</span>
+              <span id="local-time" class="local-time" title="ローカルタイム (1日=24時間換算)">00:00:00</span>
+              <button id="track-toggle" class="track-toggle" title="この個体を追跡する (カメラが重心へついてくる)">🎯 追跡</button>
+            </div>
+            <div id="ind-chips" class="chip-row"></div>
+            <div id="ind-env-chips" class="chip-row env-chips"></div>
             <div class="ind-type"><span class="ind-type-lbl">タイプ</span><span id="ind-type-n" class="ind-type-n">—</span></div>
             <div class="trait">
               <span class="lbl">健康度</span>
@@ -146,9 +179,9 @@
             <h2>系統樹 <span id="lineage-gen" class="badge">現在 1代目</span></h2>
             <button id="harvest-seed" class="harvest-btn" disabled>種を採取</button>
             <div class="harvest-hint" id="harvest-hint">Day 5 で種を採取できるようになる</div>
-            <ul id="lineage" class="board">
-              <li class="empty">まだ種を採取していない…</li>
-            </ul>
+            <div id="lineage" class="lineage-tree">
+              <p class="empty">まだ種を採取していない…</p>
+            </div>
           </section>
         </aside>
 
@@ -173,9 +206,25 @@
                 <span class="ico ico-water"></span>
                 <span>水</span>
               </button>
+              <button class="tool" data-tool="drain" title="水を止める (乾かす)">
+                <span class="ico ico-drain"></span>
+                <span>乾燥</span>
+              </button>
               <button class="tool" data-tool="stone" title="障害物を置く">
                 <span class="ico ico-stone"></span>
                 <span>石</span>
+              </button>
+              <button class="tool" data-tool="heat" title="温度を上げる">
+                <span class="ico ico-heat"></span>
+                <span>加温</span>
+              </button>
+              <button class="tool" data-tool="cool" title="温度を下げる">
+                <span class="ico ico-cool"></span>
+                <span>冷却</span>
+              </button>
+              <button class="tool" data-tool="toxin" title="毒素をまく">
+                <span class="ico ico-toxin"></span>
+                <span>毒素</span>
               </button>
               <button class="tool" data-tool="erase" title="土地をならす">
                 <span class="ico ico-erase"></span>
@@ -187,6 +236,7 @@
               <input id="brush" type="range" min="2" max="16" value="5" />
             </div>
             <div class="hud-hint">クリック or ドラッグで配置</div>
+            <button id="undo-stroke" class="undo-btn" title="直前のひと塗りを取り消す (Ctrl+Z)">↩ やり直す</button>
           </section>
 
           <section class="card">
@@ -215,14 +265,14 @@
           </section>
 
           <section class="card">
-            <h2>図鑑 <span id="ency-progress" class="badge">0/5</span></h2>
+            <h2>図鑑 <span id="ency-progress" class="badge">0/32</span></h2>
             <ul id="ency" class="ency">
               <li class="empty">まだ何も発見していない…</li>
             </ul>
           </section>
 
           <section class="card">
-            <h2>アチーブメント <span id="ach-progress" class="badge">0/7</span></h2>
+            <h2>アチーブメント <span id="ach-progress" class="badge">0/12</span></h2>
             <ul id="ach" class="ach"></ul>
           </section>
 
@@ -241,6 +291,7 @@
               <option value="desert">砂漠</option>
               <option value="ruins">都市跡</option>
               <option value="wetland">湿地</option>
+              <option value="continent">大陸</option>
             </select>
             <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>
@@ -250,9 +301,66 @@
         </aside>
       </main>
 
+      <!-- M15: モバイル縦画面用の下部ツールバー。デスクトップでは常に非表示 (CSS)。
+           ツールボタンは右パネルのものと同じ data-tool/class を持つ複製で、
+           main.ts/ui.ts のツール配線は `document.querySelectorAll('button.tool')`
+           に対して汎用的に効くため、JS側の変更は不要。 -->
+      <div id="mobile-toolbar" class="mobile-toolbar">
+        <button class="tool" data-tool="food" title="栄養を撒く"><span class="ico ico-food"></span><span>エサ</span></button>
+        <button class="tool" data-tool="light" title="光を当てる"><span class="ico ico-light"></span><span>光</span></button>
+        <button class="tool" data-tool="water" title="水を引く"><span class="ico ico-water"></span><span>水</span></button>
+        <button class="tool" data-tool="drain" title="水を止める (乾かす)"><span class="ico ico-drain"></span><span>乾燥</span></button>
+        <button class="tool" data-tool="stone" title="障害物を置く"><span class="ico ico-stone"></span><span>石</span></button>
+        <button class="tool" data-tool="heat" title="温度を上げる"><span class="ico ico-heat"></span><span>加温</span></button>
+        <button class="tool" data-tool="cool" title="温度を下げる"><span class="ico ico-cool"></span><span>冷却</span></button>
+        <button class="tool" data-tool="toxin" title="毒素をまく"><span class="ico ico-toxin"></span><span>毒素</span></button>
+        <button class="tool" data-tool="erase" title="土地をならす"><span class="ico ico-erase"></span><span>消す</span></button>
+      </div>
+
       <footer class="footnote">
         制御するのではなく、条件を整え、振る舞いを引き出す。
       </footer>
+
+      <div id="day-result-modal" class="modal-overlay" hidden>
+        <div class="modal card">
+          <h2>Day <span id="dr-day">0</span> の成長</h2>
+          <img id="dr-thumb" class="dr-thumb" alt="今日の姿" />
+          <div class="dr-grid">
+            <div class="dr-item">
+              <span class="dr-lbl">探索性</span>
+              <span class="dr-val" id="dr-exploration-n">0%</span>
+              <span class="dr-delta" id="dr-exploration-delta"></span>
+            </div>
+            <div class="dr-item">
+              <span class="dr-lbl">効率性</span>
+              <span class="dr-val" id="dr-efficiency-n">0%</span>
+              <span class="dr-delta" id="dr-efficiency-delta"></span>
+            </div>
+            <div class="dr-item">
+              <span class="dr-lbl">安定性</span>
+              <span class="dr-val" id="dr-stability-n">0%</span>
+              <span class="dr-delta" id="dr-stability-delta"></span>
+            </div>
+          </div>
+          <ul id="dr-events" class="dr-events"></ul>
+          <div class="dr-actions">
+            <button id="dr-album" title="今日の姿をアルバムへ保存する">📷 アルバムへ</button>
+            <button id="dr-next" class="harvest-btn">つぎの日へ ▶</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="onboarding" class="modal-overlay onboarding-overlay" hidden>
+        <div class="modal card onboarding-card">
+          <span class="onboarding-step" id="onboarding-step-n">1/3</span>
+          <h2 id="onboarding-title"></h2>
+          <p id="onboarding-body"></p>
+          <div class="dr-actions">
+            <button id="onboarding-skip" title="オンボーディングをスキップする">スキップ</button>
+            <button id="onboarding-next" class="harvest-btn">次へ ▶</button>
+          </div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

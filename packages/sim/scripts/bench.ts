@@ -145,5 +145,56 @@ function runSmoke(): void {
   console.log('OK');
 }
 
+// M14 事前計測: 「大陸」ステージ (拠点20〜40、FIELD 96→192/256) を導入して
+// 良いか判断するための tick コスト曲線。worldSize は既存ステージと同じ
+// コロニー密度を保つよう field 比率に合わせて拡大する (「解像度だけ上げる」
+// のではなく「本当に広い世界」を再現するため)。
+function setupWorldScale(seed: number, field: number, colonyCount: number) {
+  const worldSize = Math.round(100 * (field / FIELD));
+  const rng = createRNG(seed);
+  const env = new GridEnvironment({ worldSize, fieldSize: field });
+  const sources: { x: number; y: number }[] = [];
+  for (let i = 0; i < colonyCount; i++) {
+    const a = (i / colonyCount) * Math.PI * 2;
+    const r = worldSize * 0.35;
+    sources.push({ x: worldSize / 2 + Math.cos(a) * r, y: worldSize / 2 + Math.sin(a) * r });
+  }
+  for (const s of sources) env.placeFood({ x: s.x, y: s.y }, worldSize * 0.05, 1.0);
+  const act = new ActivityField(worldSize, field);
+  const bio = new BiomassField(worldSize, field);
+  const state = createInitialState(seed, worldSize);
+  for (const p of sources) { clearAroundSource(env, p, 4); seedSource(state, p, 6); }
+  const bus = new EventBus();
+  return { state, env, act, bio, rng, bus };
+}
+
+function runWorldScale(): void {
+  const configs: { field: number; colonies: number }[] = [
+    { field: 96, colonies: 3 },
+    { field: 96, colonies: 20 },
+    { field: 96, colonies: 40 },
+    { field: 192, colonies: 20 },
+    { field: 192, colonies: 40 },
+    { field: 256, colonies: 40 },
+  ];
+  const TICKS = 800;
+  console.log('field colonies | worldSize |  nodes  edges | ms/tick | 実効速度目安 (16ms予算)');
+  for (const cfg of configs) {
+    const ctx = setupWorldScale(7, cfg.field, cfg.colonies);
+    const worldSize = Math.round(100 * (cfg.field / FIELD));
+    const acc = zeroTimes();
+    const t0 = performance.now();
+    for (let t = 0; t < TICKS; t++) stepWithTiming(ctx, DEFAULT_PARAMS, acc);
+    const elapsed = performance.now() - t0;
+    const perTick = elapsed / TICKS;
+    const effSpeed = 16 / perTick;
+    console.log(
+      `${String(cfg.field).padStart(5)} ${String(cfg.colonies).padStart(8)} | ${String(worldSize).padStart(9)} | ` +
+      `${String(ctx.state.nodes.length).padStart(6)} ${String(ctx.state.edges.length).padStart(6)} | ${fmt(perTick)} | ×${effSpeed.toFixed(1)}`,
+    );
+  }
+}
+
 if (process.argv.includes('--smoke')) runSmoke();
+else if (process.argv.includes('--worldscale')) runWorldScale();
 else runReport(1500, 100);

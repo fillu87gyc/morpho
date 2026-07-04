@@ -47,6 +47,11 @@ export interface SimParams {
   gradientBias: number;
   noiseAmount: number;
 
+  // ── 温度 / 毒素 (M10) ────────────────
+  tempOptimal: number;    // 最適温度 (GridEnvironment の温度場と同じ 0..1 目安のスケール)
+  tempTolerance: number;  // この範囲内なら成長への影響はほぼない。外れるほど活動の回復と成長確率が落ちる
+  toxinPenalty: number;   // 毒素濃度が activity と成長候補の評価に与えるペナルティの重み (通過は妨げない)
+
   // ── Activity Field ─────────────────
   activityDeposit: number;
   activityFieldDecay: number;
@@ -102,6 +107,12 @@ export const DEFAULT_PARAMS: SimParams = {
   obstaclePenalty: 2.0,
   gradientBias: 0.6,
   noiseAmount: 0.1,
+
+  // GridEnvironment の既定 baseTemperature (0.5) と揃えてあるので、
+  // ツールで温度を動かさない限り成長には影響しない。
+  tempOptimal: 0.5,
+  tempTolerance: 0.35,
+  toxinPenalty: 0.6,
 
   activityDeposit: 0.15,
   activityFieldDecay: 0.04,

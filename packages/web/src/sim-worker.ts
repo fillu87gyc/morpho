@@ -49,6 +49,11 @@ const EFFECTIVE_SPEED_WINDOW_MS = 500;
 // 数フレーム分にとどめ、タブ復帰直後などの暴走を防ぐ。
 const scheduler = new TickScheduler({ budgetMs: TICK_INTERVAL_MS, maxDebtTicks: 96 });
 
+// M9: デイループの「委ねる」フェーズ。null の間は従来通り (speed 分だけ回し続ける)。
+// 値がある間は、その tick に到達したら steps を切り詰めて越えないようにし、
+// 到達した時点で自動的に speed=0 へ止めて 'dayCompleted' を1回だけ通知する。
+let dayTarget: number | null = null;
+
 // M8 P2: 派生計算 (traits/individuality/colonyNetworks/balance/world/quests) は
 // 毎tick変わるものではないので、盤面が変わった直後 (reset/apply) だけ
 // 即時再計算し、それ以外は 250ms 毎に間引く。state/env/bio 等の「描画に
@@ -73,8 +78,20 @@ ctx.onmessage = (e) => {
       scheduler.setMaxDebtTicks(fastForward ? Math.round(96 * FAST_FORWARD_RATIO) : 96);
       break;
     }
+    case 'runUntilTick': {
+      dayTarget = msg.target;
+      // 前日の余り debt を持ち越さない (day-loop.ts 参照)。
+      // target=null (日境界キャップ解除) はモード切替の後始末なので対象外。
+      if (msg.target !== null) scheduler.reset();
+      break;
+    }
+    case 'beginStroke': game.beginStroke(); break;
+    case 'endStroke': game.endStroke(); break;
+    case 'undoStroke': game.undoStroke(); dirty = true; forceDerived = true; break;
   }
 };
+
+let dayCompletedPending = false;
 
 function loop(): void {
   if (game.speed > 0) {
@@ -82,7 +99,9 @@ function loop(): void {
     // 1回あたりに積む debt もその比率だけ大きくする。そうしないと
     // 「呼ばれる頻度が減っただけ」で秒間の総 tick 数がむしろ落ちてしまう。
     const demand = fastForward ? game.speed * FAST_FORWARD_RATIO : game.speed;
-    const steps = scheduler.planSteps(demand);
+    let steps = scheduler.planSteps(demand);
+    // M9: dayTarget を越えて進めない (日境界ちょうどで止める)。
+    if (dayTarget !== null) steps = Math.min(steps, Math.max(0, dayTarget - game.state.tick));
     if (steps > 0) {
       const t0 = performance.now();
       game.tick(steps);
@@ -91,6 +110,13 @@ function loop(): void {
       lastTickMs = elapsed / steps;
       ticksInWindow += steps;
       dirty = true;
+    }
+    if (dayTarget !== null && game.state.tick >= dayTarget) {
+      dayTarget = null;
+      game.setSpeed(0);
+      dayCompletedPending = true;
+      dirty = true;
+      forceDerived = true;
     }
   }
   const now = performance.now();
@@ -127,6 +153,13 @@ function loop(): void {
       perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed },
     }, [nodesBuf.buffer, edgesBuf.buffer]);
     dirty = false;
+  }
+  // M9: 最終 tick を含むスナップショットを送った直後に通知する
+  // (先に通知すると、メインスレッドがまだ古い日のスナップショットで
+  // 結果パネルを組み立ててしまう)。
+  if (dayCompletedPending) {
+    dayCompletedPending = false;
+    ctx.postMessage({ type: 'dayCompleted' });
   }
   setTimeout(loop, loopIntervalMs);
 }

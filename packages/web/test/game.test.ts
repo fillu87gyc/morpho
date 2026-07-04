@@ -67,18 +67,21 @@ describe('Game', () => {
     expect(g.snapshot().state.tick).toBe(before);
   });
 
-  it('day は state.tick / 40 切り捨て、日数が進むにつれ era 名が変わる', () => {
+  it('day は state.tick / 40 切り捨て、時代は条件達成 (拠点接続等) に応じて進む (M14)', () => {
     const g = new Game(11);
     g.setSpeed(1);
-    const eras = new Set<string>();
+    const eraNames = new Set<string>();
     for (let i = 0; i < 400; i++) {
       g.tick();
-      eras.add(g.snapshot().era);
+      eraNames.add(g.snapshot().era.name);
     }
     expect(g.snapshot().day).toBe(10);
-    expect(g.snapshot().era).toBe('拡散期');
-    // 胞子期 (day<10) は少なくとも一度は観測されているはず。
-    expect(eras.has('胞子期')).toBe(true);
+    // 起動直後の胞子期は必ず観測されているはず。
+    expect(eraNames.has('胞子期')).toBe(true);
+    // 400 tick も経てば、最初の拠点接続 (拡散期) 以上には進んでいるはず。
+    expect(['拡散期', '変形体期', '成熟期']).toContain(g.snapshot().era.name);
+    expect(g.snapshot().era.progress).toBeGreaterThanOrEqual(0);
+    expect(g.snapshot().era.progress).toBeLessThanOrEqual(1);
   });
 
   it('food ツールを適用すると拠点総数が増え、イベントログに記録される', () => {
@@ -246,5 +249,67 @@ describe('Game', () => {
     for (let i = 0; i < 300; i++) g.tick();
     const after = sumNutrients();
     expect(after).toBeLessThan(before);
+  });
+
+  // M10: 温度・毒素ツールと Undo。
+  it('heat/cool ツールは温度フィールドを上げ下げする', () => {
+    const g = new Game(5);
+    const pos = { x: 40, y: 40 };
+    const at = () => {
+      const s = g.fieldSize / g.worldSize;
+      const idx = Math.floor(pos.y * s) * g.fieldSize + Math.floor(pos.x * s);
+      return g.env.temperature.data[idx] ?? 0;
+    };
+    const base = at();
+    g.setTool('heat');
+    g.setBrush(4);
+    g.apply(pos);
+    expect(at()).toBeGreaterThan(base);
+
+    g.reset(5);
+    g.setTool('cool');
+    g.setBrush(4);
+    g.apply(pos);
+    expect(at()).toBeLessThan(base);
+  });
+
+  it('toxin ツールは毒素フィールドに値を乗せ、環境バランスの toxin に反映される', () => {
+    const g = new Game(5);
+    g.setTool('toxin');
+    g.setBrush(6);
+    g.apply({ x: 50, y: 50 });
+    expect(g.snapshot().balance.toxin).toBeGreaterThan(0);
+  });
+
+  it('drain ツールは湿度フィールドを baseMoisture より下げる', () => {
+    const g = new Game(5);
+    const pos = { x: 45, y: 45 };
+    const s = g.fieldSize / g.worldSize;
+    const idx = Math.floor(pos.y * s) * g.fieldSize + Math.floor(pos.x * s);
+    const before = g.env.moisture.data[idx] ?? 0;
+    g.setTool('drain');
+    g.setBrush(6);
+    g.apply(pos);
+    expect(g.env.moisture.data[idx]).toBeLessThan(before);
+  });
+
+  it('やり直す (undo) は直前のひと塗りを取り消す', () => {
+    const g = new Game(5);
+    const pos = { x: 60, y: 60 };
+    g.setTool('stone');
+    g.setBrush(5);
+    g.beginStroke();
+    g.apply(pos);
+    g.endStroke();
+    expect(obstacleAt(g, pos)).toBeGreaterThan(0);
+
+    g.undoStroke();
+    expect(obstacleAt(g, pos)).toBe(0);
+  });
+
+  it('何もしていない状態で undo しても安全 (no-op)', () => {
+    const g = new Game(5);
+    expect(() => g.undoStroke()).not.toThrow();
+    expect(g.canUndo).toBe(false);
   });
 });

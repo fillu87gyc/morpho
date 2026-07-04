@@ -79,4 +79,14 @@ describe('TickScheduler', () => {
     // 100ms 予算なら 2ms/tick でも 50 tick 程度は収まり、16ms 予算のときより多く進む。
     expect(after).toBeGreaterThan(before);
   });
+
+  it('M9: reset() で借金を即座に0へ戻せる (日境界での持ち越し防止)', () => {
+    const s = new TickScheduler({ budgetMs: 1, maxDebtTicks: 50 });
+    s.planSteps(24);
+    s.report(1, 10); // 予算が狭いので大半が debt として残る
+    expect(s.pendingDebt).toBeGreaterThan(0);
+
+    s.reset();
+    expect(s.pendingDebt).toBe(0);
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { dailyChallengeFor, dateKey, DailyChallengeTracker } from '../src/challenges.js';
+import { allChallenges, dateKey, DailyChallengeTracker } from '../src/challenges.js';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -17,16 +17,9 @@ function setGlobalStorage(s: StorageLike | undefined): void {
   else delete g.localStorage;
 }
 
-describe('dailyChallengeFor', () => {
-  it('同じ日付なら同じチャレンジを返す (決定的)', () => {
-    const d = new Date(2026, 6, 3);
-    expect(dailyChallengeFor(d).kind).toBe(dailyChallengeFor(new Date(2026, 6, 3)).kind);
-  });
-
-  it('日付が違えば異なるチャレンジになりうる', () => {
-    const kinds = new Set<string>();
-    for (let day = 1; day <= 30; day++) kinds.add(dailyChallengeFor(new Date(2026, 0, day)).kind);
-    expect(kinds.size).toBeGreaterThan(1);
+describe('allChallenges', () => {
+  it('常に3種を返す', () => {
+    expect(allChallenges().map((c) => c.kind)).toEqual(['fastest', 'cheapest', 'clean']);
   });
 });
 
@@ -36,37 +29,67 @@ describe('dateKey', () => {
   });
 });
 
-describe('DailyChallengeTracker', () => {
+describe('DailyChallengeTracker (M11: 種別ごとの常時挑戦)', () => {
   beforeEach(() => { setGlobalStorage(mockStorage()); });
 
-  it('未達成の日は isCompletedToday が false', () => {
+  it('未達成の種は isCompleted が false', () => {
     const t = new DailyChallengeTracker();
-    expect(t.isCompletedToday(new Date(2026, 6, 3))).toBe(false);
+    expect(t.isCompleted('fastest')).toBe(false);
+    expect(t.completedCount()).toBe(0);
   });
 
-  it('complete すると同じ日は isCompletedToday が true になる', () => {
+  it('complete すると、その種だけ isCompleted が true になる', () => {
     const t = new DailyChallengeTracker();
-    const d = new Date(2026, 6, 3);
-    t.complete(d, 'fastest', 12, 42);
-    expect(t.isCompletedToday(d)).toBe(true);
-    expect(t.todayRecord(d)?.kind).toBe('fastest');
+    t.complete('fastest', 12, 42);
+    expect(t.isCompleted('fastest')).toBe(true);
+    expect(t.isCompleted('cheapest')).toBe(false);
+    expect(t.recordOf('fastest')?.day).toBe(12);
     expect(t.completedCount()).toBe(1);
   });
 
-  it('同じ日に2回 complete しても上書きされない (1日1回)', () => {
+  it('同じ種を2回 complete しても上書きされない (初回のみ記録)', () => {
     const t = new DailyChallengeTracker();
-    const d = new Date(2026, 6, 3);
-    t.complete(d, 'fastest', 12, 42);
+    t.complete('fastest', 12, 42);
     const v1 = t.version;
-    t.complete(d, 'cheapest', 3, 99);
+    t.complete('fastest', 3, 99);
     expect(t.version).toBe(v1);
-    expect(t.todayRecord(d)?.kind).toBe('fastest');
+    expect(t.recordOf('fastest')?.day).toBe(12);
+  });
+
+  it('3種すべて達成できる (日付をまたぐ制限がない)', () => {
+    const t = new DailyChallengeTracker();
+    t.complete('fastest', 10, 1);
+    t.complete('cheapest', 20, 1);
+    t.complete('clean', 30, 1);
+    expect(t.completedCount()).toBe(3);
   });
 
   it('localStorage に永続化され、再生成しても読み込める', () => {
     const t1 = new DailyChallengeTracker();
-    t1.complete(new Date(2026, 6, 3), 'clean', 20, 7);
+    t1.complete('clean', 20, 7);
     const t2 = new DailyChallengeTracker();
     expect(t2.completedCount()).toBe(1);
+    expect(t2.isCompleted('clean')).toBe(true);
+  });
+
+  it('v1 (日付ごとの記録) から v2 (種別ごとの記録) へマイグレーションする', () => {
+    const raw = [
+      { date: '2026-07-01', kind: 'fastest', completedAt: '2026-07-01T00:00:00.000Z', day: 10, seed: 1 },
+      { date: '2026-07-02', kind: 'cheapest', completedAt: '2026-07-02T00:00:00.000Z', day: 20, seed: 2 },
+    ];
+    localStorage.setItem('morpho.challenges.v1', JSON.stringify(raw));
+    const t = new DailyChallengeTracker();
+    expect(t.isCompleted('fastest')).toBe(true);
+    expect(t.isCompleted('cheapest')).toBe(true);
+    expect(t.isCompleted('clean')).toBe(false);
+    expect(t.completedCount()).toBe(2);
+  });
+
+  it('localStorage が使えなくてもクラッシュしない', () => {
+    setGlobalStorage(undefined);
+    expect(() => {
+      const t = new DailyChallengeTracker();
+      t.complete('fastest', 1, 1);
+    }).not.toThrow();
   });
 });

@@ -4,7 +4,9 @@
 import type { Individuality } from '@morpho/sim';
 
 export type AchievementId =
-  | 'spreader' | 'connector' | 'adapter' | 'pillar' | 'collector' | 'wanderer' | 'challenger';
+  | 'spreader' | 'connector' | 'adapter' | 'pillar' | 'collector' | 'wanderer' | 'challenger'
+  // M13: M9〜M12 の新要素に対応する実績を追加。
+  | 'week-watcher' | 'detox' | 'star-reader' | 'wealthy' | 'undo-master';
 
 export interface AchievementDef {
   id: AchievementId;
@@ -20,6 +22,11 @@ export const ACHIEVEMENT_DEFS: AchievementDef[] = [
   { id: 'collector', label: '博物学者', description: '図鑑をすべて集める' },
   { id: 'wanderer', label: '旅する者', description: '3つ以上のステージを訪れる' },
   { id: 'challenger', label: '挑戦せし者', description: 'デイリーチャレンジを1つ達成する' },
+  { id: 'week-watcher', label: '七日の見守り', description: 'デイループで7日ぶんの記録を残す' },
+  { id: 'detox', label: '解毒の民', description: '毒素の多い環境で全拠点を接続する' },
+  { id: 'star-reader', label: '星読み', description: '★5評価の個体を図鑑に登録する' },
+  { id: 'wealthy', label: '経済の民', description: '通貨の合計を200以上貯める' },
+  { id: 'undo-master', label: 'やり直し上手', description: '「やり直す」を5回使う' },
 ];
 
 export interface AchievementCheckInput {
@@ -30,6 +37,11 @@ export interface AchievementCheckInput {
   encyclopediaTotal: number;
   stagesPlayed: number;
   dailyChallengesCompleted: number;
+  dayRecordsCount: number; // M9 DayReport に記録された日数
+  toxin: number; // EnvBalance.toxin [0,1]
+  hasFiveStarEntry: boolean; // 図鑑に★5評価の個体が登録されているか
+  walletTotal: number; // 3通貨の合計残高
+  undoUsedCount: number; // 「やり直す」を使った回数
 }
 
 function isSatisfied(id: AchievementId, i: AchievementCheckInput): boolean {
@@ -41,6 +53,11 @@ function isSatisfied(id: AchievementId, i: AchievementCheckInput): boolean {
     case 'collector': return i.encyclopediaTotal > 0 && i.encyclopediaCount >= i.encyclopediaTotal;
     case 'wanderer': return i.stagesPlayed >= 3;
     case 'challenger': return i.dailyChallengesCompleted >= 1;
+    case 'week-watcher': return i.dayRecordsCount >= 7;
+    case 'detox': return i.connectProgress >= 1 && i.toxin > 0.3;
+    case 'star-reader': return i.hasFiveStarEntry;
+    case 'wealthy': return i.walletTotal >= 200;
+    case 'undo-master': return i.undoUsedCount >= 5;
   }
 }
 
@@ -85,16 +102,18 @@ export class Achievements {
   isUnlocked(id: AchievementId): boolean { return this.unlocked.has(id); }
 
   // 毎フレーム呼ばれる。未解除の実績だけ条件判定し、満たしたものを記録する。
-  check(input: AchievementCheckInput, seed: number, day: number): void {
-    let changed = false;
+  // 戻り値: この呼び出しで新たに解除された実績 ID (呼び出し側の報酬付与用、M11)。
+  check(input: AchievementCheckInput, seed: number, day: number): AchievementId[] {
+    const newlyUnlocked: AchievementId[] = [];
     for (const def of ACHIEVEMENT_DEFS) {
       if (this.unlocked.has(def.id)) continue;
       if (!isSatisfied(def.id, input)) continue;
       this.unlocked.set(def.id, { id: def.id, unlockedAt: new Date().toISOString(), seed, day });
-      changed = true;
+      newlyUnlocked.push(def.id);
     }
-    if (!changed) return;
+    if (newlyUnlocked.length === 0) return newlyUnlocked;
     this.version++;
     this.save();
+    return newlyUnlocked;
   }
 }

@@ -6,10 +6,13 @@ import type { Tool, StageId } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
 import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
-import { dailyChallengeFor, type DailyChallengeTracker } from './challenges.js';
+import { allChallenges, type DailyChallengeTracker } from './challenges.js';
 import type { Scoreboard } from './scoreboard.js';
 import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 import type { Album } from './album.js';
+import { allCatalogueEntries } from './catalogue.js';
+import type { CatalogueThumbs } from './catalogue-thumbs.js';
+import { starsOf } from './trait-labels.js';
 
 type El = HTMLElement;
 
@@ -35,6 +38,7 @@ export class Ui {
   // header
   private day = el('day');
   private era = el('era');
+  private eraRing = el('era-ring');
   private stageName = el('stage-name');
   // メインクエスト (固定2本) + M6 ワールド目標 (コロニー統合)
   private qConnectBar = el('q-connect-bar');
@@ -43,11 +47,13 @@ export class Ui {
   private qExploreN = el('q-explore-n');
   private qUniteBar = el('q-unite-bar');
   private qUniteN = el('q-unite-n');
-  // デイリーチャレンジ
-  private chalTitle = el('chal-title');
-  private chalDesc = el('chal-desc');
-  private chalGoal = el('chal-goal');
-  private chalStatus = el('chal-status');
+  // M14: 大陸ステージのみ表示するクエスト
+  private qContinentItem = el('q-continent-item');
+  private qContinentBar = el('q-continent-bar');
+  private qContinentN = el('q-continent-n');
+  // M11: チャレンジ一覧 (3種常時表示)
+  private chalList = el('chal-list');
+  private chalProgress = el('chal-progress');
   // world info
   private wArea = el('w-area');
   private wMass = el('w-mass');
@@ -126,6 +132,7 @@ export class Ui {
       scoreboard: Scoreboard;
       lineage: Lineage;
       album: Album;
+      catalogueThumbs: CatalogueThumbs;
     },
     private hooks: {
       onSpeed: (s: number) => void;
@@ -139,6 +146,7 @@ export class Ui {
       onScreenshot: () => void;
       onToggleAmbient: () => void;
       onToggleFastForward: () => void;
+      onStartFromLineage: (id: string) => void;
     },
   ) {
     this.harvestBtn.addEventListener('click', () => this.hooks.onHarvestSeed());
@@ -186,13 +194,16 @@ export class Ui {
       this.hooks.onStageChange(stageSelect.value as StageId);
     });
 
-    document.querySelector<HTMLButtonElement>('button.tool[data-tool="food"]')?.classList.add('active');
+    // M15: モバイル下部ツールバーの複製ボタンも含めて全件に active を付ける。
+    document.querySelectorAll<HTMLButtonElement>('button.tool[data-tool="food"]').forEach((b) => b.classList.add('active'));
   }
 
   render(): void {
     const s = this.game.snapshot();
     setText(this.day, String(s.day));
-    setText(this.era, s.era);
+    setText(this.era, s.era.name);
+    this.eraRing.style.setProperty('--era-progress', String(s.era.progress));
+    this.eraRing.title = `次の時代まで ${pct(s.era.progress)}`;
     setText(this.stageName, s.stage.name);
     this.stageName.title = s.stage.description;
     if (this.lastStageId !== s.stage.id) {
@@ -217,6 +228,17 @@ export class Ui {
       setBar(this.qUniteBar, uniteQuest.progress);
       setText(this.qUniteN, pct(uniteQuest.progress));
     }
+    // M14: 大陸ステージのときだけカードを出す (他ステージでは landCoverage の
+    // 意味が薄いため隠す)。
+    const isContinent = s.stage.id === 'continent';
+    if (this.qContinentItem.hidden !== !isContinent) this.qContinentItem.hidden = !isContinent;
+    if (isContinent) {
+      const continentQuest = s.quests.find((q) => q.id === 'continent-nutrient');
+      if (continentQuest) {
+        setBar(this.qContinentBar, continentQuest.progress);
+        setText(this.qContinentN, pct(continentQuest.progress));
+      }
+    }
 
     // 系統樹: 採取できる日数に達したかどうかだけ見て、変わったときだけ書き換える。
     const harvestable = s.day >= HARVEST_MIN_DAY;
@@ -227,18 +249,37 @@ export class Ui {
     }
     setText(this.lineageGen, `現在 ${this.trackers.lineage.nextGeneration()}代目`);
 
-    // デイリーチャレンジ (日付が変わるか達成したときだけ書き換える)
-    const today = new Date();
-    const chal = dailyChallengeFor(today);
-    const chalDone = this.trackers.challenges.isCompletedToday(today);
-    const chalKey = `${chal.kind}:${chalDone}`;
+    // M11: チャレンジ一覧 (3種常時表示、達成状況が変わったときだけ書き換える)
+    const chalKey = allChallenges().map((c) => `${c.kind}:${this.trackers.challenges.isCompleted(c.kind)}`).join(',');
     if (this.lastChalKey !== chalKey) {
       this.lastChalKey = chalKey;
-      setText(this.chalTitle, chal.title);
-      setText(this.chalDesc, chal.description);
-      setText(this.chalGoal, chal.goal);
-      setText(this.chalStatus, chalDone ? '本日の挑戦、達成済み ✓' : '挑戦中…');
-      this.chalStatus.classList.toggle('done', chalDone);
+      const completed = allChallenges().filter((c) => this.trackers.challenges.isCompleted(c.kind)).length;
+      setText(this.chalProgress, `${completed}/3`);
+      this.chalList.innerHTML = '';
+      for (const chal of allChallenges()) {
+        const done = this.trackers.challenges.isCompleted(chal.kind);
+        const li = document.createElement('li');
+        const title = document.createElement('div');
+        title.className = 'challenge-title';
+        const titleText = document.createElement('span');
+        titleText.textContent = chal.title;
+        title.appendChild(titleText);
+        const desc = document.createElement('div');
+        desc.className = 'challenge-desc';
+        desc.textContent = chal.description;
+        const goal = document.createElement('div');
+        goal.className = 'challenge-goal';
+        goal.textContent = chal.goal;
+        const status = document.createElement('span');
+        status.className = 'challenge-status';
+        status.classList.toggle('done', done);
+        status.textContent = done ? '達成済み ✓' : '挑戦中…';
+        li.appendChild(title);
+        li.appendChild(desc);
+        li.appendChild(goal);
+        li.appendChild(status);
+        this.chalList.appendChild(li);
+      }
     }
 
     // ワールド情報
@@ -315,30 +356,48 @@ export class Ui {
       this.lastEvoLen = evo.length;
     }
 
-    // 図鑑 (バージョンが変わった = 新規発見 or 更新があったときだけ書き換える)
+    // M13: 図鑑グリッド (バージョンが変わった = 新規発見・更新・お気に入り変更が
+    // あったときだけ書き換える)。32枠すべてを固定順で並べ、未発見は「?」ロックにする。
     if (this.lastEncyVersion !== this.trackers.encyclopedia.version) {
       this.lastEncyVersion = this.trackers.encyclopedia.version;
-      const entries = this.trackers.encyclopedia.list();
-      setText(this.encyProgress, `${entries.length}/5`);
+      const discovered = this.trackers.encyclopedia.list();
+      setText(this.encyProgress, `${discovered.length}/${allCatalogueEntries().length}`);
       this.ency.innerHTML = '';
-      if (entries.length === 0) {
+      for (const meta of allCatalogueEntries()) {
+        const entry = this.trackers.encyclopedia.entryOf(meta.id);
         const li = document.createElement('li');
-        li.className = 'empty';
-        li.textContent = 'まだ何も発見していない…';
-        this.ency.appendChild(li);
-      } else {
-        for (const e of entries) {
-          const li = document.createElement('li');
-          const label = document.createElement('span');
-          label.className = 'label';
-          label.textContent = e.label;
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          meta.textContent = `Day ${e.day}`;
-          li.appendChild(label);
-          li.appendChild(meta);
-          this.ency.appendChild(li);
+        li.className = entry ? 'ency-slot discovered' : 'ency-slot locked';
+        if (entry?.favorite) li.classList.add('favorite');
+
+        const thumbWrap = document.createElement('div');
+        thumbWrap.className = 'ency-thumb';
+        const url = entry ? this.trackers.catalogueThumbs.urlOf(entry.id) : undefined;
+        if (entry && url) {
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = entry.name;
+          thumbWrap.appendChild(img);
+        } else if (!entry) {
+          thumbWrap.textContent = '?';
         }
+        if (entry) {
+          const star = document.createElement('span');
+          star.className = 'ency-star';
+          star.textContent = '★'.repeat(starsOf(entry.individuality));
+          thumbWrap.appendChild(star);
+        }
+        li.appendChild(thumbWrap);
+
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = entry ? entry.name : '？？？';
+        li.appendChild(label);
+
+        if (entry) {
+          li.title = `${entry.description}\n発見: Day ${entry.day}${entry.favorite ? ' ・ ♥ お気に入り' : ''}`;
+          li.addEventListener('click', () => this.trackers.encyclopedia.toggleFavorite(entry.id));
+        }
+        this.ency.appendChild(li);
       }
     }
 
@@ -347,19 +406,21 @@ export class Ui {
       this.lastAchVersion = this.trackers.achievements.version;
       const unlockedCount = ACHIEVEMENT_DEFS.filter((d) => this.trackers.achievements.isUnlocked(d.id)).length;
       setText(this.achProgress, `${unlockedCount}/${ACHIEVEMENT_DEFS.length}`);
+      // M13: バッジグリッドへ (解除済み=アイコン、未解除=「?」ロック)。
       this.ach.innerHTML = '';
       for (const def of ACHIEVEMENT_DEFS) {
         const status = this.trackers.achievements.statusOf(def.id);
         const li = document.createElement('li');
-        li.className = status ? 'unlocked' : 'locked';
+        li.className = status ? 'ach-badge unlocked' : 'ach-badge locked';
+        const icon = document.createElement('div');
+        icon.className = 'ach-icon';
+        icon.textContent = status ? '🏅' : '?';
         const label = document.createElement('span');
         label.className = 'label';
-        label.textContent = (status ? '✓ ' : '🔒 ') + def.label;
-        const meta = document.createElement('span');
-        meta.className = 'meta';
-        meta.textContent = status ? `Day ${status.day}` : def.description;
+        label.textContent = def.label;
+        li.title = status ? `${def.description}\n解除: Day ${status.day}` : def.description;
+        li.appendChild(icon);
         li.appendChild(label);
-        li.appendChild(meta);
         this.ach.appendChild(li);
       }
     }
@@ -391,28 +452,46 @@ export class Ui {
       }
     }
 
-    // 系統樹 (バージョンが変わった = 新規採取があったときだけ書き換える)
+    // M13: 系統樹を分岐ツリーへ (世代ごとの行に並べる simple tree)。
+    // バージョンが変わった = 新規採取/起点変更があったときだけ書き換える。
     if (this.lastLineageVersion !== this.trackers.lineage.version) {
       this.lastLineageVersion = this.trackers.lineage.version;
       const entries = this.trackers.lineage.list();
       this.lineageList.innerHTML = '';
       if (entries.length === 0) {
-        const li = document.createElement('li');
-        li.className = 'empty';
-        li.textContent = 'まだ種を採取していない…';
-        this.lineageList.appendChild(li);
+        const p = document.createElement('p');
+        p.className = 'empty';
+        p.textContent = 'まだ種を採取していない…';
+        this.lineageList.appendChild(p);
       } else {
-        for (const e of [...entries].reverse()) {
-          const li = document.createElement('li');
-          const label = document.createElement('span');
-          label.className = 'label';
-          label.textContent = `${e.generation}代目 — ${e.typeLabel}`;
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          meta.textContent = `Day ${e.day} ・ ${e.stageName}`;
-          li.appendChild(label);
-          li.appendChild(meta);
-          this.lineageList.appendChild(li);
+        const activeId = this.trackers.lineage.activeAncestor()?.id;
+        const byGeneration = new Map<number, typeof entries>();
+        for (const e of entries) {
+          const row = byGeneration.get(e.generation);
+          if (row) row.push(e); else byGeneration.set(e.generation, [e]);
+        }
+        for (const gen of [...byGeneration.keys()].sort((a, b) => a - b)) {
+          const row = document.createElement('div');
+          row.className = 'lineage-row';
+          for (const e of byGeneration.get(gen)!) {
+            const node = document.createElement('div');
+            node.className = e.id === activeId ? 'lineage-node active' : 'lineage-node';
+            const label = document.createElement('div');
+            label.className = 'label';
+            label.textContent = `${e.generation}代目 — ${e.typeLabel}`;
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = `Day ${e.day} ・ ${e.stageName}`;
+            const startBtn = document.createElement('button');
+            startBtn.className = 'lineage-start-btn';
+            startBtn.textContent = 'この子から始める';
+            startBtn.addEventListener('click', () => this.hooks.onStartFromLineage(e.id));
+            node.appendChild(label);
+            node.appendChild(meta);
+            node.appendChild(startBtn);
+            row.appendChild(node);
+          }
+          this.lineageList.appendChild(row);
         }
       }
     }

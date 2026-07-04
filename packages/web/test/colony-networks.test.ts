@@ -56,6 +56,16 @@ describe('computeColonyNetworks', () => {
     expect(ids.size).toBe(1);
   });
 
+  it('M12: centroid はそのネットワーク全体のノード位置の重心になる', () => {
+    const s = state(
+      [node(0, posA, 'source'), node(1, { x: 40, y: 30 }, 'relay')],
+      [edge(0, 0, 1)],
+    );
+    const result = computeColonyNetworks(s, [posA]);
+    // (30,30) と (40,30) の重心 = (35, 30)
+    expect(result.markers[0]!.centroid).toEqual({ x: 35, y: 30 });
+  });
+
   it('networkId はソースの id に依らず入力ごとに決定的 (小さい id 側の root に揃う)', () => {
     const s1 = state(
       [node(0, posA, 'source'), node(1, posB, 'source'), node(2, { x: 50, y: 30 }, 'relay')],

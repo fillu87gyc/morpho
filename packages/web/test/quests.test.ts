@@ -74,4 +74,23 @@ describe('computeQuests', () => {
     expect(unite.progress).toBe(1);
     expect(unite.done).toBe(true);
   });
+
+  it('continent-nutrient: landCoverage を省略すると進捗0', () => {
+    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0) });
+    const continentQuest = quests.find((q) => q.id === 'continent-nutrient')!;
+    expect(continentQuest.progress).toBe(0);
+    expect(continentQuest.done).toBe(false);
+  });
+
+  it('continent-nutrient: landCoverage がそのまま進捗になる', () => {
+    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0), landCoverage: 0.68 });
+    const continentQuest = quests.find((q) => q.id === 'continent-nutrient')!;
+    expect(continentQuest.progress).toBeCloseTo(0.68, 5);
+  });
+
+  it('continent-nutrient: landCoverage が1に達すると完了', () => {
+    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0), landCoverage: 1 });
+    const continentQuest = quests.find((q) => q.id === 'continent-nutrient')!;
+    expect(continentQuest.done).toBe(true);
+  });
 });

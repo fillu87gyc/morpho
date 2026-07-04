@@ -77,6 +77,9 @@ function growFromTip(
   const tipBio = bioField.sample(tip.pos);
   let bestScore = -Infinity, bestCtx: GrowthContext | null = null, bestEnd: Vec2 | null = null;
   let rejected = 0;
+  // M12: 障害物で棄却した候補が1つでもあり、それでも別方向で成長に成功したら
+  // 「障害物を迂回」イベントを立てる (最近の出来事の語彙充実)。
+  let obstacleRejected = 0;
 
   for (let i = 0; i < params.candidateCount; i++) {
     const a = (rng.next() - 0.5) * spread * 2;
@@ -90,15 +93,18 @@ function growFromTip(
       rejected++; continue;
     }
     const ec = env.sampleGrowthContext(end);
-    if (ec.obstacle > 0.7) { rejected++; continue; }
+    if (ec.obstacle > 0.7) { rejected++; obstacleRejected++; continue; }
     // 候補先と現在地点の biomass 差。正なら「膜が既に滲んでいる方向」、
     // すなわち隣の枝と肩を並べて前進する方向。これが「面」感の鍵。
     // 負側はクランプ: 前線が新しい領域に踏み出すのを抑え込まないため。
     const endBio = bioField.sample(end);
     const biomassPull = Math.max(0, endBio - tipBio) * params.wBiomassGradient;
+    // M10: 毒素は obstacle と違い通過を妨げない (reject しない) — スコアの
+    // ペナルティとしてのみ効くので、「避けたくなるが通れる」を作れる。
     const score =
       ec.nutrients * params.nutrientBias + ec.moisture * params.moistureBias -
-      ec.brightness * params.brightnessPenalty - ec.obstacle * params.obstaclePenalty +
+      ec.brightness * params.brightnessPenalty - ec.obstacle * params.obstaclePenalty -
+      ec.toxin * params.toxinPenalty +
       (dir.x * ec.preferredDirection.x + dir.y * ec.preferredDirection.y) * params.gradientBias +
       biomassPull +
       rng.next() * params.noiseAmount;
@@ -130,6 +136,7 @@ function growFromTip(
         ns?.add(mt.id); idx.neighbors.get(mt.id)?.add(tip.id);
         idx.adjacency.get(tip.id)?.push(e); idx.adjacency.get(mt.id)?.push(e);
         bus.emit({ type: 'LoopCreated', tick: state.tick, nodeIds: [tip.id, mt.id] });
+        if (obstacleRejected > 0) bus.emit({ type: 'ObstacleAvoided', tick: state.tick, nodeId: mt.id, pos: bestEnd });
         if (parentEdge) parentEdge.stress *= 0.5;
         return true;
       }
@@ -157,6 +164,7 @@ function growFromTip(
   idx.neighbors.get(tip.id)?.add(newNode.id);
 
   bus.emit({ type: isSink ? 'ReachedFood' : 'NewBranch', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
+  if (obstacleRejected > 0) bus.emit({ type: 'ObstacleAvoided', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
   if (parentEdge) parentEdge.stress *= 0.7;
   return true;
 }
@@ -206,6 +214,9 @@ function lateralBud(
   // 周囲に強めの biomass を即時滲ませる: 描画上「膜が膨らんだ」ように見える。
   bioField.deposit(end, params.biomassDeposit * 2, params.biomassRadius + 0.8);
   bus.emit({ type: 'NewBranch', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
+  // M12: 横方向出芽 = 既存の枝から新しい末端が生まれる点を「胞子を生成」の
+  // 演出に流用する (lateralBud は前進ではなく新しい末端を作る機構のため)。
+  bus.emit({ type: 'SporeFormed', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
   return true;
 }
 

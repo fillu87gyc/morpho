@@ -50,6 +50,11 @@ const PROFILES: Record<StageId, StageAmbientProfile> = {
     noiseFilterFreq: 600, noiseFilterQ: 0.8, noiseGain: 0.035, noiseFilterType: 'lowpass',
     sparkle: { minMs: 1200, maxMs: 3200, freq: 1400, freqJitter: 500, gain: 0.025, decay: 0.35 }, // 虫の音
   },
+  continent: {
+    droneFreq: 70, droneFilterFreq: 340, droneGain: 0.05,
+    noiseFilterFreq: 900, noiseFilterQ: 0.4, noiseGain: 0.04, noiseFilterType: 'lowpass',
+    sparkle: { minMs: 4000, maxMs: 9000, freq: 500, freqJitter: 250, gain: 0.03, decay: 1.6 }, // 遠い波音
+  },
 };
 
 const RAMP_S = 3; // ステージ切り替え時のパラメータ遷移時間
