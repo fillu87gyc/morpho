@@ -20,6 +20,8 @@ import { DayReport } from './day-report.js';
 import { createDayLoop, beginObserve, completeDay, advanceToNextDay, TICKS_PER_DAY } from './day-loop.js';
 import { Wallet, type CurrencyKind } from './wallet.js';
 import { DailyTracker } from './dailies.js';
+import { Identity } from './identity.js';
+import { starsOf, traitChipsFor, environmentTagsFor } from './trait-labels.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -34,6 +36,11 @@ const ambient = new Ambient();
 const dayReport = new DayReport();
 const wallet = new Wallet();
 const dailies = new DailyTracker();
+const identity = new Identity();
+// M12: 「個体を追跡する」。ミニマップクリックで対象コロニーを選び、
+// トグルで追従の on/off を切り替える。手動ズーム/パンで解除する。
+let trackedColonyIndex: number | null = null;
+let tracking = false;
 
 // 系統に採取済みの種があれば、初回起動から継承した個体で始める
 // (M5: セッションをまたいで系統樹を続けられる)。
@@ -55,7 +62,18 @@ minimapCanvas.addEventListener('click', (e) => {
   const rect = minimapCanvas.getBoundingClientRect();
   const px = (e.clientX - rect.left) * (minimapCanvas.width / rect.width);
   const py = (e.clientY - rect.top) * (minimapCanvas.height / rect.height);
-  camera.focusOn(minimap.toWorld(px, py));
+  const worldPos = minimap.toWorld(px, py);
+  // M12: クリックした場所に一番近いコロニーを「追跡対象」として選ぶ。
+  if (game.ready) {
+    const markers = game.snapshot().colonyMarkers;
+    let nearest = -1, bestD2 = Infinity;
+    markers.forEach((m, i) => {
+      const d2 = (m.pos.x - worldPos.x) ** 2 + (m.pos.y - worldPos.y) ** 2;
+      if (d2 < bestD2) { bestD2 = d2; nearest = i; }
+    });
+    if (nearest >= 0) trackedColonyIndex = nearest;
+  }
+  camera.focusOn(worldPos);
 });
 
 const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album }, {
@@ -71,6 +89,9 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     dayReport.reset();
+    identity.advance();
+    tracking = false;
+    trackedColonyIndex = null;
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleHeat: () => {
@@ -86,6 +107,9 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     fitCanvas();
     ambient.setStage(id);
     dayReport.reset();
+    identity.advance();
+    tracking = false;
+    trackedColonyIndex = null;
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleAmbient: () => {
@@ -216,6 +240,49 @@ function renderDailies(): void {
   }
 }
 renderDailies();
+
+// ── M12: 個体の物語 (名前・★・特性チップ・追跡) ──────────
+const indNameBtn = document.getElementById('ind-name') as HTMLButtonElement;
+const indStarsEl = document.getElementById('ind-stars') as HTMLElement;
+const indChipsEl = document.getElementById('ind-chips') as HTMLElement;
+const indEnvChipsEl = document.getElementById('ind-env-chips') as HTMLElement;
+const trackToggleBtn = document.getElementById('track-toggle') as HTMLButtonElement;
+
+indNameBtn.addEventListener('click', () => {
+  const next = window.prompt('この個体の名前', identity.name());
+  if (next !== null) identity.rename(next);
+  renderIdentity();
+});
+
+trackToggleBtn.addEventListener('click', () => {
+  tracking = !tracking;
+  if (tracking && trackedColonyIndex === null) trackedColonyIndex = 0;
+  trackToggleBtn.classList.toggle('active', tracking);
+});
+
+function renderChips(container: HTMLElement, labels: string[]): void {
+  container.innerHTML = '';
+  for (const label of labels) {
+    const span = document.createElement('span');
+    span.className = 'chip';
+    span.textContent = label;
+    container.appendChild(span);
+  }
+}
+
+function renderIdentity(): void {
+  indNameBtn.textContent = identity.name();
+  // tracking は手動ズーム/パン/ピンチでも false になるので、ボタンの見た目は
+  // 都度ここで実際の状態に合わせ直す (どこで false にしても表示が追随する)。
+  trackToggleBtn.classList.toggle('active', tracking);
+  if (!game.ready) return;
+  const snap = game.snapshot();
+  const stars = starsOf(snap.individuality);
+  indStarsEl.textContent = '★'.repeat(stars) + '☆'.repeat(5 - stars);
+  renderChips(indChipsEl, traitChipsFor(snap.genome, snap.traits, snap.typeInfo.label));
+  renderChips(indEnvChipsEl, environmentTagsFor(snap.balance));
+}
+renderIdentity();
 
 // ── M9: デイループ (仕込む→委ねる→受け取る) ──────────────
 // 既存の「見守り (連続再生)」を既定のまま残し (継続的な DAY 自動進行を
@@ -446,6 +513,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.button === 2) {
     panning = true;
     panLast = { x: e.clientX, y: e.clientY };
+    tracking = false; // M12: 手動パンで追従解除
     return;
   }
   if (e.button !== 0) return;
@@ -465,6 +533,7 @@ canvas.addEventListener('pointermove', (e) => {
       const d = pinch.tracker.update(a, b);
       camera.zoomAt(viewportSize(), d.midpoint.x, d.midpoint.y, d.factor);
       camera.pan(viewportSize(), d.dx, d.dy);
+      tracking = false; // M12: 手動ピンチで追従解除
       return;
     }
   }
@@ -528,6 +597,7 @@ canvas.addEventListener('wheel', (e) => {
   // 上スクロール (deltaY < 0) でズームイン。指数的に効かせて滑らかにする。
   const factor = Math.pow(1.0015, -e.deltaY);
   camera.zoomAt(viewportSize(), p.x, p.y, factor);
+  tracking = false; // M12: 手動ホイールズームで追従解除
 }, { passive: false });
 canvas.addEventListener('dblclick', () => camera.reset());
 
@@ -599,8 +669,14 @@ function frame() {
       tool: game.tool as Tool,
     } : undefined;
     const snap = game.snapshot();
+    // M12: 「個体を追跡する」— 選択コロニーの重心へ毎フレーム滑らかに寄せる。
+    if (tracking && trackedColonyIndex !== null) {
+      const marker = snap.colonyMarkers[trackedColonyIndex];
+      if (marker) camera.panToward(marker.centroid, 0.08);
+    }
     renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx);
     minimap.draw(snap.colonyMarkers, camera.view());
+    renderIdentity();
 
     // M9: 観察中の残り時間 = (targetTick - tick) / 実効tick毎秒。
     if (dayLoopMode && dayLoop.phase === 'observe') {

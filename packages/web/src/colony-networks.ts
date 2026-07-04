@@ -10,6 +10,10 @@ import type { SimState, Vec2 } from '@morpho/sim';
 
 export interface ColonyMarker {
   pos: Vec2;
+  // M12: そのネットワーク全体 (統合済みなら複数コロニーぶん) のノード位置の
+  // 重心。個体を追跡するカメラの注視点として使う (source の固定位置と違い、
+  // 成長に伴って動く)。
+  centroid: Vec2;
   networkId: number; // 同じ値のコロニーは同一ネットワークへ統合済み
 }
 
@@ -42,6 +46,15 @@ export function computeColonyNetworks(state: SimState, sourcePositions: Vec2[]):
   };
   for (const e of state.edges) union(e.from, e.to);
 
+  // root ごとにノード位置を集計しておき、後で重心 (centroid) を出す。
+  const sumByRoot = new Map<number, { x: number; y: number; n: number }>();
+  for (const n of state.nodes) {
+    const root = find(n.id);
+    const acc = sumByRoot.get(root);
+    if (acc) { acc.x += n.pos.x; acc.y += n.pos.y; acc.n += 1; }
+    else sumByRoot.set(root, { x: n.pos.x, y: n.pos.y, n: 1 });
+  }
+
   // source ノードは prune の対象外 (関節点保護) で座標も生成時のまま動かないため、
   // sourcePositions との座標一致で対応する source ノードを一意に特定できる。
   const sourceNodes = state.nodes.filter((n) => n.type === 'source');
@@ -50,7 +63,8 @@ export function computeColonyNetworks(state: SimState, sourcePositions: Vec2[]):
     const node = sourceNodes.find((n) => n.pos.x === pos.x && n.pos.y === pos.y)!;
     const root = find(node.id);
     if (!rootToNetworkId.has(root)) rootToNetworkId.set(root, rootToNetworkId.size);
-    return { pos, networkId: rootToNetworkId.get(root)! };
+    const acc = sumByRoot.get(root)!;
+    return { pos, centroid: { x: acc.x / acc.n, y: acc.y / acc.n }, networkId: rootToNetworkId.get(root)! };
   });
 
   return { networksCount: rootToNetworkId.size, markers };

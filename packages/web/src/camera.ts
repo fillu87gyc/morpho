@@ -58,6 +58,14 @@ export class Camera {
     this.clampCenter();
   }
 
+  // M12: 「個体を追跡する」。ズームは変えず、target へ毎フレーム t (0..1) ぶん
+  // だけ滑らかに寄せる (t が小さいほどゆっくり追従する)。
+  panToward(target: { x: number; y: number }, t: number): void {
+    this.cx += (target.x - this.cx) * t;
+    this.cy += (target.y - this.cy) * t;
+    this.clampCenter();
+  }
+
   pan(canvasSize: number, dxScreen: number, dyScreen: number): void {
     const v = this.view();
     const scale = canvasSize / v.worldSpan;

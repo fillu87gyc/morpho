@@ -159,6 +159,9 @@ export class Game {
   private thickenedSeen = new Set<number>();
   // ループ生成は同じノード対が短時間で何度も emit されがちなので de-dup。
   private lastLoopAtTick = -999;
+  // M12: ObstacleAvoided/SporeFormed も高頻度になりうるので同様に間引く。
+  private lastObstacleAvoidedAtTick = -999;
+  private lastSporeFormedAtTick = -999;
   // 「拠点 (コロニー)」の総数。リセット時に 6 で開始し、
   // プレイヤがエサを置くたびに増える。栄養が消費されてもカウントは減らさない
   // (= 一度設置した拠点は「到達対象」として残す)。
@@ -205,6 +208,8 @@ export class Game {
     this.recentEvents = [];
     this.thickenedSeen.clear();
     this.lastLoopAtTick = -999;
+    this.lastObstacleAvoidedAtTick = -999;
+    this.lastSporeFormedAtTick = -999;
     this.coloniesTotal = 6;
     this.lastEra = eraName(0);
     this.pushEvent(`新しい${this.stage.name}が用意された`);
@@ -269,6 +274,16 @@ export class Game {
       }
       case 'Stagnated':
         return '成長が停滞';
+      case 'ObstacleAvoided': {
+        if (e.tick - this.lastObstacleAvoidedAtTick < 8) return null;
+        this.lastObstacleAvoidedAtTick = e.tick;
+        return '障害物を迂回';
+      }
+      case 'SporeFormed': {
+        if (e.tick - this.lastSporeFormedAtTick < 8) return null;
+        this.lastSporeFormedAtTick = e.tick;
+        return '胞子を生成';
+      }
       // NewBranch / DeadEdge は数が多すぎるので個別表示しない
       default:
         return null;

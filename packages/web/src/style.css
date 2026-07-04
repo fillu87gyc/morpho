@@ -208,6 +208,28 @@ body { overflow: hidden; }
 .ind-type-lbl { color: var(--text-dim); }
 .ind-type-n { color: var(--accent); font-weight: 600; }
 
+/* M12: 個体ビューの名前/★評価/追跡トグル/特性チップ */
+.ind-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.ind-name {
+  background: none; border: none; color: var(--text); font-size: 13px; font-weight: 600;
+  cursor: pointer; padding: 2px 4px; border-radius: 4px;
+}
+.ind-name:hover { background: rgba(255,255,255,0.06); }
+.ind-stars { color: var(--accent); font-size: 12px; letter-spacing: 1px; }
+.track-toggle {
+  margin-left: auto; font-size: 10px; padding: 4px 8px;
+  background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text-dim);
+  border-radius: 999px; cursor: pointer;
+}
+.track-toggle.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.chip-row:empty { display: none; margin: 0; }
+.chip-row .chip {
+  font-size: 10px; padding: 3px 8px; border-radius: 999px;
+  background: var(--bar-empty); color: var(--text-dim); border: 1px solid var(--panel-edge);
+}
+.chip-row.env-chips .chip { background: rgba(120, 200, 120, 0.08); color: var(--green); border-color: rgba(120, 200, 120, 0.25); }
+
 .card h2 .badge {
   float: right; text-transform: none; letter-spacing: normal;
   color: var(--text-dim); font-variant-numeric: tabular-nums;

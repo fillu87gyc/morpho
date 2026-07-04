@@ -76,6 +76,30 @@ describe('Camera', () => {
     expect(cam.zoom).toBeLessThanOrEqual(8);
   });
 
+  it('M12: panToward はズームを変えず target へ徐々に寄せる (個体追跡)', () => {
+    const cam = new Camera(100);
+    cam.focusOn({ x: 20, y: 20 }, 4);
+    const zoomBefore = cam.zoom;
+    cam.panToward({ x: 80, y: 80 }, 0.5);
+    expect(cam.zoom).toBe(zoomBefore);
+    const v = cam.view();
+    const centerX = v.worldLeft + v.worldSpan / 2;
+    // (20 → 80) の中間点あたりまで寄る
+    expect(centerX).toBeGreaterThan(20);
+    expect(centerX).toBeLessThan(80);
+  });
+
+  it('M12: panToward を繰り返すと target にほぼ収束する', () => {
+    const cam = new Camera(100);
+    cam.focusOn({ x: 10, y: 10 }, 4);
+    for (let i = 0; i < 100; i++) cam.panToward({ x: 60, y: 60 }, 0.2);
+    const v = cam.view();
+    const centerX = v.worldLeft + v.worldSpan / 2;
+    const centerY = v.worldTop + v.worldSpan / 2;
+    expect(centerX).toBeCloseTo(60, 0);
+    expect(centerY).toBeCloseTo(60, 0);
+  });
+
   it('reset はズームと中心を初期状態に戻す', () => {
     const cam = new Camera(100);
     cam.zoomAt(200, 100, 100, 4);
