@@ -12,6 +12,7 @@ import { Achievements } from './achievements.js';
 import { dailyChallengeFor, DailyChallengeTracker } from './challenges.js';
 import { Scoreboard } from './scoreboard.js';
 import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
+import { PinchTracker } from './pinch.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -85,14 +86,34 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
 let showHeat = false;
 
 // ── 入力: カーソル位置と押下状態 ──────────────────────
-// 左ボタン (ドラッグ含む) はツールの適用、右ボタンのドラッグはパン、
+// マウス: 左ボタン (ドラッグ含む) はツールの適用、右ボタンのドラッグはパン、
 // ホイールはカーソル中心のズームに使う。
+// タッチ: 1本指はタップ/ドラッグでツール適用 (マウス左ボタンと同じ)、
+// 2本指はピンチズーム + パン (PinchTracker に委譲)。
 let pressed = false;
 let panning = false;
 let panLast: { x: number; y: number } | null = null;
 let lastApplyMs = 0;
 let hover: { x: number; y: number } | null = null;
 const APPLY_INTERVAL = 33; // ドラッグ中 ~30Hz で塗り続ける
+
+const activeTouches = new Map<number, { x: number; y: number }>();
+let pinch: { ids: [number, number]; tracker: PinchTracker } | null = null;
+
+// 2本指ピンチの1本目として置かれてしまわないよう、1本指タップの確定を
+// 少しだけ遅らせる (実機では2本の指は同時ではなく数msずれて触れる。
+// 1本目の pointerdown で即ツールを置くと、その直後に2本目が来て
+// ピンチへ切り替わっても既に置いてしまった1回分は取り消せない)。
+// 遅延中に2本目が来ればタップは破棄されピンチへ、指を離せば即確定する。
+const TAP_GRACE_MS = 120;
+let tapTimer: ReturnType<typeof setTimeout> | null = null;
+let tapPointerId: number | null = null;
+
+function clearPendingTap(): void {
+  if (tapTimer !== null) clearTimeout(tapTimer);
+  tapTimer = null;
+  tapPointerId = null;
+}
 
 function getCanvasPos(e: PointerEvent | WheelEvent): { x: number; y: number } {
   const rect = canvas!.getBoundingClientRect();
@@ -107,20 +128,59 @@ function viewportSize(): number {
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  const p = getCanvasPos(e);
+
+  if (e.pointerType === 'touch') {
+    activeTouches.set(e.pointerId, p);
+    if (activeTouches.size === 2) {
+      // 2本指そろった: ピンチ/パン開始。保留中のタップ (1本指分) は破棄する。
+      clearPendingTap();
+      pressed = false;
+      const ids = [...activeTouches.keys()] as [number, number];
+      const a = activeTouches.get(ids[0])!;
+      const b = activeTouches.get(ids[1])!;
+      pinch = { ids, tracker: new PinchTracker(a, b) };
+      return;
+    }
+    if (activeTouches.size > 2) return; // 3本指以降は無視
+    tapPointerId = e.pointerId;
+    tapTimer = setTimeout(() => {
+      tapTimer = null;
+      if (tapPointerId !== e.pointerId) return;
+      const cur = activeTouches.get(e.pointerId);
+      if (!cur) return;
+      pressed = true;
+      applyAt(cur.x, cur.y);
+    }, TAP_GRACE_MS);
+    return;
+  }
+
   if (e.button === 2) {
     panning = true;
     panLast = { x: e.clientX, y: e.clientY };
-    canvas.setPointerCapture(e.pointerId);
     return;
   }
   if (e.button !== 0) return;
   pressed = true;
-  canvas.setPointerCapture(e.pointerId);
-  const p = getCanvasPos(e);
   applyAt(p.x, p.y);
 });
 canvas.addEventListener('pointermove', (e) => {
-  hover = getCanvasPos(e);
+  const p = getCanvasPos(e);
+  hover = p;
+
+  if (e.pointerType === 'touch' && activeTouches.has(e.pointerId)) {
+    activeTouches.set(e.pointerId, p);
+    if (pinch && (e.pointerId === pinch.ids[0] || e.pointerId === pinch.ids[1])) {
+      const a = activeTouches.get(pinch.ids[0])!;
+      const b = activeTouches.get(pinch.ids[1])!;
+      const d = pinch.tracker.update(a, b);
+      camera.zoomAt(viewportSize(), d.midpoint.x, d.midpoint.y, d.factor);
+      camera.pan(viewportSize(), d.dx, d.dy);
+      return;
+    }
+  }
+
   if (panning && panLast) {
     const dx = e.clientX - panLast.x;
     const dy = e.clientY - panLast.y;
@@ -132,10 +192,38 @@ canvas.addEventListener('pointermove', (e) => {
     applyAt(hover.x, hover.y);
   }
 });
-canvas.addEventListener('pointerup', (e) => {
-  if (e.button === 2) { panning = false; panLast = null; canvas.releasePointerCapture(e.pointerId); return; }
+function endTouch(e: PointerEvent): void {
+  const lastPos = activeTouches.get(e.pointerId);
+  const wasPendingTap = tapPointerId === e.pointerId && tapTimer !== null;
+  activeTouches.delete(e.pointerId);
+  if (pinch && (e.pointerId === pinch.ids[0] || e.pointerId === pinch.ids[1])) {
+    // 指を1本上げた時点でピンチ/タップどちらも終了とする
+    // (残り1本での再開時に誤ってツールが置かれるのを防ぐ)。
+    pinch = null;
+    pressed = false;
+  }
+  if (wasPendingTap) {
+    // 2本目が来ないまま指が離れた = 素早いタップと確定。猶予を待たず即配置する。
+    clearPendingTap();
+    if (lastPos) applyAt(lastPos.x, lastPos.y);
+  }
   pressed = false;
+}
+canvas.addEventListener('pointerup', (e) => {
   canvas.releasePointerCapture(e.pointerId);
+  if (e.pointerType === 'touch') { endTouch(e); hover = null; return; }
+  if (e.button === 2) { panning = false; panLast = null; return; }
+  pressed = false;
+});
+canvas.addEventListener('pointercancel', (e) => {
+  if (e.pointerType === 'touch') {
+    if (tapPointerId === e.pointerId) clearPendingTap(); // キャンセル扱いなのでタップは確定させない
+    activeTouches.delete(e.pointerId);
+    if (pinch && (e.pointerId === pinch.ids[0] || e.pointerId === pinch.ids[1])) pinch = null;
+  }
+  pressed = false;
+  panning = false;
+  panLast = null;
 });
 canvas.addEventListener('pointerleave', () => { hover = null; });
 canvas.addEventListener('wheel', (e) => {

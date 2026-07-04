@@ -1,4 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
+
+// サンドボックス環境ではプリインストール済み Chromium (このパッケージが
+// 要求するバージョンと食い違うことがある) を明示的に指させる。
+// 存在しなければ (通常の CI 等) undefined のままデフォルト解決に任せる。
+const sandboxChromium = '/opt/pw-browsers/chromium';
+const executablePath = existsSync(sandboxChromium) ? sandboxChromium : undefined;
 
 // CI では時間がかかっても良いのでリトライを多めに、ローカルでは素早く。
 export default defineConfig({
@@ -26,6 +33,9 @@ export default defineConfig({
     timeout: 60_000,
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], launchOptions: { executablePath } },
+    },
   ],
 });

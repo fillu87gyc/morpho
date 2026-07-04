@@ -46,6 +46,32 @@ async function canvasChecksum(page: Page): Promise<number> {
   });
 }
 
+test('PWA: manifest が配信され、Service Worker が登録・有効化される (M7: オフライン起動の土台)', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  const manifestHref = await page.locator('link[rel="manifest"]').getAttribute('href');
+  expect(manifestHref).toBeTruthy();
+
+  const manifestRes = await page.request.get(manifestHref!);
+  expect(manifestRes.ok()).toBe(true);
+  const manifest = await manifestRes.json();
+  expect(manifest.display).toBe('standalone');
+  expect(manifest.start_url).toBe('/');
+  expect(manifest.icons.length).toBeGreaterThan(0);
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.active?.state ?? null),
+      { timeout: 15_000 },
+    )
+    .toBe('activated');
+
+  expect(errors).toEqual([]);
+});
+
 test('起動してキャンバスが描画され、コンソールエラーが出ない', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');

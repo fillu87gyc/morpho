@@ -88,8 +88,14 @@
 ### M7 — 仕上げ
 - [ ] 環境音 + アンビエント BGM (Howler.js or WebAudio 直)
 - [ ] スクリーンショット保存 (album)
-- [ ] PWA (オフライン起動 / ホーム画面追加)
-- [ ] モバイル UI (タップ & ピンチズーム)
+- [x] PWA (オフライン起動 / ホーム画面追加)
+  - `vite-plugin-pwa` (Workbox `generateSW`) を導入し、ビルド成果物一式をプリキャッシュ。`navigateFallback` で SPA のオフライン起動に対応
+  - `manifest.webmanifest` (`display: standalone` / アイコン4種 [192・512 の通常 + maskable]) を生成し、ホーム画面に追加してアプリのように起動できる
+  - iOS 向けに `apple-touch-icon` / `apple-mobile-web-app-*` メタタグを追加。スタンドアロン起動時のノッチ/ホームインジケータ対策に `env(safe-area-inset-*)` を適用
+- [x] モバイル UI (タップ & ピンチズーム)
+  - `web/src/pinch.ts`: `PinchTracker` が2本指の距離・中点からズーム倍率とパン量を導出する純粋なステート
+  - `web/src/main.ts`: Pointer Events で1本指タップ/ドラッグ (ツール配置、マウスと共通の経路) と2本指ピンチ (ズーム+パン) を判別。2本指ピンチの1本目として誤ってツールが置かれないよう、1本指タップの確定を短く遅延 (`TAP_GRACE_MS`) させ、2本目が来ればタップを破棄する
+  - `#canvas` に `touch-action: none` を設定し、ブラウザ標準のスクロール/ピンチズーム/ダブルタップズームと競合しないようにする
 - [ ] GitHub Pages へ自動デプロイ (`.github/workflows/pages.yml`)
 
 ## アーキテクチャ方針
