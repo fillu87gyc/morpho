@@ -22,7 +22,7 @@
 
 ### M1 — 「観察する」を気持ちよくする
 - [x] BiomassField の差分のみを再描画 (60fps 安定 / モバイル可)
-- [ ] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け) → M8-P3 に統合
+- [x] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け) → M8-P3 に統合。P1〜P3 の Canvas2D 最適化後の実測で目標を大きく下回ったためスコープアウト (詳細は M8-P3 参照)
 - [x] Web Worker でシミュレーションを分離 (UI 操作を止めない)
 - [x] スナップショット採取: Day 1 / 5 / 10 ... を縮小サムネで成長タイムラインに表示
 - [x] 環境ヒートマップ表示の ON/OFF (栄養 / 水 / 光)
@@ -163,11 +163,15 @@
     - `web/src/game.ts`: `snapshot()` を `snapshotFast()` (state/env/bio など毎tick必要な部分) と `snapshotDerived()` (traits 以下の派生計算) に分割
     - `web/src/sim-worker.ts`: `snapshotDerived()` は reset/apply 直後のみ即時再計算し、それ以外は 250ms 毎に間引いて使い回す。`snapshotFast()` は引き続き毎 tick 作り直す
     - 「描画データと別チャンネルで低頻度送信」(postMessage の payload 自体を分離してクローン量を削る) は見送り: 効果は typed array 化 (未着手の項目) の方が大きく、protocol/GameProxy への影響も大きいためスコープ外
-- [ ] **P3: 描画** — 目標: 描画 3ms/frame 以下 (モバイル込み)
-  - [ ] `drawEdges`: nodeMap を snapshot 間で再利用し、sort を radius バケツ分け (数段階) に置き換え、同スタイルのエッジを 1 path にバッチ
-  - [ ] `drawNodes`: グロー gradient をオフスクリーン sprite に一度だけ焼いて `drawImage` する
-  - [ ] WebGL2 or `OffscreenCanvas` バックエンド (M1 の未了項目をここへ吸収。P1/P2/P3 の Canvas2D 改善で足りればスコープアウト可)
-  - [ ] `renderThumbnail` の同期 `toDataURL` を `convertToBlob` (非同期) 化
+- [x] **P3: 描画** — 目標: 描画 3ms/frame 以下 (モバイル込み)
+  - [x] `drawEdges`: nodeMap を snapshot 間で再利用し、sort を radius バケツ分け (数段階) に置き換え、同スタイルのエッジを 1 path にバッチ
+    - `web/src/render.ts`: `syncEdgeCache()` が `state` (nodes/edges の参照) が変わらない限り nodeMap と radius バケツ (8分割) を使い回す。RAF が Worker のスナップショット送信より高頻度になりうる (高リフレッシュレート機・一時停止中) ケースでの重複計算を避ける。`drawEdges` は毎フレーム、バケツ内で色/太さを量子化したキーごとに `Path2D` へエッジをまとめ、`stroke()` の呼び出し回数をエッジ数からスタイル種類数まで減らす
+  - [x] `drawNodes`: グロー gradient をオフスクリーン sprite に一度だけ焼いて `drawImage` する
+    - `web/src/render.ts`: `buildGlowSprite()` が source/sink 用のグローを1枚ずつ (`CanvasRenderer` 構築時に1回) 焼き、`drawNodes` は毎フレーム `createRadialGradient` を呼ばず `drawImage` で必要な直径に拡大するだけにした
+  - [x] WebGL2 or `OffscreenCanvas` バックエンド (M1 の未了項目をここへ吸収。P1/P2/P3 の Canvas2D 改善で足りればスコープアウト可)
+    - 上記の P3 描画最適化後、実測 (`?debug` の perf HUD、petri ステージでコロニーが育ってエッジ数 400〜580 まで増える範囲) で描画は 0.8〜1.5ms/frame と目標の 3ms を大きく下回って安定しており、Canvas2D のままで十分と判断してスコープアウトした。モバイル実機での追加計測は行っていないが、M1 の差分再描画・M7 のタッチ最適化は別途対応済みであり、将来モバイル実機で描画が重いと分かった場合に再検討する
+  - [x] `renderThumbnail` の同期 `toDataURL` を `convertToBlob` (非同期) 化
+    - `web/src/render.ts`: `renderThumbnail()` はピクセル描画は同期のまま (直前の `draw()` との整合を保つ必要があるため) だが、PNG エンコードは同期の `toDataURL()` ではなく非同期の `canvas.toBlob()` に置き換え `Promise<string>` (blob URL) を返す。`web/src/timeline.ts` の `maybeCapture()` も呼び出し側を待たせない fire-and-forget 型に更新し、エンコード完了より先に `reset()` された場合は古い世代の結果を破棄して blob URL を解放する
 - [ ] **P4: 「早送り」体験** (モックアップの早送りボタン)
   - [ ] 早送りモード: 描画を 10fps に間引いて浮いた予算を tick に全振り (P2 のスケジューラ上に載せる)
   - [ ] UI 更新 (`ui.render()` / 実績・記録判定) を早送り中はさらに低頻度化

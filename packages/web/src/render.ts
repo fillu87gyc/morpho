@@ -18,6 +18,9 @@ import type {
   GridEnvironment,
   BiomassField,
   Vec2,
+  NodeId,
+  SimNode,
+  SimEdge,
 } from '@morpho/sim';
 import type { WorldView } from './camera.js';
 import type { StageId } from './stages.js';
@@ -35,6 +38,17 @@ const FIELD_LAYER_COUNT = 5;
 // 見た目に影響しない変化まで「差分」扱いになってしまう。可視のバイト値
 // (0-255) が変わらない程度の揺れは無視する。
 const FIELD_EPS = 0.004;
+
+// M8 P3 drawEdges: 毎フレームのフル sort をやめ、radius で粗いバケツに
+// 振り分けるだけにする (バケツの描画順=太さの昇順で、元の sort と同じ
+// 「細い枝の上に太い幹を重ねる」効果を保ちつつ O(E log E) を O(E) にする)。
+const RADIUS_BUCKET_COUNT = 8;
+const RADIUS_BUCKET_MAX = 3.2; // これを超える radius は最後のバケツに丸める
+// 同バケツ内でも見た目 (色/太さ) が近いエッジは1本の Path にまとめて
+// stroke() の呼び出し回数を減らす。量子化の粒度 (段数が多いほど元の
+// 連続的なグラデーションに近いが、まとめ効果は薄れる)。
+const TONE_STEPS = 8;
+const WIDTH_QUANT = 0.25; // px
 
 // 配色: morphosmoke.png の暗い森のトーンに揃える。
 const BG_INNER:    [number, number, number] = [14, 20, 17];
@@ -95,6 +109,19 @@ export class CanvasRenderer {
   private prevShowHeat: boolean | null = null;
   private prevStageId: StageId | null = null;
 
+  // M8 P3 drawEdges: nodeMap とバケツ分けは state (nodes/edges の参照) が
+  // 変わらない限り使い回す。RAF は Worker のスナップショット送信より
+  // 高頻度になりうる (高リフレッシュレート機や一時停止中) ため、
+  // 同じ state を複数フレームで描くケースは珍しくない。
+  private cachedState: SimState | null = null;
+  private cachedNodeMap: Map<NodeId, SimNode> | null = null;
+  private cachedRadiusBuckets: SimEdge[][] | null = null;
+
+  // M8 P3 drawNodes: グロー (radial gradient) をノードごとに毎フレーム
+  // 生成する代わりに、色ごとに1枚だけ焼いたスプライトを drawImage で貼る。
+  private sourceGlowSprite: HTMLCanvasElement;
+  private sinkGlowSprite: HTMLCanvasElement;
+
   constructor(private canvas: HTMLCanvasElement, private opts: RenderOptions) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2d context unavailable');
@@ -110,6 +137,9 @@ export class CanvasRenderer {
     this.fieldCtx = fctx;
     this.fieldImage = fctx.createImageData(opts.fieldSize, opts.fieldSize);
     this.tracker = new MultiLayerDirtyTracker(opts.fieldSize, FIELD_LAYER_COUNT, FIELD_EPS);
+
+    this.sourceGlowSprite = buildGlowSprite(SOURCE_DOT);
+    this.sinkGlowSprite = buildGlowSprite(SINK_DOT);
   }
 
   resize(): void {
@@ -177,12 +207,18 @@ export class CanvasRenderer {
   // 一致している前提 (main.ts は同じフレーム内で同じスナップショットを
   // draw() → renderThumbnail() の順に渡す) で呼ぶこと。異なるスナップショットを
   // 渡すと、直前に描かれた絵との差分だけが焼き足される。
-  renderThumbnail(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], size: number): string {
+  //
+  // M8 P3: ピクセルの描画自体は同期のまま (上記の前提を保つ必要があるため)
+  // だが、PNG へのエンコードは同期の toDataURL() ではなく非同期の
+  // toBlob() を使う。エンコードはメインスレッドをブロックしうる処理
+  // (特にこのサイズの描画を Day 5/10/15... の節目ごとに行う) なので、
+  // 結果は blob URL の Promise として返す。
+  renderThumbnail(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], size: number): Promise<string> {
     const thumb = document.createElement('canvas');
     thumb.width = size;
     thumb.height = size;
     const tctx = thumb.getContext('2d');
-    if (!tctx) return '';
+    if (!tctx) return Promise.resolve('');
     this.paintFieldLayer(env, bio, stageId);
     tctx.fillStyle = rgb(STAGE_BG[stageId].inner);
     tctx.fillRect(0, 0, size, size);
@@ -192,7 +228,9 @@ export class CanvasRenderer {
     this.drawLandmarks(tctx, landmarks, stageId, scale, 0, 0);
     this.drawEdges(tctx, state, scale, 0, 0);
     this.drawNodes(tctx, state, scale, 0, 0);
-    return thumb.toDataURL('image/png');
+    return new Promise((resolve) => {
+      thumb.toBlob((blob) => resolve(blob ? URL.createObjectURL(blob) : ''), 'image/png');
+    });
   }
 
   private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): void {
@@ -318,31 +356,70 @@ export class CanvasRenderer {
     this.prevStageId = stageId;
   }
 
+  // state (nodes/edges の参照) が前回と同じなら nodeMap / radius バケツを
+  // 使い回す。新しいスナップショットが届いたときだけ再構築する。
+  private syncEdgeCache(state: SimState): void {
+    if (state === this.cachedState) return;
+    this.cachedState = state;
+    this.cachedNodeMap = new Map(state.nodes.map((n) => [n.id, n]));
+    const buckets: SimEdge[][] = Array.from({ length: RADIUS_BUCKET_COUNT }, () => []);
+    for (const e of state.edges) {
+      const idx = Math.min(RADIUS_BUCKET_COUNT - 1, Math.floor((e.radius / RADIUS_BUCKET_MAX) * RADIUS_BUCKET_COUNT));
+      buckets[Math.max(0, idx)]!.push(e);
+    }
+    this.cachedRadiusBuckets = buckets;
+  }
+
   private drawEdges(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
-    const nodeMap = new Map(state.nodes.map((n) => [n.id, n]));
-    const sorted = [...state.edges].sort((a, b) => a.radius - b.radius);
+    this.syncEdgeCache(state);
+    const nodeMap = this.cachedNodeMap!;
+    const buckets = this.cachedRadiusBuckets!;
     const pxPerWorld = scale / 5.76;  // 参照 (W=576, world=100) 比
 
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    for (const e of sorted) {
-      const a = nodeMap.get(e.from);
-      const b = nodeMap.get(e.to);
-      if (!a || !b) continue;
-      const fluxN = Math.min(1, e.flux / 5);
-      const tubeW = Math.max(0.7, e.radius * 1.05 + fluxN * 1.4) * pxPerWorld;
-      const t = Math.min(1, fluxN * 0.65 + Math.min(1, e.radius / 2) * 0.55);
-      // 細い枝はクリーム色で軽やか、太く流量多い管はオレンジで濃く。
-      const rr = Math.round(TUBE_LIGHT[0] * (1 - t) + TUBE_DARK[0] * t);
-      const gg = Math.round(TUBE_LIGHT[1] * (1 - t) + TUBE_DARK[1] * t);
-      const bb = Math.round(TUBE_LIGHT[2] * (1 - t) + TUBE_DARK[2] * t);
-      ctx.strokeStyle = `rgba(${rr}, ${gg}, ${bb}, ${0.78 + t * 0.18})`;
-      ctx.lineWidth = Math.max(0.6, tubeW * 0.55);
-      ctx.beginPath();
-      ctx.moveTo(offX + a.pos.x * scale, offY + a.pos.y * scale);
-      ctx.lineTo(offX + b.pos.x * scale, offY + b.pos.y * scale);
-      ctx.stroke();
+    // バケツ (太さの昇順) ごとに、見た目 (色/太さ) が近いエッジを1本の
+    // Path2D にまとめてから stroke() する。flux は毎tick変わるので
+    // グルーピング自体は毎フレーム作り直すが、E 回の stroke() 呼び出しを
+    // バケツ内のスタイル種類数まで減らせる。
+    const styleGroups = new Map<string, { path: Path2D; color: string; lineWidth: number }>();
+    for (const bucket of buckets) {
+      if (bucket.length === 0) continue;
+      styleGroups.clear();
+      for (const e of bucket) {
+        const a = nodeMap.get(e.from);
+        const b = nodeMap.get(e.to);
+        if (!a || !b) continue;
+        const fluxN = Math.min(1, e.flux / 5);
+        const tubeW = Math.max(0.7, e.radius * 1.05 + fluxN * 1.4) * pxPerWorld;
+        const t = Math.min(1, fluxN * 0.65 + Math.min(1, e.radius / 2) * 0.55);
+        const toneStep = Math.round(t * TONE_STEPS);
+        const lineWidth = Math.max(0.6, tubeW * 0.55);
+        const widthStep = Math.round(lineWidth / WIDTH_QUANT);
+        const key = `${toneStep}_${widthStep}`;
+        let group = styleGroups.get(key);
+        if (!group) {
+          // 細い枝はクリーム色で軽やか、太く流量多い管はオレンジで濃く。
+          const tt = toneStep / TONE_STEPS;
+          const rr = Math.round(TUBE_LIGHT[0] * (1 - tt) + TUBE_DARK[0] * tt);
+          const gg = Math.round(TUBE_LIGHT[1] * (1 - tt) + TUBE_DARK[1] * tt);
+          const bb = Math.round(TUBE_LIGHT[2] * (1 - tt) + TUBE_DARK[2] * tt);
+          group = {
+            path: new Path2D(),
+            color: `rgba(${rr}, ${gg}, ${bb}, ${0.78 + tt * 0.18})`,
+            lineWidth: Math.max(0.6, widthStep * WIDTH_QUANT),
+          };
+          styleGroups.set(key, group);
+        }
+        group.path.moveTo(offX + a.pos.x * scale, offY + a.pos.y * scale);
+        group.path.lineTo(offX + b.pos.x * scale, offY + b.pos.y * scale);
+      }
+      for (const group of styleGroups.values()) {
+        ctx.strokeStyle = group.color;
+        ctx.lineWidth = group.lineWidth;
+        ctx.stroke(group.path);
+      }
     }
     ctx.restore();
   }
@@ -353,15 +430,12 @@ export class CanvasRenderer {
       const cx = offX + n.pos.x * scale;
       const cy = offY + n.pos.y * scale;
       const color = n.type === 'source' ? SOURCE_DOT : SINK_DOT;
+      const sprite = n.type === 'source' ? this.sourceGlowSprite : this.sinkGlowSprite;
       const r = (n.type === 'source' ? 5 : 4) * Math.max(1, scale / 6.4);
-      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 3);
-      grad.addColorStop(0, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.95)`);
-      grad.addColorStop(0.4, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.4)`);
-      grad.addColorStop(1, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0)`);
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r * 3, 0, Math.PI * 2);
-      ctx.fill();
+      // グローは事前に焼いたスプライトを必要な直径に拡大して貼るだけ
+      // (createRadialGradient をノード毎・毎フレーム生成しない)。
+      const d = r * 6;
+      ctx.drawImage(sprite, cx - d / 2, cy - d / 2, d, d);
       // 中央のコア
       ctx.fillStyle = `rgb(${Math.min(255, color[0] + 30)}, ${Math.min(255, color[1] + 30)}, ${Math.min(255, color[2] + 30)})`;
       ctx.beginPath();
@@ -527,6 +601,30 @@ export class CanvasRenderer {
     ctx.stroke();
     ctx.restore();
   }
+}
+
+// M8 P3 drawNodes: source/sink のグローを一度だけ焼いたオフスクリーン
+// スプライト。固定解像度で焼き、実際の描画時は drawImage で必要な
+// 直径に拡大縮小する (createRadialGradient をノード毎・毎フレーム
+// 生成しない)。
+const GLOW_SPRITE_SIZE = 128;
+
+function buildGlowSprite(color: [number, number, number]): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = GLOW_SPRITE_SIZE;
+  c.height = GLOW_SPRITE_SIZE;
+  const cx = c.getContext('2d');
+  if (!cx) return c;
+  const r = GLOW_SPRITE_SIZE / 2;
+  const grad = cx.createRadialGradient(r, r, 0, r, r, r);
+  grad.addColorStop(0, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.95)`);
+  grad.addColorStop(0.4, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.4)`);
+  grad.addColorStop(1, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0)`);
+  cx.fillStyle = grad;
+  cx.beginPath();
+  cx.arc(r, r, r, 0, Math.PI * 2);
+  cx.fill();
+  return c;
 }
 
 function blend(r: number, g: number, b: number, r2: number, g2: number, b2: number, a2: number): [number, number, number] {

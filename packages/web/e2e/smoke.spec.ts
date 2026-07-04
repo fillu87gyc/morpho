@@ -297,6 +297,22 @@ test('M7: 環境音トグルでAudioContextが生成・再開され、ステー�
   expect(errors).toEqual([]);
 });
 
+test('M8 P3: Day 1 で成長タイムラインに非同期エンコードされたサムネイルが追加される', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await setSpeedSlider(page, 24);
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThanOrEqual(1);
+
+  const thumb = page.locator('#timeline .timeline-entry img').first();
+  await expect(thumb).toHaveCount(1, { timeout: 10_000 });
+  const src = await thumb.getAttribute('src');
+  expect(src).toMatch(/^blob:/);
+
+  expect(errors).toEqual([]);
+});
+
 test('Day 5 以降に種を採取すると系統樹に記録され、世代が進む', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');
