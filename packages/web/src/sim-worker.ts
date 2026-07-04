@@ -23,6 +23,14 @@ const TICK_INTERVAL_MS = 16;
 // clone して送り続けるのは無駄な GC 圧になる。
 let dirty = true;
 
+// M8 P0: perf HUD 用の計測。「スライダーの ×24 が実際には出ていない」を
+// 可視化するため、直近 ~0.5秒の実測から実効速度倍率を算出する。
+let lastTickMs = 0;
+let ticksInWindow = 0;
+let windowStartMs = performance.now();
+let effectiveSpeed = 0;
+const EFFECTIVE_SPEED_WINDOW_MS = 500;
+
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
@@ -36,8 +44,19 @@ ctx.onmessage = (e) => {
 
 function loop(): void {
   if (game.speed > 0) {
+    const t0 = performance.now();
     game.tick();
+    lastTickMs = (performance.now() - t0) / game.speed;
+    ticksInWindow += game.speed;
     dirty = true;
+  }
+  const now = performance.now();
+  const windowElapsed = now - windowStartMs;
+  if (windowElapsed >= EFFECTIVE_SPEED_WINDOW_MS) {
+    // 「1 tick ずつ ×1 で進めた場合」を基準 (1000ms / TICK_INTERVAL_MS ループ回数) にした倍率。
+    effectiveSpeed = (ticksInWindow / windowElapsed) * TICK_INTERVAL_MS;
+    ticksInWindow = 0;
+    windowStartMs = now;
   }
   if (dirty) {
     ctx.postMessage({
@@ -45,6 +64,7 @@ function loop(): void {
       snapshot: game.snapshot(),
       events: game.events(),
       evolution: game.evolution(),
+      perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed },
     });
     dirty = false;
   }

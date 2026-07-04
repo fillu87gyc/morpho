@@ -13,6 +13,7 @@ import { dailyChallengeFor, DailyChallengeTracker } from './challenges.js';
 import { Scoreboard } from './scoreboard.js';
 import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
 import { PinchTracker } from './pinch.js';
+import { PerfHud, debugModeEnabled } from './perf-hud.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -33,6 +34,7 @@ const renderer = new CanvasRenderer(canvas, {
 });
 const timeline = new Timeline();
 const camera = new Camera(game.worldSize);
+const perfHud = new PerfHud(debugModeEnabled());
 
 // M6: ミニマップ。クリックした場所のコロニーへズームして「個体ビュー」に切り替える。
 const minimapCanvas = document.getElementById('minimap') as HTMLCanvasElement | null;
@@ -258,7 +260,9 @@ fitCanvas();
 // 届いた最新スナップショットを描画するだけ (UI 操作は tick の重さに
 // 影響されない)。
 function frame() {
+  perfHud.frame();
   if (game.ready) {
+    const drawT0 = performance.now();
     const size = viewportSize();
     const zoomedScale = size * camera.zoom / game.worldSize;
     const hoverPx = hover ? {
@@ -306,6 +310,9 @@ function frame() {
     ui.render();
     timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, snap.stage.id, snap.landmarks, 96));
     renderTimeline();
+
+    const perf = game.perf();
+    perfHud.render({ drawMs: performance.now() - drawT0, tickMs: perf.tickMs, targetSpeed: perf.targetSpeed, effectiveSpeed: perf.effectiveSpeed });
   }
   requestAnimationFrame(frame);
 }

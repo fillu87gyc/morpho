@@ -5,14 +5,17 @@
 // 呼べる。実体は Worker とのメッセージ往復に過ぎない。
 
 import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type StageId } from './game.js';
-import type { ToWorkerMessage, FromWorkerMessage } from './worker-protocol.js';
+import type { ToWorkerMessage, FromWorkerMessage, PerfInfo } from './worker-protocol.js';
 import type { Genome, Vec2 } from '@morpho/sim';
+
+const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
 
 export class GameProxy {
   private worker: Worker;
   private latest: GameSnapshot | null = null;
   private recentEvents: string[] = [];
   private evoLog: EvolutionLog[] = [];
+  private latestPerf: PerfInfo = NO_PERF;
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -30,6 +33,7 @@ export class GameProxy {
         this.latest = msg.snapshot;
         this.recentEvents = msg.events;
         this.evoLog = msg.evolution;
+        this.latestPerf = msg.perf;
       }
     };
     if (parentGenome) this.send({ type: 'reset', parentGenome });
@@ -57,4 +61,5 @@ export class GameProxy {
   snapshot(): GameSnapshot { return this.current(); }
   events(): string[] { return this.recentEvents; }
   evolution(): EvolutionLog[] { return this.evoLog; }
+  perf(): PerfInfo { return this.latestPerf; }
 }

@@ -9,7 +9,11 @@ import type { ActivityField } from '../env/activity-field.js';
 import type { BiomassField } from '../env/biomass-field.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
-import { type NodeIndex, clamp01, crowdingAt } from './index-utils.js';
+import { type NodeIndex, buildDensityGrid, clamp01, crowdingAt } from './index-utils.js';
+
+// crowdingAt が 3x3 近傍探索だけで半径内を漏れなくカバーできる条件は
+// cellSize == radius (index-utils.ts 参照)。呼び出し側の半径 (4) と揃える。
+const CROWDING_RADIUS = 4;
 
 // ── Activity: 場に書く → 拡散 → 各エッジが場を読んで自分を更新 ─
 
@@ -29,6 +33,11 @@ export function updateActivity(
   }
   actField.diffuse(params.activityFieldDecay, params.activityFieldDiffusion);
 
+  // ノード密度を粗いグリッドへ一度だけ焼く (O(N))。
+  // 各エッジの crowdingAt 判定はこのグリッドの近傍セルだけを見るので、
+  // 全ノード線形走査 (O(N)) をエッジ毎に繰り返す必要がなくなる。
+  const densityGrid = buildDensityGrid(state, CROWDING_RADIUS);
+
   // 各エッジが場を参照して自身を更新
   for (const e of state.edges) {
     const a = idx.byId.get(e.from), b = idx.byId.get(e.to);
@@ -44,7 +53,7 @@ export function updateActivity(
       params.wActivityField * Math.min(1, actField.sample(mid)) +
       0.8 * youth -
       params.wFatigue * Math.min(1, e.fatigue) -
-      params.wCrowding * crowdingAt(state, mid, 4),
+      params.wCrowding * crowdingAt(densityGrid, mid, CROWDING_RADIUS),
     );
     e.activity = e.activity * 0.85 + newActivity * 0.15;
 

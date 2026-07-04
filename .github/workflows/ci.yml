@@ -39,6 +39,13 @@ jobs:
         working-directory: packages/sim
         run: pnpm test
 
+      # M8 P0: ベンチのスモーク実行。tick コストが壊滅的に (O(n^2) 化などで)
+      # 悪化していないかだけを緩い閾値で見る回帰ガード。詳細な内訳や成長
+      # カーブは `pnpm run bench` (引数なし) で手元から確認する。
+      - name: Bench smoke
+        working-directory: packages/sim
+        run: pnpm run bench -- --smoke
+
   web:
     name: web (typecheck + test + build)
     runs-on: ubuntu-latest

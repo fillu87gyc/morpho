@@ -82,6 +82,27 @@ test('起動してキャンバスが描画され、コンソールエラーが�
   expect(errors).toEqual([]);
 });
 
+test('M8 P0: `?debug` を付けると perf HUD が表示され、tick/描画コストと FPS を表示する', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/?debug');
+  await waitForReady(page);
+
+  const hud = page.locator('#perf-hud');
+  await expect(hud).toBeVisible();
+  await expect.poll(async () => (await hud.textContent()) ?? '', { timeout: 10_000 }).toMatch(/FPS \d+/);
+  const text = (await hud.textContent()) ?? '';
+  expect(text).toMatch(/draw \d+\.\d+ms/);
+  expect(text).toMatch(/tick \d+\.\d+ms/);
+  expect(text).toMatch(/speed x\d+(\.\d+)? \/ x\d+/);
+  expect(errors).toEqual([]);
+});
+
+test('`?debug` なしでは perf HUD が生成されない', async ({ page }) => {
+  await page.goto('/');
+  await waitForReady(page);
+  await expect(page.locator('#perf-hud')).toHaveCount(0);
+});
+
 test('放っておくと DAY が進み、キャンバスの絵も変わる (sim-worker が回っている)', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');
