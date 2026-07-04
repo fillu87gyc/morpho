@@ -19,16 +19,17 @@ import { STAGES, type StageId, type StageConfig } from './stages.js';
 import { computeQuests, type QuestStatus } from './quests.js';
 import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 import { TICKS_PER_DAY } from './day-loop.js';
+import { UndoStack } from './undo.js';
 
 export type { StageId } from './stages.js';
 
-export type Tool = 'food' | 'light' | 'water' | 'stone' | 'erase';
+// M10: モックアップ②の6分類。'heat'/'cool' は温度ツールの上げ下げサブトグル、
+// 'water'/'drain' は水を引く/止めるのサブトグル。
+export type Tool = 'food' | 'light' | 'water' | 'drain' | 'stone' | 'heat' | 'cool' | 'toxin' | 'erase';
 
-// モックアップの「環境バランス」5軸。
-// 温度と毒素は sim 側に対応モデルがないので、それぞれ
-//   温度 = ベース + 明るさ寄与 (光が強いほど温暖)
-//   毒素 = 障害物の存在比 (土地阻害物を「土地に蓄積する負荷」として扱う)
-// として観測量を派生させる。
+// モックアップの「環境バランス」5軸。M10 より前は温度・毒素に対応する
+// sim モデルがなく、明るさ/障害物からの派生値で代用していたが、
+// GridEnvironment に温度・毒素フィールドが実装されたので実測値に置き換えた。
 export interface EnvBalance {
   light: number;       // 明るさ
   temperature: number; // 温度 (派生)
@@ -143,6 +144,8 @@ export class Game {
   private stepCache!: StepCache;
   private lastEra = '';
   private landmarks: Vec2[] = [];
+  // M10: 環境フィールドへのスタンプの取り消し (stroke 単位、深さ10)。
+  private undo!: UndoStack;
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -182,7 +185,9 @@ export class Game {
     this.env = new GridEnvironment({
       worldSize: WORLD, fieldSize: FIELD,
       baseMoisture: this.stage.baseMoisture, baseBrightness: this.stage.baseBrightness,
+      baseTemperature: this.stage.baseTemperature,
     });
+    this.undo = new UndoStack(10);
     this.act = new ActivityField(WORLD, FIELD);
     this.bio = new BiomassField(WORLD, FIELD);
     this.bus = new EventBus();
@@ -215,7 +220,10 @@ export class Game {
   tick(steps: number = this.speed): void {
     for (let i = 0; i < steps; i++) {
       step(this.state, this.env, this.act, this.bio, this.params, this.rng, this.bus, this.stepCache);
-      this.env.decay(this.stage.nutrientDecayPerTick, this.stage.moistureRelaxPerTick);
+      this.env.decay(
+        this.stage.nutrientDecayPerTick, this.stage.moistureRelaxPerTick,
+        this.stage.tempRelaxPerTick, this.stage.toxinDecayPerTick,
+      );
     }
     this.drainBus();
     this.checkEraTransition();
@@ -267,31 +275,78 @@ export class Game {
     }
   }
 
+  // M10: 「やり直す」の stroke 境界。main.ts が pointerdown/pointerup で呼ぶ。
+  beginStroke(): void { this.undo.beginStroke(); }
+  endStroke(): void { this.undo.endStroke(); }
+  get canUndo(): boolean { return this.undo.canUndo; }
+  undoStroke(): void {
+    if (!this.undo.canUndo) return;
+    this.undo.undo();
+    this.pushEvent('やり直した');
+  }
+
   // pos はワールド座標 (0..worldSize)。画面→ワールド変換はカメラ (main 側) の責務。
+  // fieldSize/worldSize 比の変換は GridEnvironment.toField() と同じ式
+  // (private のため、Undo 記録用にここでも同じ変換を行う)。
   apply(pos: Vec2): void {
     const r = this.brushRadius;
+    const s = this.fieldSize / this.worldSize;
+    const fx = pos.x * s, fy = pos.y * s;
     switch (this.tool) {
       case 'food':
+        this.undo.recordBefore(this.env.nutrients, fx, fy, r * 2 + 1);
         this.env.placeFood(pos, r, 0.7);
         this.coloniesTotal += 1;
         this.pushEvent('栄養を撒いた');
         break;
       case 'light':
+        this.undo.recordBefore(this.env.brightness, fx, fy, r * 2 + 1);
         this.env.placeLight(pos, r, 0.45);
         this.pushEvent('光をあてた');
         break;
       case 'water':
+        this.undo.recordBefore(this.env.moisture, fx, fy, r * 2 + 1);
         this.env.placeWater(pos, r, 0.4);
         this.pushEvent('水を引いた');
         break;
-      case 'stone':
-        this.env.placeStone(pos, Math.max(2, r * 0.5));
+      case 'drain':
+        this.undo.recordBefore(this.env.moisture, fx, fy, r * 2 + 1);
+        this.env.placeDrain(pos, r, 0.35);
+        this.pushEvent('水を止めた');
+        break;
+      case 'stone': {
+        const sr = Math.max(2, r * 0.5);
+        this.undo.recordBefore(this.env.obstacle, fx, fy, sr + 1);
+        this.env.placeStone(pos, sr);
         this.pushEvent('障害物を置いた');
         break;
+      }
+      case 'heat':
+        this.undo.recordBefore(this.env.temperature, fx, fy, r * 2 + 1);
+        this.env.placeHeat(pos, r, 0.12);
+        this.pushEvent('温度を上げた');
+        break;
+      case 'cool':
+        this.undo.recordBefore(this.env.temperature, fx, fy, r * 2 + 1);
+        this.env.placeHeat(pos, r, -0.12);
+        this.pushEvent('温度を下げた');
+        break;
+      case 'toxin':
+        this.undo.recordBefore(this.env.toxin, fx, fy, r * 2 + 1);
+        this.env.placeToxin(pos, r, 0.35);
+        this.pushEvent('毒素をまいた');
+        break;
       case 'erase':
+        this.eraseFields(fx, fy, r * s);
         this.erase(pos, r);
         this.pushEvent('土地をならした');
         break;
+    }
+  }
+
+  private eraseFields(fx: number, fy: number, fr: number): void {
+    for (const f of [this.env.nutrients, this.env.moisture, this.env.brightness, this.env.obstacle, this.env.toxin]) {
+      this.undo.recordBefore(f, fx, fy, fr + 1);
     }
   }
 
@@ -305,7 +360,9 @@ export class Game {
     const x1 = Math.min(fs - 1, Math.ceil(cx + fr));
     const y0 = Math.max(0, Math.floor(cy - fr));
     const y1 = Math.min(fs - 1, Math.ceil(cy + fr));
-    const fields = [this.env.nutrients, this.env.moisture, this.env.brightness, this.env.obstacle];
+    // 温度は「ならす」対象に含めない (0 に落とすと極寒扱いになってしまい、
+    // baseTemperature に戻す方が「土地をならす」の意図に合うため対象外)。
+    const fields = [this.env.nutrients, this.env.moisture, this.env.brightness, this.env.obstacle, this.env.toxin];
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const dx = x - cx, dy = y - cy;
@@ -362,19 +419,22 @@ export class Game {
 
   private computeBalance(): EnvBalance {
     const n = this.fieldSize * this.fieldSize;
-    let nu = 0, mo = 0, br = 0, ob = 0;
+    let nu = 0, mo = 0, br = 0, te = 0, tx = 0;
     for (let i = 0; i < n; i++) {
       nu += this.env.nutrients.data[i] ?? 0;
       mo += this.env.moisture.data[i] ?? 0;
       br += this.env.brightness.data[i] ?? 0;
-      ob += this.env.obstacle.data[i] ?? 0;
+      te += this.env.temperature.data[i] ?? 0;
+      tx += this.env.toxin.data[i] ?? 0;
     }
     const light = Math.min(1, br / (n * 0.5));
     const moisture = Math.min(1, mo / (n * 0.5));
     const nutrient = Math.min(1, nu / (n * 0.25));
-    const toxin = Math.min(1, ob / (n * 0.18));
-    // 温度: ベース 40% に明るさ寄与を足す
-    const temperature = Math.min(1, 0.4 + light * 0.35);
+    // 温度フィールドは既に 0..1 目安のスケールなので、平均をそのままクランプする。
+    const temperature = Math.max(0, Math.min(1, te / n));
+    // 毒素は 0 から始まり局所的にしか撒かれないため、nutrient よりずっと
+    // 敏感な尺度で正規化する (少量でもプレイヤーに伝わるように)。
+    const toxin = Math.max(0, Math.min(1, tx / (n * 0.05)));
     return { light, temperature, moisture, nutrient, toxin };
   }
 

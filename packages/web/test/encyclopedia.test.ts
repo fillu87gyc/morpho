@@ -20,7 +20,10 @@ function setGlobalStorage(s: StorageLike | undefined): void {
   else delete g.localStorage;
 }
 
-const genome: Genome = { mergeRadius: 1, branchProb: 1, nutrientPref: 1, moisturePref: 1, lightAvoidance: 1, growthVigor: 1 };
+const genome: Genome = {
+  mergeRadius: 1, branchProb: 1, nutrientPref: 1, moisturePref: 1, lightAvoidance: 1, growthVigor: 1,
+  heatTolerance: 1, toxinResistance: 1,
+};
 const ind = (score: number): Individuality => ({
   exploration: score, efficiency: score, stability: score,
   health: score, vitality: score, adaptability: score,

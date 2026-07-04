@@ -20,7 +20,12 @@ export type ToWorkerMessage =
   // 到達判定を Worker 側で行うのは、メインスレッドの RAF ポーリングだと
   // 速度×24 時に日境界を大きく飛び越えてしまうため。target=null で
   // 日境界のキャップを解除する (「見守り」への切り替え時に使う)。
-  | { type: 'runUntilTick'; target: number | null };
+  | { type: 'runUntilTick'; target: number | null }
+  // M10: 「やり直す」(Undo)。pointerdown〜up の stroke 単位で環境フィールドへの
+  // スタンプを記録・取り消す (sim の時間そのものは巻き戻さない)。
+  | { type: 'beginStroke' }
+  | { type: 'endStroke' }
+  | { type: 'undoStroke' };
 
 // M8 P0: 計測基盤。perf HUD (`?debug`) 表示用の Worker 側計測値。
 export interface PerfInfo {

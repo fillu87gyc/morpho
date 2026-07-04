@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createInitialState, seedSource, createRNG, GridEnvironment,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, run, computeTraits,
+  type SimParams,
 } from '../src/index.js';
 
 function setupRun(seed: number) {
@@ -34,6 +35,84 @@ describe('determinism', () => {
     run(a.state, a.env, a.actField, a.bioField, DEFAULT_PARAMS, a.rng, a.bus, 100);
     run(b.state, b.env, b.actField, b.bioField, DEFAULT_PARAMS, b.rng, b.bus, 100);
     expect(a.state.nodes.length === b.state.nodes.length && a.state.edges.length === b.state.edges.length).toBe(false);
+  });
+
+  // M10: 温度・毒素を置いた場合も決定的であることを確認する。
+  it('温度・毒素を置いた状態でも、同じseedからは同じ最終状態が得られる', () => {
+    function withHazards(seed: number) {
+      const r = setupRun(seed);
+      r.env.placeHeat({ x: 40, y: 40 }, 10, -0.3);
+      r.env.placeToxin({ x: 60, y: 60 }, 10, 0.5);
+      return r;
+    }
+    const a = withHazards(42), b = withHazards(42);
+    run(a.state, a.env, a.actField, a.bioField, DEFAULT_PARAMS, a.rng, a.bus, 150);
+    run(b.state, b.env, b.actField, b.bioField, DEFAULT_PARAMS, b.rng, b.bus, 150);
+    expect(a.state.nodes.length).toBe(b.state.nodes.length);
+    expect(a.state.edges.length).toBe(b.state.edges.length);
+    for (let i = 0; i < a.state.nodes.length; i++) {
+      expect(a.state.nodes[i]!.pos.x).toBe(b.state.nodes[i]!.pos.x);
+    }
+  });
+});
+
+describe('M10: 温度・毒素の成長への影響', () => {
+  const HAZARD_PARAMS: SimParams = { ...DEFAULT_PARAMS, tempOptimal: 0.5, tempTolerance: 0.1 };
+
+  it('最適から外れた温度の領域では、活動の回復が遅れて成長が控えめになる', () => {
+    function setupAt(seed: number, coldZone: boolean) {
+      const rng = createRNG(seed);
+      const env = new GridEnvironment({ worldSize: 100, fieldSize: 64, baseTemperature: 0.5 });
+      env.placeFood({ x: 50, y: 80 }, 8, 1.2);
+      if (coldZone) env.placeHeat({ x: 50, y: 50 }, 30, -0.4);
+      const actField = new ActivityField(100, 64);
+      const bioField = new BiomassField(100, 64);
+      const state = createInitialState(seed, 100);
+      seedSource(state, { x: 50, y: 20 });
+      const bus = new EventBus();
+      return { state, env, actField, bioField, rng, bus };
+    }
+    let coldEdges = 0, warmEdges = 0;
+    for (let seed = 0; seed < 5; seed++) {
+      const cold = setupAt(seed, true);
+      run(cold.state, cold.env, cold.actField, cold.bioField, HAZARD_PARAMS, cold.rng, cold.bus, 300);
+      coldEdges += cold.state.edges.length;
+
+      const warm = setupAt(seed, false);
+      run(warm.state, warm.env, warm.actField, warm.bioField, HAZARD_PARAMS, warm.rng, warm.bus, 300);
+      warmEdges += warm.state.edges.length;
+    }
+    expect(coldEdges).toBeLessThan(warmEdges);
+  });
+
+  it('毒素の中にあるネットワークは、同じ条件のネットワークより activity が低く保たれる', () => {
+    function setupAt(seed: number, toxic: boolean) {
+      const rng = createRNG(seed);
+      const env = new GridEnvironment({ worldSize: 100, fieldSize: 64 });
+      env.placeFood({ x: 50, y: 20 }, 8, 1.2);
+      if (toxic) env.placeToxin({ x: 50, y: 50 }, 15, 0.8);
+      const actField = new ActivityField(100, 64);
+      const bioField = new BiomassField(100, 64);
+      const state = createInitialState(seed, 100);
+      seedSource(state, { x: 50, y: 50 });
+      const bus = new EventBus();
+      return { state, env, actField, bioField, rng, bus };
+    }
+    function avgActivity(state: ReturnType<typeof setupAt>['state']): number {
+      if (state.edges.length === 0) return 0;
+      return state.edges.reduce((s, e) => s + e.activity, 0) / state.edges.length;
+    }
+    let toxicActivitySum = 0, cleanActivitySum = 0;
+    for (let seed = 0; seed < 5; seed++) {
+      const toxic = setupAt(seed, true);
+      run(toxic.state, toxic.env, toxic.actField, toxic.bioField, DEFAULT_PARAMS, toxic.rng, toxic.bus, 60);
+      toxicActivitySum += avgActivity(toxic.state);
+
+      const clean = setupAt(seed, false);
+      run(clean.state, clean.env, clean.actField, clean.bioField, DEFAULT_PARAMS, clean.rng, clean.bus, 60);
+      cleanActivitySum += avgActivity(clean.state);
+    }
+    expect(toxicActivitySum).toBeLessThan(cleanActivitySum);
   });
 });
 

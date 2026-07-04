@@ -15,6 +15,15 @@ import { type NodeIndex, buildDensityGrid, clamp01, crowdingAt } from './index-u
 // cellSize == radius (index-utils.ts 参照)。呼び出し側の半径 (4) と揃える。
 const CROWDING_RADIUS = 4;
 
+// M10: 最適温度からの乖離度に応じた suitability [0,1]。tempTolerance 以内は
+// 満点、そこから tempTolerance ぶん離れるとゼロまで線形に落ちる
+// (= 「離れるほど活動の回復と成長確率が落ちる」の実装)。
+function tempSuitability(temperature: number, params: SimParams): number {
+  const dev = Math.abs(temperature - params.tempOptimal);
+  if (dev <= params.tempTolerance) return 1;
+  return Math.max(0, 1 - (dev - params.tempTolerance) / params.tempTolerance);
+}
+
 // ── Activity: 場に書く → 拡散 → 各エッジが場を読んで自分を更新 ─
 
 export function updateActivity(
@@ -52,17 +61,26 @@ export function updateActivity(
     const fluxN = Math.min(1, e.flux / params.fluxNormalize);
     const youth = Math.max(0, 1 - (state.tick - e.bornAt) / 100);
 
-    const newActivity = clamp01(
+    // M10: 毒素は activity の目標値そのものを直接削り (「濃度に比例して
+    // activity を減衰させる」)、温度は目標への追従度 (回復の速さ) を
+    // 落とす — 「最適から離れるほど活動の回復が落ちる」の実装。
+    const suitability = tempSuitability(ctx.temperature, params);
+    const targetActivity = clamp01(
       params.wFlux * fluxN +
       params.wNutrient * ctx.nutrients +
       params.wActivityField * Math.min(1, actField.sample(mid)) +
       0.8 * youth -
       params.wFatigue * Math.min(1, e.fatigue) -
-      params.wCrowding * crowdingAt(densityGrid, mid, CROWDING_RADIUS),
+      params.wCrowding * crowdingAt(densityGrid, mid, CROWDING_RADIUS) -
+      ctx.toxin * params.toxinPenalty,
     );
+    const newActivity = targetActivity * suitability;
     e.activity = e.activity * 0.85 + newActivity * 0.15;
 
-    e.fatigue += e.activity * params.fatigueGrow - fluxN * params.fatigueRecover;
+    // 高温側 (最適+許容域を超えた分) でのみ疲労が増しやすくなる。
+    const heatExcess = Math.max(0, ctx.temperature - (params.tempOptimal + params.tempTolerance));
+    const fatigueMult = 1 + heatExcess * 2;
+    e.fatigue += e.activity * params.fatigueGrow * fatigueMult - fluxN * params.fatigueRecover;
     if (e.fatigue < 0) e.fatigue = 0;
     if (e.fatigue > 3) e.fatigue = 3;
 

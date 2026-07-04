@@ -14,13 +14,19 @@ export interface StageConfig {
   description: string;
   baseMoisture: number;
   baseBrightness: number;
+  // M10: 「土地本来」の温度。全ステージ 0.5 (SimParams.tempOptimal の既定値と
+  // 揃えてある) にして、プレイヤーが温度ツールで動かさない限りは
+  // どのステージでも成長に影響しない。
+  baseTemperature: number;
   paramOverrides: Partial<SimParams>;
   // 固定食料点 (FOOD_POINTS) の量に掛ける係数。1 未満で希少、1 超で豊富。
   foodAmountMultiplier: number;
-  // 自然減衰 (1 tick あたりの割合)。放置すると栄養は消費され、水分は
-  // baseMoisture へ緩和していく。
+  // 自然減衰 (1 tick あたりの割合)。放置すると栄養は消費され、水分/温度は
+  // baseMoisture/baseTemperature へ緩和していき、毒素はゆっくり分解される。
   nutrientDecayPerTick: number;
   moistureRelaxPerTick: number;
+  tempRelaxPerTick: number;
+  toxinDecayPerTick: number;
   // 地形を生成し、レンダラがステージ固有のアイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
   // を描く目印として使う座標を返す。ステージの「らしさ」を一目で伝えるための
   // 装飾用途のみで、sim の判定には一切影響しない。
@@ -225,10 +231,13 @@ export const STAGES: Record<StageId, StageConfig> = {
     description: '起伏の少ない、育成の基本となる培養皿。',
     baseMoisture: 0.3,
     baseBrightness: 0.2,
+    baseTemperature: 0.5,
     paramOverrides: {},
     foodAmountMultiplier: 1.0,
     nutrientDecayPerTick: 0.0006,
     moistureRelaxPerTick: 0.0009,
+    tempRelaxPerTick: 0.0009,
+    toxinDecayPerTick: 0.0015,
     generateTerrain: generatePetriTerrain,
   },
   cave: {
@@ -237,10 +246,14 @@ export const STAGES: Record<StageId, StageConfig> = {
     description: '暗く湿った岩場。光を気にせず伸び広がれる。',
     baseMoisture: 0.55,
     baseBrightness: 0.05,
+    baseTemperature: 0.5,
     paramOverrides: { brightnessPenalty: 0 },
     foodAmountMultiplier: 0.9,
     nutrientDecayPerTick: 0.0005,
     moistureRelaxPerTick: 0.0004,
+    tempRelaxPerTick: 0.0004,
+    // 空気がこもりがちで毒素が抜けにくい。
+    toxinDecayPerTick: 0.0010,
     generateTerrain: generateCaveTerrain,
   },
   desert: {
@@ -249,10 +262,13 @@ export const STAGES: Record<StageId, StageConfig> = {
     description: '乾いて蒸発が早く、エサも希少。水と栄養を絶やさぬように。',
     baseMoisture: 0.12,
     baseBrightness: 0.5,
+    baseTemperature: 0.5,
     paramOverrides: {},
     foodAmountMultiplier: 0.55,
     nutrientDecayPerTick: 0.0012,
     moistureRelaxPerTick: 0.0025,
+    tempRelaxPerTick: 0.0025,
+    toxinDecayPerTick: 0.0012,
     generateTerrain: generateDesertTerrain,
   },
   ruins: {
@@ -261,10 +277,13 @@ export const STAGES: Record<StageId, StageConfig> = {
     description: '崩れた建物の基礎と瓦礫が入り組む。障害物を避けて広がろう。',
     baseMoisture: 0.28,
     baseBrightness: 0.22,
+    baseTemperature: 0.5,
     paramOverrides: { obstaclePenalty: 2.6 },
     foodAmountMultiplier: 0.85,
     nutrientDecayPerTick: 0.0007,
     moistureRelaxPerTick: 0.0009,
+    tempRelaxPerTick: 0.0009,
+    toxinDecayPerTick: 0.0012,
     generateTerrain: generateRuinsTerrain,
   },
   wetland: {
@@ -273,10 +292,14 @@ export const STAGES: Record<StageId, StageConfig> = {
     description: '水と栄養に恵まれ、乾きにくい肥沃な土地。',
     baseMoisture: 0.6,
     baseBrightness: 0.15,
+    baseTemperature: 0.5,
     paramOverrides: {},
     foodAmountMultiplier: 1.15,
     nutrientDecayPerTick: 0.0004,
     moistureRelaxPerTick: 0.0006,
+    tempRelaxPerTick: 0.0006,
+    // 水の流れが毒素を洗い流しやすい。
+    toxinDecayPerTick: 0.0022,
     generateTerrain: generateWetlandTerrain,
   },
 };

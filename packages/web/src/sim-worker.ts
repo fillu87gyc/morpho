@@ -85,6 +85,9 @@ ctx.onmessage = (e) => {
       if (msg.target !== null) scheduler.reset();
       break;
     }
+    case 'beginStroke': game.beginStroke(); break;
+    case 'endStroke': game.endStroke(); break;
+    case 'undoStroke': game.undoStroke(); dirty = true; forceDerived = true; break;
   }
 };
 

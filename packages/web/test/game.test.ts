@@ -247,4 +247,66 @@ describe('Game', () => {
     const after = sumNutrients();
     expect(after).toBeLessThan(before);
   });
+
+  // M10: 温度・毒素ツールと Undo。
+  it('heat/cool ツールは温度フィールドを上げ下げする', () => {
+    const g = new Game(5);
+    const pos = { x: 40, y: 40 };
+    const at = () => {
+      const s = g.fieldSize / g.worldSize;
+      const idx = Math.floor(pos.y * s) * g.fieldSize + Math.floor(pos.x * s);
+      return g.env.temperature.data[idx] ?? 0;
+    };
+    const base = at();
+    g.setTool('heat');
+    g.setBrush(4);
+    g.apply(pos);
+    expect(at()).toBeGreaterThan(base);
+
+    g.reset(5);
+    g.setTool('cool');
+    g.setBrush(4);
+    g.apply(pos);
+    expect(at()).toBeLessThan(base);
+  });
+
+  it('toxin ツールは毒素フィールドに値を乗せ、環境バランスの toxin に反映される', () => {
+    const g = new Game(5);
+    g.setTool('toxin');
+    g.setBrush(6);
+    g.apply({ x: 50, y: 50 });
+    expect(g.snapshot().balance.toxin).toBeGreaterThan(0);
+  });
+
+  it('drain ツールは湿度フィールドを baseMoisture より下げる', () => {
+    const g = new Game(5);
+    const pos = { x: 45, y: 45 };
+    const s = g.fieldSize / g.worldSize;
+    const idx = Math.floor(pos.y * s) * g.fieldSize + Math.floor(pos.x * s);
+    const before = g.env.moisture.data[idx] ?? 0;
+    g.setTool('drain');
+    g.setBrush(6);
+    g.apply(pos);
+    expect(g.env.moisture.data[idx]).toBeLessThan(before);
+  });
+
+  it('やり直す (undo) は直前のひと塗りを取り消す', () => {
+    const g = new Game(5);
+    const pos = { x: 60, y: 60 };
+    g.setTool('stone');
+    g.setBrush(5);
+    g.beginStroke();
+    g.apply(pos);
+    g.endStroke();
+    expect(obstacleAt(g, pos)).toBeGreaterThan(0);
+
+    g.undoStroke();
+    expect(obstacleAt(g, pos)).toBe(0);
+  });
+
+  it('何もしていない状態で undo しても安全 (no-op)', () => {
+    const g = new Game(5);
+    expect(() => g.undoStroke()).not.toThrow();
+    expect(g.canUndo).toBe(false);
+  });
 });

@@ -178,9 +178,25 @@
                 <span class="ico ico-water"></span>
                 <span>水</span>
               </button>
+              <button class="tool" data-tool="drain" title="水を止める (乾かす)">
+                <span class="ico ico-drain"></span>
+                <span>乾燥</span>
+              </button>
               <button class="tool" data-tool="stone" title="障害物を置く">
                 <span class="ico ico-stone"></span>
                 <span>石</span>
+              </button>
+              <button class="tool" data-tool="heat" title="温度を上げる">
+                <span class="ico ico-heat"></span>
+                <span>加温</span>
+              </button>
+              <button class="tool" data-tool="cool" title="温度を下げる">
+                <span class="ico ico-cool"></span>
+                <span>冷却</span>
+              </button>
+              <button class="tool" data-tool="toxin" title="毒素をまく">
+                <span class="ico ico-toxin"></span>
+                <span>毒素</span>
               </button>
               <button class="tool" data-tool="erase" title="土地をならす">
                 <span class="ico ico-erase"></span>
@@ -192,6 +208,7 @@
               <input id="brush" type="range" min="2" max="16" value="5" />
             </div>
             <div class="hud-hint">クリック or ドラッグで配置</div>
+            <button id="undo-stroke" class="undo-btn" title="直前のひと塗りを取り消す (Ctrl+Z)">↩ やり直す</button>
           </section>
 
           <section class="card">

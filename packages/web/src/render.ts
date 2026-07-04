@@ -32,8 +32,9 @@ export interface RenderOptions {
   showHeat: boolean;
 }
 
-// paintFieldLayer が焼くレイヤ数: biomass / nutrients / moisture / brightness / obstacle。
-const FIELD_LAYER_COUNT = 5;
+// paintFieldLayer が焼くレイヤ数: biomass / nutrients / moisture / brightness /
+// obstacle / temperature / toxin (M10)。
+const FIELD_LAYER_COUNT = 7;
 // 生の浮動小数比較だと biomass の減衰が皿全体でごく僅かに毎tick進み続けるため、
 // 見た目に影響しない変化まで「差分」扱いになってしまう。可視のバイト値
 // (0-255) が変わらない程度の揺れは無視する。
@@ -61,6 +62,12 @@ const TUBE_LIGHT:  [number, number, number] = [255, 220, 150]; // 細い枝 (ク
 const TUBE_DARK:   [number, number, number] = [200, 120, 50];  // 太い幹 (オレンジ)
 const SOURCE_DOT:  [number, number, number] = [170, 220, 255];
 const SINK_DOT:    [number, number, number] = [170, 255, 170];
+// M10: 毒素は HUD の環境バランス (dot-toxin) と同系統の紫。常時薄く見せる
+// (obstacle/food と同じ扱い — 避けたいものは常に見える方が良い)。
+const TOXIN_COLOR: [number, number, number] = [150, 95, 190];
+// M10: 温度ヒートマップ (showHeat トグル時のみ)。暑い=赤橙、寒い=藍青。
+const HEAT_HOT:  [number, number, number] = [235, 105, 65];
+const HEAT_COLD: [number, number, number] = [110, 140, 235];
 
 // ステージごとの背景トーンと障害物 (石) の色味。「洞窟の岩」「砂漠の岩」
 // 「都市跡の風化した石材」を見分けられるよう、ステージごとに変える。
@@ -240,6 +247,9 @@ export class CanvasRenderer {
     const moiData = env.moisture.data;
     const briData = env.brightness.data;
     const obData = env.obstacle.data;
+    const tempData = env.temperature.data;
+    const toxData = env.toxin.data;
+    const baseTemp = env.baseTemperature;
 
     let maxBio = 0;
     for (let i = 0; i < bioData.length; i++) {
@@ -260,7 +270,7 @@ export class CanvasRenderer {
     const rockColor = STAGE_ROCK_COLOR[stageId];
 
     const dirty = this.tracker.update(
-      [bioData, nutData, moiData, briData, obData],
+      [bioData, nutData, moiData, briData, obData, tempData, toxData],
       full,
       (i) => {
         const di = i * 4;
@@ -306,6 +316,17 @@ export class CanvasRenderer {
             [r, g, b] = blend(r, g, b, 245, 230, 150, k * 0.28);
             a = Math.max(a, k * 0.28);
           }
+          // M10: 温度 (baseTemperature からの乖離を暑い=赤橙/寒い=藍青で示す)
+          const tempDelta = (tempData[i] ?? baseTemp) - baseTemp;
+          if (tempDelta > 0.05) {
+            const k = Math.min(1, (tempDelta - 0.05) * 1.6);
+            [r, g, b] = blend(r, g, b, HEAT_HOT[0], HEAT_HOT[1], HEAT_HOT[2], k * 0.3);
+            a = Math.max(a, k * 0.3);
+          } else if (tempDelta < -0.05) {
+            const k = Math.min(1, (-tempDelta - 0.05) * 1.6);
+            [r, g, b] = blend(r, g, b, HEAT_COLD[0], HEAT_COLD[1], HEAT_COLD[2], k * 0.3);
+            a = Math.max(a, k * 0.3);
+          }
         }
 
         // 障害物 — ステージごとの石材色 (洞窟は青灰、砂漠は赤茶、都市跡は風化ベージュ)
@@ -313,6 +334,15 @@ export class CanvasRenderer {
         if (ob > 0.5) {
           [r, g, b] = blend(r, g, b, rockColor[0], rockColor[1], rockColor[2], 0.85);
           a = Math.max(a, 0.85);
+        }
+
+        // M10: 毒素 — 常時薄紫で見せる (obstacle と違い通れるが、避けたくなる目印)
+        const tox = toxData[i] ?? 0;
+        if (tox > 0.04) {
+          const k = Math.min(1, tox * 1.1);
+          const fa = 0.14 + k * 0.42;
+          [r, g, b] = blend(r, g, b, TOXIN_COLOR[0], TOXIN_COLOR[1], TOXIN_COLOR[2], fa);
+          a = Math.max(a, fa);
         }
 
         // プラズマ膜 — 縁は暗い金、中は山吹、芯は明るい黄
@@ -645,7 +675,11 @@ function toolColor(tool: string): string {
     case 'food': return 'rgba(120, 230, 140, 0.9)';
     case 'light': return 'rgba(250, 230, 140, 0.9)';
     case 'water': return 'rgba(140, 200, 250, 0.9)';
+    case 'drain': return 'rgba(216, 190, 130, 0.9)';
     case 'stone': return 'rgba(180, 180, 190, 0.9)';
+    case 'heat': return 'rgba(235, 130, 70, 0.9)';
+    case 'cool': return 'rgba(120, 190, 235, 0.9)';
+    case 'toxin': return 'rgba(180, 130, 220, 0.9)';
     case 'erase': return 'rgba(240, 120, 120, 0.9)';
     default: return 'rgba(255,255,255,0.8)';
   }

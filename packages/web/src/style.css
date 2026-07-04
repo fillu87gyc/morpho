@@ -336,6 +336,19 @@ body { overflow: hidden; }
 .ico-water { background: radial-gradient(circle, #a6d8ff, #2f74b8); }
 .ico-stone { background: radial-gradient(circle, #b0a8a0, #4d4644); border-radius: 4px; }
 .ico-erase { background: radial-gradient(circle, #f5b5b5, #b34a4a); }
+/* M10 */
+.ico-drain { background: radial-gradient(circle, #e8d9a6, #b8935a); }
+.ico-heat { background: radial-gradient(circle, #ffcf8a, #d9622f); }
+.ico-cool { background: radial-gradient(circle, #cdeeff, #4fa7d9); }
+.ico-toxin { background: radial-gradient(circle, #d9b3f0, #8a5cb0); }
+
+.undo-btn {
+  width: 100%; margin-top: 4px;
+  background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
+  border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12px;
+}
+.undo-btn:hover { background: rgba(255,255,255,0.06); }
+.undo-btn:active { transform: scale(0.98); }
 
 .brush { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; }
 .brush input { width: 100%; }

@@ -120,6 +120,16 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
 
 let showHeat = false;
 
+// ── M10: 「やり直す」(Undo) ────────────────────────────
+const undoBtn = document.getElementById('undo-stroke') as HTMLButtonElement;
+undoBtn.addEventListener('click', () => game.undoStroke());
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    game.undoStroke();
+  }
+});
+
 // ── M9: デイループ (仕込む→委ねる→受け取る) ──────────────
 // 既存の「見守り (連続再生)」を既定のまま残し (継続的な DAY 自動進行を
 // 前提にした e2e/smoke.spec.ts・mobile.spec.ts を壊さないため)、デイループは
@@ -336,6 +346,7 @@ canvas.addEventListener('pointerdown', (e) => {
       const cur = activeTouches.get(e.pointerId);
       if (!cur) return;
       pressed = true;
+      game.beginStroke();
       applyAt(cur.x, cur.y);
     }, TAP_GRACE_MS);
     return;
@@ -348,6 +359,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (e.button !== 0) return;
   pressed = true;
+  game.beginStroke();
   applyAt(p.x, p.y);
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -390,14 +402,21 @@ function endTouch(e: PointerEvent): void {
   if (wasPendingTap) {
     // 2本目が来ないまま指が離れた = 素早いタップと確定。猶予を待たず即配置する。
     clearPendingTap();
-    if (lastPos) applyAt(lastPos.x, lastPos.y);
+    if (lastPos) {
+      game.beginStroke();
+      applyAt(lastPos.x, lastPos.y);
+    }
   }
+  // M10: Undo の stroke 境界。beginStroke が呼ばれていなくても
+  // (2本指ピンチのみで終わった等) endStroke は no-op なので安全に呼べる。
+  game.endStroke();
   pressed = false;
 }
 canvas.addEventListener('pointerup', (e) => {
   canvas.releasePointerCapture(e.pointerId);
   if (e.pointerType === 'touch') { endTouch(e); hover = null; return; }
   if (e.button === 2) { panning = false; panLast = null; return; }
+  game.endStroke();
   pressed = false;
 });
 canvas.addEventListener('pointercancel', (e) => {
@@ -406,6 +425,7 @@ canvas.addEventListener('pointercancel', (e) => {
     activeTouches.delete(e.pointerId);
     if (pinch && (e.pointerId === pinch.ids[0] || e.pointerId === pinch.ids[1])) pinch = null;
   }
+  game.endStroke();
   pressed = false;
   panning = false;
   panLast = null;

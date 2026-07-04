@@ -6,10 +6,10 @@
 ## 現在地
 
 - **`@morpho/sim`** — 粘菌のローカル則 (グラフ成長 / Biomass膜 / Activity場 / 環境ツール) は完成済み。決定論 + ベンチ (`pnpm --filter @morpho/sim run bench`) で守られている。
-- **`@morpho/web`** — sim を Worker で回し `<canvas>` に描く「観察サンドボックス」としては完成 (M0〜M8 完了)。HUD・ツール・図鑑・系統樹・アルバム・環境音・PWA・GitHub Pages デプロイまで揃っている。M9 で「1日を仕込む → 委ねる → 結果を受け取る」のデイループ (見守り (連続) と切り替え可能) を追加した。
-- **モックアップの「ゲーム」への残りギャップ**: 通貨、星評価、分岐する系統樹、温度・毒素、大陸、時代の目標化などがまだ欠けている。ギャップの全量は下の「[ギャップ棚卸し](#モックアップとのギャップ棚卸し-2026-07)」、実装計画は M10〜M15 に定義した。
+- **`@morpho/web`** — sim を Worker で回し `<canvas>` に描く「観察サンドボックス」としては完成 (M0〜M8 完了)。HUD・ツール・図鑑・系統樹・アルバム・環境音・PWA・GitHub Pages デプロイまで揃っている。M9 で「1日を仕込む → 委ねる → 結果を受け取る」のデイループ (見守り (連続) と切り替え可能) を、M10 で温度・毒素・水止め・Undo を追加した。
+- **モックアップの「ゲーム」への残りギャップ**: 通貨、星評価、分岐する系統樹、大陸、時代の目標化などがまだ欠けている。ギャップの全量は下の「[ギャップ棚卸し](#モックアップとのギャップ棚卸し-2026-07)」、実装計画は M11〜M15 に定義した。
 
-## 完了済みマイルストーン (M0〜M9) — 要約
+## 完了済みマイルストーン (M0〜M10) — 要約
 
 > 詳細な設計メモは各実装ファイル冒頭のコメントと git 履歴に残っている。ここでは「何がどこにあるか」だけを引けるようにする。
 
@@ -26,6 +26,7 @@
 | **M7 仕上げ** | WebAudio 手続き生成の環境音、アルバム (IndexedDB + toBlob)、PWA (オフライン/ホーム追加)、タッチ + ピンチズーム、GitHub Pages 自動デプロイ | `ambient.ts` `album.ts` `pinch.ts` `vite.config.ts` `.github/workflows/pages.yml` |
 | **M8 速度** | perf HUD (`?debug`) + 再現ベンチ + CI スモーク。crowding のグリッド化 / マルチソース BFS / index キャッシュ / diffuse 間引き / line-stamp で 1 tick 0.5〜0.7ms。typed array transfer で clone ゼロ化、時間予算スケジューラ、描画バッチで 0.8〜1.5ms/frame、早送りモード (⏩) | `sim/graph/*` `tick-scheduler.ts` `snapshot-codec.ts` `perf-hud.ts` |
 | **M9 デイループ** | 「仕込む→委ねる→受け取る」の1日単位フェーズ (`prepare/observe/result`)。Worker の `runUntilTick()` で日境界に自動停止、結果パネルに3軸スコアの前日比 Δ とサムネイル。既定は見守り (連続) のまま、ヘッダのトグルでデイループへ切替 | `day-loop.ts` `day-report.ts` `worker-protocol.ts` `sim-worker.ts` |
+| **M10 環境システム** | sim に温度・毒素フィールドを追加 (既定は無害、ツール使用時のみ影響)。温度は最適カーブで activity 回復/疲労に、毒素は activity 減衰+成長候補ペナルティに効く (通過は可能)。Genome に耐性2遺伝子。web は温度/冷却/毒素/水止めツールとUndo (stroke単位) を追加、環境バランスHUDを実測値化 | `sim/env/environment.ts` `sim/graph/life.ts` `sim/graph/genome.ts` `web/src/undo.ts` |
 
 **速度の現状**: スライダー上限 ×24 に対し通常モードで実効 ×4〜7、早送り (⏩) で ×10 前後。残るボトルネックは sim の tick コスト (エッジ数に比例) のみ。ベースライン計測値は `sim/scripts/bench.ts` で再現できる。
 
@@ -63,11 +64,11 @@
 | 19 | 世界の目標: 「時代を『変形体期』に進める」= 時代が条件達成型の目標 | ❌ 時代は日数で勝手に進む | **M14** |
 | 20 | メインクエスト「大陸全体に栄養を届けよう 68%」 | ❌ 該当クエストなし (拠点接続/探索率のみ) | **M14** |
 | 21 | 速度コントロール: ⏸ ▶ ▶▶ ▶▶▶ の4段ボタン | 🟡 スライダー + ⏸ + ⏩。機能は同等だがモックアップの UI と異なる | **M14** |
-| 22 | 環境バランス 5軸 (光/温度/湿度/栄養/毒素) | 🟡 表示はあるが**温度と毒素は偽物** (温度=明るさからの派生、毒素=障害物比)。sim に実体がない | **M10** |
-| 23 | ツール「温度を変える」 | ❌ | **M10** |
-| 24 | ツール「毒素をまく」 | ❌ | **M10** |
-| 25 | ツール「水を引く / 止める」 | 🟡 水を足すことしかできない (「止める/乾かす」がない) | **M10** |
-| 26 | 「やり直す」(Undo) ボタン | ❌ | **M10** |
+| 22 | 環境バランス 5軸 (光/温度/湿度/栄養/毒素) | ✅ 実フィールド平均値 (M10) | — |
+| 23 | ツール「温度を変える」 | ✅ 加温/冷却 (M10) | — |
+| 24 | ツール「毒素をまく」 | ✅ (M10) | — |
+| 25 | ツール「水を引く / 止める」 | ✅ 乾燥ツール追加 (M10) | — |
+| 26 | 「やり直す」(Undo) ボタン | ✅ stroke単位・深さ10・Ctrl+Z (M10) | — |
 | 27 | 進化の記録: 「新しい形質を獲得」「個体が突然変異 — 光走性が上昇」 | 🟡 時代の節目しか記録されない。プレイ中の突然変異・形質獲得イベントがない | **M12** |
 | 28 | 最近の出来事: 「栄養を発見」「障害物を迂回」「分岐を強化」「胞子を生成」+ 時刻 | 🟡 SimEvent (NewBranch/ReachedFood/EdgeThickened 等) はあるが、「障害物を迂回」に当たるイベントがなく、文言・時刻表示もモックアップ未準拠 | **M12** |
 | 29 | 「このエリアを注視中」(選択エリアのイベントだけを見る) | ❌ | **M12** |
@@ -85,7 +86,7 @@
 
 ## これからのマイルストーン
 
-実施順は **M9 → M10 → M11 → M12 → M13 → M14 → M15**。M9 は完了し「モックアップの遊び方」が最小構成で成立した。以降 (M10〜M15) は独立性が高く、順序を入れ替えても破綻しない (依存は各所に明記)。
+実施順は **M9 → M10 → M11 → M12 → M13 → M14 → M15**。M9・M10 は完了し「モックアップの遊び方」が最小構成で成立した。以降 (M11〜M15) は独立性が高く、順序を入れ替えても破綻しない (依存は各所に明記)。
 
 ### M9 — デイループ: 「仕込む → 委ねる → 受け取る」 (最優先・これで"ゲーム"になる) ✅ 完了
 
@@ -110,30 +111,30 @@
 - [x] **e2e**: `e2e/day-loop.spec.ts` — 「トグルで切替 → 観察をはじめる → 結果パネル → つぎの日へ」を1周するテストと、「見守りに戻すと自動進行を再開する」テストを追加。
 - **受け入れ基準**: 3クリック (トグル→開始→結果を閉じてつぎの日へ) で1日が回る。結果パネルに前日比が出る。早送り ⏩ / 速度スライダーで1日の消化速度を制御できる。リロードすると `prepare` から再開する (フェーズ自体は永続化しない。モード選択のみ永続化)。
 
-### M10 — 環境システムを本物にする: 温度・毒素・水止め・やり直す
+### M10 — 環境システムを本物にする: 温度・毒素・水止め・やり直す ✅ 完了
 
 > HUD の「温度」「毒素」は現在**派生表示の偽物** (`game.ts computeBalance()` 参照)。sim に実体を持たせ、モックアップ②のツール6種 + Undo を揃える。**sim 本体に手を入れる唯一のマイルストーン**なので、決定論テストとベンチを必ず更新する。
 
-- [ ] **sim: 温度・毒素フィールドの追加** — `sim/env/environment.ts`
-  - `GridEnvironment` に `temperature: FieldGrid` (初期値 `baseTemperature`、ステージ既定) と `toxin: FieldGrid` (初期値 0) を追加。`GrowthContext` に `temperature` / `toxin` を追加 (両フィールド未使用時は従来値になるデフォルトを与え、既存テストを不変に保つ)。
-  - `placeHeat(pos, radius, delta)` (負の delta で冷却 = 「温度を変える」の上げ下げ両対応) / `placeToxin(pos, radius, amount)` を追加。
-  - `decay()` を拡張: 温度は `baseTemperature` へ緩和 (水分と同じ緩和式)、毒素はゆっくり 0 へ分解。速度はステージ定義 (`stages.ts`) に持たせる。
-- [ ] **sim: 成長応答** — `sim/graph/life.ts` / `growth.ts` / `params.ts`
-  - 温度: 最適温度カーブ (`tempOptimal` / `tempTolerance` を `SimParams` に追加)。最適から離れるほど成長確率と activity 回復が落ち、高温側では疲労 (`fatigueGrow`) が増える。
-  - 毒素: 濃度に比例して activity を減衰させ、成長候補の評価にペナルティ (`toxinPenalty`)。障害物と違い**通過は可能** — 「避けたくなるが通れる」を作り、モックアップ①チャレンジ「障害物をよけてつなぐ」の毒素版が成立するようにする。
-  - `Genome` に耐性 2 軸 (`heatTolerance` / `toxinResistance`) を追加し、`createGenome` / `createChildGenome` の変異対象に含める。→ M12 の特性チップ (「乾燥にやや強い」系) の材料になる。
-- [ ] **sim: テスト** — `determinism.test.ts` に温度/毒素を置いた場合の決定論ケースを追加。`bench.ts` で tick コストの悪化が ±10% 以内であることを確認 (フィールド2面ぶんの decay 追加が主コスト。`FieldGrid` 走査1回に統合する)。
-- [ ] **web: ツール拡張** — `game.ts` の `Tool` union に `'heat' | 'cool' | 'toxin' | 'drain'` を追加
-  - パレット (index.html / main.ts): モックアップ②の6分類に再編 —「栄養を置く / 光を置く / 障害物を置く / 温度を変える (🔥/❄ のサブトグル) / 水を引く・止める (💧/🏜 のサブトグル) / 毒素をまく」+ 削除。
-  - 「水を止める (乾かす)」= `drain`: moisture を `baseMoisture` より下へ押し下げるスタンプ (`placeWater` の負量版を `GridEnvironment` に追加)。
-  - 環境ヒートマップ表示 (M1) に温度・毒素レイヤーを追加。
-- [ ] **web: 環境バランス HUD を実測値へ** — `computeBalance()` の温度=光派生・毒素=障害物派生をやめ、実フィールド平均に置き換える。
-- [ ] **web: やり直す (Undo)** — `web/src/undo.ts` (新規)
-  - 方針: sim の時間は巻き戻さない (決定論と Worker 分離を壊すため)。**環境フィールドへのスタンプだけ**を stroke 単位 (pointerdown〜up) で取り消す。
-  - 実装: stroke 開始時に Worker 側で「これから変更されるセル」の before 値を記録 (`stampGaussian`/`stampObstacle` はバウンディングボックスが分かるので差分記録は安価)。`undoStroke` 命令で逆適用。深さ 10 stroke。
-  - UI: ツールバー末尾に「↩ やり直す」ボタン (モックアップ②準拠)。ショートカット Ctrl+Z。
-  - `vitest`: stroke 記録→逆適用でフィールドが bit-exact に戻ることをテスト。
-- **受け入れ基準**: 毒素をまくと網がその領域で痩せて迂回し、放置すると毒素は薄れて再侵入する。温度を下げた領域は成長が目に見えて遅い。「水を止める」で湿地の網が乾いて縮む。石を置き間違えても ↩ で消せる。`?debug` の tick コストが従来比 +10% 以内。
+- [x] **sim: 温度・毒素フィールドの追加** — `sim/env/environment.ts`
+  - `GridEnvironment` に `temperature: FieldGrid` (初期値 `baseTemperature`、既定 0.5) と `toxin: FieldGrid` (初期値 0) を追加。`GrowthContext` に `temperature` / `toxin` を追加。
+  - `placeHeat(pos, radius, delta)` (負の delta で冷却) / `placeToxin(pos, radius, amount)` / `placeDrain(pos, radius, amount)` (`placeWater` の負量版) を追加。
+  - `decay()` を拡張 (`tempRelaxRate` / `toxinDecayRate` を追加引数に): 温度は `baseTemperature` へ緩和、毒素はゆっくり 0 へ分解。省略時は従来通り変化しない (後方互換)。速度はステージ定義 (`stages.ts` の `tempRelaxPerTick`/`toxinDecayPerTick`) に持たせた。
+- [x] **sim: 成長応答** — `sim/graph/life.ts` / `growth.ts` / `params.ts`
+  - 温度: 最適温度カーブ (`tempOptimal`/`tempTolerance`, 既定 0.5/0.35)。`tempSuitability()` が最適から離れるほど activity の目標値への追従 (回復) を落とし、`tempOptimal+tempTolerance` を超えた高温側でのみ `fatigueGrow` の実効値が増す。
+  - 毒素: `toxinPenalty` (既定 0.6) が activity の目標値を直接削り、`growth.ts` の候補スコアにもペナルティとして乗る。obstacle と違い reject はしない (通過は可能)。
+  - `Genome` に `heatTolerance` / `toxinResistance` を追加し、`createGenome`/`createChildGenome` の変異対象・`applyGenome` の `tempTolerance`/`toxinPenalty` 補正に反映した。
+  - **既定値は無害**: `baseTemperature` を全ステージ `tempOptimal` と同じ 0.5 に揃え、`toxin` は初期 0 なので、プレイヤーがツールを使わない限り既存の成長速度・タイミング (Day 5 種採取、Day 1 タイムライン等の e2e) に影響しない設計にした。
+- [x] **sim: テスト** — `determinism.test.ts` に温度/毒素を置いた場合の決定論ケース、および「低温域で成長が控えめになる」「毒素の中は activity が低く保たれる」を追加。`environment.test.ts` に `placeHeat`/`placeToxin`/`placeDrain`/`decay` 拡張のテストを追加。`bench --smoke` で 0.436ms/tick (既存ベースライン 0.5〜0.7ms 以内) を確認。
+- [x] **web: ツール拡張** — `game.ts` の `Tool` union に `'heat' | 'cool' | 'toxin' | 'drain'` を追加
+  - パレット (index.html): 🔥/❄ や 💧/🏜 のサブトグルではなく、8種を独立ボタンとして並べる簡略構成にした (エサ/光/水/乾燥/石/加温/冷却/毒素+消す)。機能は同一で、実装をシンプルに保つための設計判断。
+  - 環境ヒートマップ表示 (M1) に温度レイヤー (暑い=赤橙/寒い=藍青、ヒートON時のみ) を追加。毒素は obstacle と同様に常時薄紫で見えるようにした (避けたいものは常に見える方が良いという判断)。
+- [x] **web: 環境バランス HUD を実測値へ** — `computeBalance()` の温度=光派生・毒素=障害物派生をやめ、実フィールド平均に置き換えた。
+- [x] **web: やり直す (Undo)** — `web/src/undo.ts` (新規)
+  - 環境フィールドへのスタンプだけを stroke 単位 (pointerdown〜up) で取り消す (sim の時間は巻き戻さない)。`Game.beginStroke()`/`apply()` 内の `recordBefore()`/`endStroke()`/`undoStroke()` で構成し、Worker プロトコルに `beginStroke`/`endStroke`/`undoStroke` を追加。深さ10 stroke。
+  - UI: ツールパレット末尾に「↩ やり直す」ボタン + Ctrl+Z (Mac は Cmd+Z にも反応)。
+  - `vitest` (`test/undo.test.ts`): 1 stroke 内の重なった複数スタンプでも逆順再生で正しく巻き戻ることをテスト。
+- [x] **e2e**: `e2e/environment-tools.spec.ts` — 毒素配置での HUD 反映、Ctrl+Z での取り消し、加温/冷却+ヒート表示、水を止めるツールを検証。
+- **受け入れ基準**: 毒素をまくと環境バランスの毒素表示が上がる (網が痩せて迂回する挙動は `determinism.test.ts` のsim単体テストで確認)。冷却した領域は sim レベルで成長 (エッジ数) が控えめになることを確認済み。「水を止める」で湿度が下がる。石を置き間違えても ↩ で消せる。`bench --smoke` の tick コストは劣化なし (0.436ms/tick)。
 
 ### M11 — リソース経済と「ゆるいデイリー」
 

@@ -20,6 +20,7 @@ function setGlobalStorage(s: StorageLike | undefined): void {
 
 const genome = (v: number): Genome => ({
   mergeRadius: v, branchProb: v, nutrientPref: v, moisturePref: v, lightAvoidance: v, growthVigor: v,
+  heatTolerance: v, toxinResistance: v,
 });
 const ind: Individuality = {
   exploration: 0.5, efficiency: 0.5, stability: 0.5, health: 0.5, vitality: 0.5, adaptability: 0.5,

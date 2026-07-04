@@ -42,11 +42,16 @@ describe('genome', () => {
   });
 
   it('applyGenome は base の該当パラメータを乗算で変化させ、他は変えない', () => {
-    const genome = { mergeRadius: 1.2, branchProb: 0.8, nutrientPref: 1.1, moisturePref: 0.9, lightAvoidance: 1.0, growthVigor: 1.05 };
+    const genome = {
+      mergeRadius: 1.2, branchProb: 0.8, nutrientPref: 1.1, moisturePref: 0.9, lightAvoidance: 1.0, growthVigor: 1.05,
+      heatTolerance: 1.3, toxinResistance: 1.5,
+    };
     const applied = applyGenome(DEFAULT_PARAMS, genome);
     expect(applied.mergeRadius).toBeCloseTo(DEFAULT_PARAMS.mergeRadius * 1.2);
     expect(applied.branchProbabilityBase).toBeCloseTo(DEFAULT_PARAMS.branchProbabilityBase * 0.8);
     expect(applied.growthStep).toBeCloseTo(DEFAULT_PARAMS.growthStep * 1.05);
+    expect(applied.tempTolerance).toBeCloseTo(DEFAULT_PARAMS.tempTolerance * 1.3);
+    expect(applied.toxinPenalty).toBeCloseTo(DEFAULT_PARAMS.toxinPenalty / 1.5);
     expect(applied.pruneRadius).toBe(DEFAULT_PARAMS.pruneRadius);
   });
 

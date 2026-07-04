@@ -77,6 +77,10 @@ export class GameProxy {
   // M9: target tick まで自動で進め、到達したら Worker が speed=0 に止める。
   // null で日境界のキャップを解除する。
   runUntilTick(target: number | null): void { this.send({ type: 'runUntilTick', target }); }
+  // M10: 「やり直す」。stroke 境界は main.ts の pointerdown/pointerup から呼ぶ。
+  beginStroke(): void { this.send({ type: 'beginStroke' }); }
+  endStroke(): void { this.send({ type: 'endStroke' }); }
+  undoStroke(): void { this.send({ type: 'undoStroke' }); }
   // 直近で日境界に到達していたら true を1度だけ返す (消費型)。
   consumeDayCompleted(): boolean {
     const v = this.dayCompletedFlag;

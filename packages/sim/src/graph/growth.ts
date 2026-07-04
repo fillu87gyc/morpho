@@ -96,9 +96,12 @@ function growFromTip(
     // 負側はクランプ: 前線が新しい領域に踏み出すのを抑え込まないため。
     const endBio = bioField.sample(end);
     const biomassPull = Math.max(0, endBio - tipBio) * params.wBiomassGradient;
+    // M10: 毒素は obstacle と違い通過を妨げない (reject しない) — スコアの
+    // ペナルティとしてのみ効くので、「避けたくなるが通れる」を作れる。
     const score =
       ec.nutrients * params.nutrientBias + ec.moisture * params.moistureBias -
-      ec.brightness * params.brightnessPenalty - ec.obstacle * params.obstaclePenalty +
+      ec.brightness * params.brightnessPenalty - ec.obstacle * params.obstaclePenalty -
+      ec.toxin * params.toxinPenalty +
       (dir.x * ec.preferredDirection.x + dir.y * ec.preferredDirection.y) * params.gradientBias +
       biomassPull +
       rng.next() * params.noiseAmount;
