@@ -234,16 +234,73 @@ body { overflow: hidden; }
   float: right; text-transform: none; letter-spacing: normal;
   color: var(--text-dim); font-variant-numeric: tabular-nums;
 }
-.ency, .ach, .board { list-style: none; padding: 0; margin: 0; font-size: 12px; }
-.ency li, .ach li, .board li {
+.board { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+.board li {
   display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: baseline;
   padding: 5px 0; border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
 }
-.ency li:last-child, .ach li:last-child, .board li:last-child { border-bottom: none; }
-.ency li .label, .ach li .label, .board li .label { color: var(--text); }
-.ency li .meta, .ach li .meta, .board li .meta { color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
-.ency li.empty, .board li.empty { display: block; color: var(--text-dim); font-style: italic; font-size: 11px; }
-.ach li.locked .label { color: var(--text-dim); }
+.board li:last-child { border-bottom: none; }
+.board li .label { color: var(--text); }
+.board li .meta { color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+.board li.empty { display: block; color: var(--text-dim); font-style: italic; font-size: 11px; }
+
+/* M13: 図鑑グリッド (サムネイル + ★ + ロックスロット) */
+.ency {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px;
+  max-height: 320px; overflow-y: auto;
+}
+.ency-slot { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
+.ency-thumb {
+  position: relative; width: 100%; aspect-ratio: 1; border-radius: 8px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bar-empty); border: 1px solid var(--panel-edge);
+  font-size: 18px; color: var(--text-dim);
+}
+.ency-slot.locked .ency-thumb { opacity: 0.5; }
+.ency-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ency-star {
+  position: absolute; bottom: 1px; left: 0; right: 0; text-align: center;
+  font-size: 7px; color: var(--accent); text-shadow: 0 0 2px rgba(0,0,0,0.8);
+}
+.ency-slot .label { font-size: 8px; color: var(--text-dim); text-align: center; line-height: 1.2; }
+.ency-slot.discovered .label { color: var(--text); }
+.ency-slot.favorite .ency-thumb { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* M13: 実績バッジグリッド */
+.ach {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 6px;
+}
+.ach-badge { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.ach-icon {
+  width: 100%; aspect-ratio: 1; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); border: 1px solid var(--accent-soft); font-size: 16px;
+}
+.ach-badge.locked .ach-icon { background: var(--bar-empty); border-color: var(--panel-edge); color: var(--text-dim); }
+.ach-badge .label { font-size: 8px; color: var(--text-dim); text-align: center; line-height: 1.2; }
+.ach-badge.unlocked .label { color: var(--text); }
+
+/* M13: 系統樹 (分岐ツリー、世代ごとの行) */
+.lineage-tree { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+.lineage-tree .empty { color: var(--text-dim); font-style: italic; font-size: 11px; margin: 0; }
+.lineage-row { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px dashed rgba(255,255,255,0.06); }
+.lineage-row:last-child { border-bottom: none; padding-bottom: 0; }
+.lineage-node {
+  flex: 1 1 120px; min-width: 110px;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 8px; padding: 6px 8px;
+  font-size: 11px;
+}
+.lineage-node.active { border-color: var(--accent); background: var(--accent-soft); }
+.lineage-node .label { color: var(--text); font-weight: 600; margin-bottom: 2px; }
+.lineage-node .meta { color: var(--text-dim); font-size: 10px; margin-bottom: 4px; }
+.lineage-start-btn {
+  width: 100%; font-size: 10px; padding: 4px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--panel-edge); color: var(--text-dim);
+  border-radius: 6px; cursor: pointer;
+}
+.lineage-start-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
 
 /* M11: チャレンジ一覧 (常時3種表示、任意に挑戦できる) */
 .chal-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }

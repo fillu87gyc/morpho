@@ -22,6 +22,8 @@ import { Wallet, type CurrencyKind } from './wallet.js';
 import { DailyTracker } from './dailies.js';
 import { Identity } from './identity.js';
 import { starsOf, traitChipsFor, environmentTagsFor } from './trait-labels.js';
+import { CatalogueThumbs } from './catalogue-thumbs.js';
+import type { CatalogueContext } from './catalogue.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -37,6 +39,8 @@ const dayReport = new DayReport();
 const wallet = new Wallet();
 const dailies = new DailyTracker();
 const identity = new Identity();
+const catalogueThumbs = new CatalogueThumbs();
+let undoUsedCount = 0;
 // M12: 「個体を追跡する」。ミニマップクリックで対象コロニーを選び、
 // トグルで追従の on/off を切り替える。手動ズーム/パンで解除する。
 let trackedColonyIndex: number | null = null;
@@ -76,7 +80,7 @@ minimapCanvas.addEventListener('click', (e) => {
   camera.focusOn(worldPos);
 });
 
-const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album }, {
+const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album, catalogueThumbs }, {
   onSpeed: (s) => {
     if (s > 0) lastPositiveSpeed = s;
     game.setSpeed(s);
@@ -144,17 +148,33 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     game.setFastForward(!game.fastForward);
     document.getElementById('fast-forward')?.classList.toggle('active', game.fastForward);
   },
+  // M13: 系統樹の任意の祖先から「この子から始める」。選び直した祖先の
+  // genome を継承した新しい個体でその場から再開する。
+  onStartFromLineage: (id) => {
+    const ancestor = lineage.startFrom(id);
+    if (!ancestor) return;
+    game.reset(undefined, ancestor.stageId, ancestor.genome);
+    timeline.reset();
+    camera.reset();
+    fitCanvas();
+    dayReport.reset();
+    identity.advance();
+    tracking = false;
+    trackedColonyIndex = null;
+    if (dayLoopMode) enterPrepare(0);
+  },
 });
 
 let showHeat = false;
 
 // ── M10: 「やり直す」(Undo) ────────────────────────────
 const undoBtn = document.getElementById('undo-stroke') as HTMLButtonElement;
-undoBtn.addEventListener('click', () => game.undoStroke());
+undoBtn.addEventListener('click', () => { game.undoStroke(); undoUsedCount++; });
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     game.undoStroke();
+    undoUsedCount++;
   }
 });
 
@@ -685,12 +705,27 @@ function frame() {
       const remainingTicks = dayLoop.targetTick - snap.state.tick;
       dayLoopRemainingN.textContent = ticksPerSecond > 0 ? formatMMSS(remainingTicks / ticksPerSecond) : '--:--';
     }
+    const connectProgress = snap.quests.find((q) => q.id === 'connect-all')?.progress ?? 0;
+
     // 育ちが浅いうち (Day 3 未満) は個性が定まっていないので図鑑には記録しない。
     if (snap.day >= 3) {
-      encyclopedia.record(snap.typeInfo.id, snap.typeInfo.label, snap.genome, snap.individuality, snap.state.seed, snap.day);
+      const catalogueCtx: CatalogueContext = {
+        typeId: snap.typeInfo.id, stageId: snap.stage.id, individuality: snap.individuality,
+        genome: snap.genome, balance: snap.balance, generation: lineage.nextGeneration(), connectProgress,
+      };
+      const newlyDiscovered = encyclopedia.record(catalogueCtx, snap.state.seed, snap.day);
+      // M13: 新規発見のカタログ枠だけサムネイルを撮って保存する (毎フレーム撮り直さない)。
+      // renderThumbnail() は blob URL の Promise を返す (IndexedDB には生の Blob が
+      // 要るため fetch() で取り出し、一時 URL は使い終わったら解放する)。
+      for (const id of newlyDiscovered) {
+        void renderer.renderThumbnail(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, 160)
+          .then((url) => {
+            if (!url) return null;
+            return fetch(url).then((r) => r.blob()).finally(() => URL.revokeObjectURL(url));
+          })
+          .then((blob) => { if (blob) void catalogueThumbs.set(id, blob); });
+      }
     }
-
-    const connectProgress = snap.quests.find((q) => q.id === 'connect-all')?.progress ?? 0;
 
     scoreboard.record(snap.stage.id, snap.stage.name, {
       connectProgress,
@@ -716,6 +751,11 @@ function frame() {
       encyclopediaTotal: TOTAL_TYPE_COUNT,
       stagesPlayed: scoreboard.stagesPlayedCount(),
       dailyChallengesCompleted: challenges.completedCount(),
+      dayRecordsCount: dayReport.list().length,
+      toxin: snap.balance.toxin,
+      hasFiveStarEntry: encyclopedia.list().some((e) => starsOf(e.individuality) === 5),
+      walletTotal: wallet.get('sizuku') + wallet.get('wakaba') + wallet.get('horoishi'),
+      undoUsedCount,
     }, snap.state.seed, snap.day);
     // M11: 実績解除は希少通貨 🍄 の報酬源。
     for (const id of newlyUnlocked) wallet.earn('horoishi', 1, `実績「${id}」解除`);

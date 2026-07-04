@@ -31,6 +31,11 @@ const baseInput: AchievementCheckInput = {
   encyclopediaTotal: 5,
   stagesPlayed: 0,
   dailyChallengesCompleted: 0,
+  dayRecordsCount: 0,
+  toxin: 0,
+  hasFiveStarEntry: false,
+  walletTotal: 0,
+  undoUsedCount: 0,
 };
 
 describe('Achievements', () => {
@@ -77,8 +82,27 @@ describe('Achievements', () => {
       encyclopediaCount: 5,
       stagesPlayed: 3,
       dailyChallengesCompleted: 1,
+      dayRecordsCount: 7,
+      toxin: 0.4,
+      hasFiveStarEntry: true,
+      walletTotal: 250,
+      undoUsedCount: 5,
     }, 1, 10);
     expect(a.list().length).toBe(ACHIEVEMENT_DEFS.length);
+  });
+
+  it('M13: 新規実績 (七日の見守り/解毒の民/星読み/経済の民/やり直し上手) がそれぞれ独立に解除される', () => {
+    const a = new Achievements();
+    a.check({ ...baseInput, dayRecordsCount: 7 }, 1, 1);
+    expect(a.isUnlocked('week-watcher')).toBe(true);
+    a.check({ ...baseInput, connectProgress: 1, toxin: 0.5 }, 1, 1);
+    expect(a.isUnlocked('detox')).toBe(true);
+    a.check({ ...baseInput, hasFiveStarEntry: true }, 1, 1);
+    expect(a.isUnlocked('star-reader')).toBe(true);
+    a.check({ ...baseInput, walletTotal: 300 }, 1, 1);
+    expect(a.isUnlocked('wealthy')).toBe(true);
+    a.check({ ...baseInput, undoUsedCount: 10 }, 1, 1);
+    expect(a.isUnlocked('undo-master')).toBe(true);
   });
 
   it('localStorage に永続化され、再生成しても読み込める', () => {

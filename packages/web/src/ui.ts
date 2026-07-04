@@ -10,6 +10,9 @@ import { allChallenges, type DailyChallengeTracker } from './challenges.js';
 import type { Scoreboard } from './scoreboard.js';
 import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 import type { Album } from './album.js';
+import { allCatalogueEntries } from './catalogue.js';
+import type { CatalogueThumbs } from './catalogue-thumbs.js';
+import { starsOf } from './trait-labels.js';
 
 type El = HTMLElement;
 
@@ -124,6 +127,7 @@ export class Ui {
       scoreboard: Scoreboard;
       lineage: Lineage;
       album: Album;
+      catalogueThumbs: CatalogueThumbs;
     },
     private hooks: {
       onSpeed: (s: number) => void;
@@ -137,6 +141,7 @@ export class Ui {
       onScreenshot: () => void;
       onToggleAmbient: () => void;
       onToggleFastForward: () => void;
+      onStartFromLineage: (id: string) => void;
     },
   ) {
     this.harvestBtn.addEventListener('click', () => this.hooks.onHarvestSeed());
@@ -332,30 +337,48 @@ export class Ui {
       this.lastEvoLen = evo.length;
     }
 
-    // 図鑑 (バージョンが変わった = 新規発見 or 更新があったときだけ書き換える)
+    // M13: 図鑑グリッド (バージョンが変わった = 新規発見・更新・お気に入り変更が
+    // あったときだけ書き換える)。32枠すべてを固定順で並べ、未発見は「?」ロックにする。
     if (this.lastEncyVersion !== this.trackers.encyclopedia.version) {
       this.lastEncyVersion = this.trackers.encyclopedia.version;
-      const entries = this.trackers.encyclopedia.list();
-      setText(this.encyProgress, `${entries.length}/5`);
+      const discovered = this.trackers.encyclopedia.list();
+      setText(this.encyProgress, `${discovered.length}/${allCatalogueEntries().length}`);
       this.ency.innerHTML = '';
-      if (entries.length === 0) {
+      for (const meta of allCatalogueEntries()) {
+        const entry = this.trackers.encyclopedia.entryOf(meta.id);
         const li = document.createElement('li');
-        li.className = 'empty';
-        li.textContent = 'まだ何も発見していない…';
-        this.ency.appendChild(li);
-      } else {
-        for (const e of entries) {
-          const li = document.createElement('li');
-          const label = document.createElement('span');
-          label.className = 'label';
-          label.textContent = e.label;
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          meta.textContent = `Day ${e.day}`;
-          li.appendChild(label);
-          li.appendChild(meta);
-          this.ency.appendChild(li);
+        li.className = entry ? 'ency-slot discovered' : 'ency-slot locked';
+        if (entry?.favorite) li.classList.add('favorite');
+
+        const thumbWrap = document.createElement('div');
+        thumbWrap.className = 'ency-thumb';
+        const url = entry ? this.trackers.catalogueThumbs.urlOf(entry.id) : undefined;
+        if (entry && url) {
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = entry.name;
+          thumbWrap.appendChild(img);
+        } else if (!entry) {
+          thumbWrap.textContent = '?';
         }
+        if (entry) {
+          const star = document.createElement('span');
+          star.className = 'ency-star';
+          star.textContent = '★'.repeat(starsOf(entry.individuality));
+          thumbWrap.appendChild(star);
+        }
+        li.appendChild(thumbWrap);
+
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = entry ? entry.name : '？？？';
+        li.appendChild(label);
+
+        if (entry) {
+          li.title = `${entry.description}\n発見: Day ${entry.day}${entry.favorite ? ' ・ ♥ お気に入り' : ''}`;
+          li.addEventListener('click', () => this.trackers.encyclopedia.toggleFavorite(entry.id));
+        }
+        this.ency.appendChild(li);
       }
     }
 
@@ -364,19 +387,21 @@ export class Ui {
       this.lastAchVersion = this.trackers.achievements.version;
       const unlockedCount = ACHIEVEMENT_DEFS.filter((d) => this.trackers.achievements.isUnlocked(d.id)).length;
       setText(this.achProgress, `${unlockedCount}/${ACHIEVEMENT_DEFS.length}`);
+      // M13: バッジグリッドへ (解除済み=アイコン、未解除=「?」ロック)。
       this.ach.innerHTML = '';
       for (const def of ACHIEVEMENT_DEFS) {
         const status = this.trackers.achievements.statusOf(def.id);
         const li = document.createElement('li');
-        li.className = status ? 'unlocked' : 'locked';
+        li.className = status ? 'ach-badge unlocked' : 'ach-badge locked';
+        const icon = document.createElement('div');
+        icon.className = 'ach-icon';
+        icon.textContent = status ? '🏅' : '?';
         const label = document.createElement('span');
         label.className = 'label';
-        label.textContent = (status ? '✓ ' : '🔒 ') + def.label;
-        const meta = document.createElement('span');
-        meta.className = 'meta';
-        meta.textContent = status ? `Day ${status.day}` : def.description;
+        label.textContent = def.label;
+        li.title = status ? `${def.description}\n解除: Day ${status.day}` : def.description;
+        li.appendChild(icon);
         li.appendChild(label);
-        li.appendChild(meta);
         this.ach.appendChild(li);
       }
     }
@@ -408,28 +433,46 @@ export class Ui {
       }
     }
 
-    // 系統樹 (バージョンが変わった = 新規採取があったときだけ書き換える)
+    // M13: 系統樹を分岐ツリーへ (世代ごとの行に並べる simple tree)。
+    // バージョンが変わった = 新規採取/起点変更があったときだけ書き換える。
     if (this.lastLineageVersion !== this.trackers.lineage.version) {
       this.lastLineageVersion = this.trackers.lineage.version;
       const entries = this.trackers.lineage.list();
       this.lineageList.innerHTML = '';
       if (entries.length === 0) {
-        const li = document.createElement('li');
-        li.className = 'empty';
-        li.textContent = 'まだ種を採取していない…';
-        this.lineageList.appendChild(li);
+        const p = document.createElement('p');
+        p.className = 'empty';
+        p.textContent = 'まだ種を採取していない…';
+        this.lineageList.appendChild(p);
       } else {
-        for (const e of [...entries].reverse()) {
-          const li = document.createElement('li');
-          const label = document.createElement('span');
-          label.className = 'label';
-          label.textContent = `${e.generation}代目 — ${e.typeLabel}`;
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          meta.textContent = `Day ${e.day} ・ ${e.stageName}`;
-          li.appendChild(label);
-          li.appendChild(meta);
-          this.lineageList.appendChild(li);
+        const activeId = this.trackers.lineage.activeAncestor()?.id;
+        const byGeneration = new Map<number, typeof entries>();
+        for (const e of entries) {
+          const row = byGeneration.get(e.generation);
+          if (row) row.push(e); else byGeneration.set(e.generation, [e]);
+        }
+        for (const gen of [...byGeneration.keys()].sort((a, b) => a - b)) {
+          const row = document.createElement('div');
+          row.className = 'lineage-row';
+          for (const e of byGeneration.get(gen)!) {
+            const node = document.createElement('div');
+            node.className = e.id === activeId ? 'lineage-node active' : 'lineage-node';
+            const label = document.createElement('div');
+            label.className = 'label';
+            label.textContent = `${e.generation}代目 — ${e.typeLabel}`;
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = `Day ${e.day} ・ ${e.stageName}`;
+            const startBtn = document.createElement('button');
+            startBtn.className = 'lineage-start-btn';
+            startBtn.textContent = 'この子から始める';
+            startBtn.addEventListener('click', () => this.hooks.onStartFromLineage(e.id));
+            node.appendChild(label);
+            node.appendChild(meta);
+            node.appendChild(startBtn);
+            row.appendChild(node);
+          }
+          this.lineageList.appendChild(row);
         }
       }
     }

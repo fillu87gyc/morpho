@@ -350,7 +350,8 @@ test('Day 5 以降に種を採取すると系統樹に記録され、世代が�
   await page.click('#harvest-seed');
 
   await expect(page.locator('#lineage-gen')).toHaveText('現在 2代目');
-  await expect(page.locator('#lineage li').first()).toContainText('1代目');
+  // M13: 系統樹は分岐ツリー (.lineage-node) になった。
+  await expect(page.locator('#lineage .lineage-node').first()).toContainText('1代目');
 
   expect(errors).toEqual([]);
 });

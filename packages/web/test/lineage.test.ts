@@ -90,4 +90,68 @@ describe('Lineage', () => {
       l.harvest(harvestInput(1, 5));
     }).not.toThrow();
   });
+
+  // M13: 分岐ツリー。
+  describe('分岐 (M13)', () => {
+    it('1つの親から複数回採種すると、同じ親を持つ複数の子ができる (分岐)', () => {
+      const l = new Lineage();
+      const parent = l.harvest(harvestInput(1, 5));
+      const childA = l.harvest(harvestInput(2, 10));
+      l.startFrom(parent.id); // 同じ親からもう一度採る
+      const childB = l.harvest(harvestInput(3, 10));
+      expect(childA.parentId).toBe(parent.id);
+      expect(childB.parentId).toBe(parent.id);
+      expect(childA.id).not.toBe(childB.id);
+      expect(l.list()).toHaveLength(3);
+    });
+
+    it('startFrom() で任意の祖先を選び直すと、以後の harvest はその子になる', () => {
+      const l = new Lineage();
+      const gen1 = l.harvest(harvestInput(1, 5));
+      l.harvest(harvestInput(2, 10));
+      l.harvest(harvestInput(3, 15)); // 現在3代目
+      l.startFrom(gen1.id);
+      expect(l.current()?.id).toBe(gen1.id);
+      expect(l.nextGeneration()).toBe(2);
+      const child = l.harvest(harvestInput(4, 20));
+      expect(child.generation).toBe(2);
+      expect(child.parentId).toBe(gen1.id);
+    });
+
+    it('存在しない id への startFrom は何も変えない', () => {
+      const l = new Lineage();
+      l.harvest(harvestInput(1, 5));
+      const before = l.current()?.id;
+      expect(l.startFrom('nonexistent')).toBeUndefined();
+      expect(l.current()?.id).toBe(before);
+    });
+
+    it('1代目の親は null になる', () => {
+      const l = new Lineage();
+      const root = l.harvest(harvestInput(1, 5));
+      expect(root.parentId).toBeNull();
+    });
+
+    it('永続化後も activeParentId (どの祖先から続けるか) が復元される', () => {
+      const l1 = new Lineage();
+      const gen1 = l1.harvest(harvestInput(1, 5));
+      l1.harvest(harvestInput(2, 10));
+      l1.startFrom(gen1.id);
+      const l2 = new Lineage();
+      expect(l2.current()?.id).toBe(gen1.id);
+    });
+
+    it('v1 (線形履歴) は根から一直線に伸びる木として読み込まれる', () => {
+      const v1 = [
+        { generation: 1, genome: genome(1), typeId: 'balanced', typeLabel: 'バランス型', individuality: ind, seed: 1, day: 5, stageId: 'petri', stageName: '皿', harvestedAt: '2026-01-01T00:00:00.000Z' },
+        { generation: 2, genome: genome(1), typeId: 'balanced', typeLabel: 'バランス型', individuality: ind, seed: 2, day: 10, stageId: 'petri', stageName: '皿', harvestedAt: '2026-01-02T00:00:00.000Z' },
+      ];
+      localStorage.setItem('morpho.lineage.v1', JSON.stringify(v1));
+      const l = new Lineage();
+      expect(l.list()).toHaveLength(2);
+      expect(l.list()[0]!.parentId).toBeNull();
+      expect(l.list()[1]!.parentId).toBe(l.list()[0]!.id);
+      expect(l.current()?.seed).toBe(2);
+    });
+  });
 });
