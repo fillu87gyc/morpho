@@ -18,6 +18,7 @@ import {
 import { STAGES, type StageId, type StageConfig } from './stages.js';
 import { computeQuests, type QuestStatus } from './quests.js';
 import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
+import { TICKS_PER_DAY } from './day-loop.js';
 
 export type { StageId } from './stages.js';
 
@@ -82,7 +83,6 @@ export type GameSnapshot = FastSnapshot & DerivedSnapshot;
 
 export const WORLD = 100;
 export const FIELD = 96;
-const TICKS_PER_DAY = 40;
 
 // M6: 単一 source ではなく、大マップに複数のコロニー (群体) を離して配置する。
 // ズームアウト (zoom=1) すると全コロニーを見渡せ、ズームインすると

@@ -28,7 +28,12 @@
             <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
             <span class="speed-n">×<span id="speed-n">1</span></span>
             <button id="fast-forward" class="pause-toggle" title="早送り (描画を10fpsに間引いて浮いた分をtickに回す)">⏩</button>
+            <button id="day-loop-mode-toggle" class="pause-toggle" title="デイループ (仕込む→委ねる→受け取る) / 見守り (連続再生) を切り替える">🔁 見守り</button>
           </div>
+        </div>
+        <div id="day-loop-bar" class="day-loop-bar" hidden>
+          <button id="begin-observe" class="harvest-btn day-loop-btn">観察をはじめる ▶</button>
+          <span id="day-loop-remaining" class="day-loop-remaining" hidden>残り <span id="day-loop-remaining-n">--:--</span></span>
         </div>
       </header>
 
@@ -253,6 +258,35 @@
       <footer class="footnote">
         制御するのではなく、条件を整え、振る舞いを引き出す。
       </footer>
+
+      <div id="day-result-modal" class="modal-overlay" hidden>
+        <div class="modal card">
+          <h2>Day <span id="dr-day">0</span> の成長</h2>
+          <img id="dr-thumb" class="dr-thumb" alt="今日の姿" />
+          <div class="dr-grid">
+            <div class="dr-item">
+              <span class="dr-lbl">探索性</span>
+              <span class="dr-val" id="dr-exploration-n">0%</span>
+              <span class="dr-delta" id="dr-exploration-delta"></span>
+            </div>
+            <div class="dr-item">
+              <span class="dr-lbl">効率性</span>
+              <span class="dr-val" id="dr-efficiency-n">0%</span>
+              <span class="dr-delta" id="dr-efficiency-delta"></span>
+            </div>
+            <div class="dr-item">
+              <span class="dr-lbl">安定性</span>
+              <span class="dr-val" id="dr-stability-n">0%</span>
+              <span class="dr-delta" id="dr-stability-delta"></span>
+            </div>
+          </div>
+          <ul id="dr-events" class="dr-events"></ul>
+          <div class="dr-actions">
+            <button id="dr-album" title="今日の姿をアルバムへ保存する">📷 アルバムへ</button>
+            <button id="dr-next" class="harvest-btn">つぎの日へ ▶</button>
+          </div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

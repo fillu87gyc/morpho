@@ -57,6 +57,46 @@ body { overflow: hidden; }
 .time .controls input[type="range"] { width: 110px; accent-color: var(--accent); }
 .time .controls .speed-n { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 28px; }
 
+/* M9: デイループ (仕込む→委ねる→受け取る) の帯。ヘッダ直下に出す。 */
+.day-loop-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px calc(20px + env(safe-area-inset-right)) 8px calc(20px + env(safe-area-inset-left));
+  border-bottom: 1px solid var(--panel-edge);
+}
+.day-loop-bar[hidden] { display: none; }
+.day-loop-btn { width: auto; padding: 8px 18px; margin-bottom: 0; }
+.day-loop-remaining { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.day-loop-remaining span { color: var(--accent); font-weight: 600; }
+
+/* M9: 「今日の成長」結果パネル */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 5, 5, 0.6); backdrop-filter: blur(2px);
+}
+/* author CSS の display:flex は UA スタイルシートの [hidden]{display:none} より
+   詳細度が高く上書きしてしまうため、明示的に再度 none にする。 */
+.modal-overlay[hidden] { display: none; }
+.modal { width: min(420px, 92vw); max-height: 88vh; overflow-y: auto; }
+.modal h2 { margin: 0 0 10px; font-size: 14px; color: var(--text); }
+.dr-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: var(--bar-empty); margin-bottom: 10px; }
+.dr-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.dr-item { display: grid; grid-template-columns: 64px 48px 1fr; align-items: baseline; font-size: 12px; }
+.dr-lbl { color: var(--text-dim); }
+.dr-val { font-variant-numeric: tabular-nums; }
+.dr-delta { font-size: 11px; font-variant-numeric: tabular-nums; }
+.dr-delta.up { color: var(--green); }
+.dr-delta.down { color: var(--danger); }
+.dr-events { list-style: none; margin: 0 0 12px; padding: 0; font-size: 12px; color: var(--text-dim); max-height: 120px; overflow-y: auto; }
+.dr-events li { padding: 3px 0; border-bottom: 1px solid var(--panel-edge); }
+.dr-events li:last-child { border-bottom: none; }
+.dr-actions { display: flex; gap: 8px; }
+.dr-actions button { flex: 1; }
+#dr-album {
+  background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
+  border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12px;
+}
+
 .stage {
   display: grid;
   grid-template-columns: 280px 1fr 280px;

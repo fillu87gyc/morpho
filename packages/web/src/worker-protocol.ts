@@ -14,7 +14,13 @@ export type ToWorkerMessage =
   // M8 P4: 早送りモード。描画/スナップショット送信の頻度を10fpsまで落とし、
   // 浮いた予算をtickに全振りする (sim-worker.ts のループ間隔と
   // TickScheduler の予算/借金上限を切り替える)。
-  | { type: 'setFastForward'; enabled: boolean };
+  | { type: 'setFastForward'; enabled: boolean }
+  // M9: デイループの「委ねる」フェーズ開始。target tick に到達したら
+  // Worker 側が自動で speed=0 に止め、'dayCompleted' 通知を返す。
+  // 到達判定を Worker 側で行うのは、メインスレッドの RAF ポーリングだと
+  // 速度×24 時に日境界を大きく飛び越えてしまうため。target=null で
+  // 日境界のキャップを解除する (「見守り」への切り替え時に使う)。
+  | { type: 'runUntilTick'; target: number | null };
 
 // M8 P0: 計測基盤。perf HUD (`?debug`) 表示用の Worker 側計測値。
 export interface PerfInfo {
@@ -43,4 +49,6 @@ export type WireSnapshot = Omit<GameSnapshot, 'state'> & {
 };
 
 export type FromWorkerMessage =
-  | { type: 'snapshot'; snapshot: WireSnapshot; events: string[]; evolution: EvolutionLog[]; perf: PerfInfo };
+  | { type: 'snapshot'; snapshot: WireSnapshot; events: string[]; evolution: EvolutionLog[]; perf: PerfInfo }
+  // M9: runUntilTick の target に到達し、Worker が自動で speed=0 に止めた通知。
+  | { type: 'dayCompleted' };

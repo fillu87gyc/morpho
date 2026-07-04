@@ -16,6 +16,8 @@ import { PinchTracker } from './pinch.js';
 import { PerfHud, debugModeEnabled } from './perf-hud.js';
 import { Album } from './album.js';
 import { Ambient } from './ambient.js';
+import { DayReport } from './day-report.js';
+import { createDayLoop, beginObserve, completeDay, advanceToNextDay, TICKS_PER_DAY } from './day-loop.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -27,6 +29,7 @@ const scoreboard = new Scoreboard();
 const lineage = new Lineage();
 const album = new Album();
 const ambient = new Ambient();
+const dayReport = new DayReport();
 
 // 系統に採取済みの種があれば、初回起動から継承した個体で始める
 // (M5: セッションをまたいで系統樹を続けられる)。
@@ -52,7 +55,10 @@ minimapCanvas.addEventListener('click', (e) => {
 });
 
 const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album }, {
-  onSpeed: (s) => game.setSpeed(s),
+  onSpeed: (s) => {
+    if (s > 0) lastPositiveSpeed = s;
+    game.setSpeed(s);
+  },
   onTool: (t) => game.setTool(t),
   onBrush: (r) => game.setBrush(r),
   onReset: () => {
@@ -60,6 +66,8 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     timeline.reset();
     camera.reset();
     fitCanvas();
+    dayReport.reset();
+    if (dayLoopMode) enterPrepare(0);
   },
   onToggleHeat: () => {
     showHeat = !showHeat;
@@ -73,6 +81,8 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     ambient.setStage(id);
+    dayReport.reset();
+    if (dayLoopMode) enterPrepare(0);
   },
   onToggleAmbient: () => {
     void ambient.setEnabled(!ambient.enabled);
@@ -109,6 +119,156 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
 });
 
 let showHeat = false;
+
+// ── M9: デイループ (仕込む→委ねる→受け取る) ──────────────
+// 既存の「見守り (連続再生)」を既定のまま残し (継続的な DAY 自動進行を
+// 前提にした e2e/smoke.spec.ts・mobile.spec.ts を壊さないため)、デイループは
+// ヘッダのトグルから選ぶ第2のモードとして追加する。選択は localStorage に
+// 保存し、次回起動時も同じモードで始まる。
+const DAY_LOOP_MODE_KEY = 'morpho.dayLoopMode.v1';
+function loadDayLoopMode(): boolean {
+  try { return localStorage.getItem(DAY_LOOP_MODE_KEY) === '1'; } catch { return false; }
+}
+function saveDayLoopMode(v: boolean): void {
+  try { localStorage.setItem(DAY_LOOP_MODE_KEY, v ? '1' : '0'); } catch { /* private mode 等は諦める */ }
+}
+
+let dayLoopMode = loadDayLoopMode();
+let dayLoop = createDayLoop(0);
+let lastPositiveSpeed = 1;
+let dayResultThumb: string | null = null;
+
+const dayLoopModeBtn = document.getElementById('day-loop-mode-toggle') as HTMLButtonElement;
+const dayLoopBar = document.getElementById('day-loop-bar') as HTMLElement;
+const beginObserveBtn = document.getElementById('begin-observe') as HTMLButtonElement;
+const dayLoopRemainingEl = document.getElementById('day-loop-remaining') as HTMLElement;
+const dayLoopRemainingN = document.getElementById('day-loop-remaining-n') as HTMLElement;
+const dayResultModal = document.getElementById('day-result-modal') as HTMLElement;
+const drDay = document.getElementById('dr-day') as HTMLElement;
+const drThumb = document.getElementById('dr-thumb') as HTMLImageElement;
+const drNextBtn = document.getElementById('dr-next') as HTMLButtonElement;
+const drAlbumBtn = document.getElementById('dr-album') as HTMLButtonElement;
+const drEvents = document.getElementById('dr-events') as HTMLElement;
+const speedSliderEl = document.getElementById('speed-slider') as HTMLInputElement;
+const pauseToggleEl = document.getElementById('pause-toggle') as HTMLButtonElement;
+const fastForwardEl = document.getElementById('fast-forward') as HTMLButtonElement;
+
+type TraitAxis = 'exploration' | 'efficiency' | 'stability';
+const DR_AXES: { axis: TraitAxis; valId: string; deltaId: string }[] = [
+  { axis: 'exploration', valId: 'dr-exploration-n', deltaId: 'dr-exploration-delta' },
+  { axis: 'efficiency', valId: 'dr-efficiency-n', deltaId: 'dr-efficiency-delta' },
+  { axis: 'stability', valId: 'dr-stability-n', deltaId: 'dr-stability-delta' },
+];
+
+function formatMMSS(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+// prepare フェーズ中は「仕込む」以外の操作 (速度変更/一時停止/早送り) を
+// 無効化する。observe 中は通常通り操作でき、その速さがそのまま
+// 「1日を消化する速さ」になる。
+function setPlaybackControlsEnabled(enabled: boolean): void {
+  speedSliderEl.disabled = !enabled;
+  pauseToggleEl.disabled = !enabled;
+  fastForwardEl.disabled = !enabled;
+}
+
+function enterPrepare(startTick: number): void {
+  dayLoop = createDayLoop(startTick);
+  game.setSpeed(0);
+  game.runUntilTick(null);
+  beginObserveBtn.hidden = false;
+  dayLoopRemainingEl.hidden = true;
+  dayResultModal.hidden = true;
+  setPlaybackControlsEnabled(false);
+}
+
+function applyDayLoopModeUI(): void {
+  dayLoopBar.hidden = !dayLoopMode;
+  dayLoopModeBtn.textContent = dayLoopMode ? '🔁 デイループ' : '🔁 見守り';
+  dayLoopModeBtn.classList.toggle('active', dayLoopMode);
+  setPlaybackControlsEnabled(!dayLoopMode || dayLoop.phase === 'observe');
+}
+applyDayLoopModeUI();
+if (dayLoopMode) enterPrepare(0);
+
+dayLoopModeBtn.addEventListener('click', () => {
+  dayLoopMode = !dayLoopMode;
+  saveDayLoopMode(dayLoopMode);
+  if (dayLoopMode) {
+    enterPrepare(game.ready ? game.snapshot().state.tick : 0);
+  } else {
+    game.runUntilTick(null);
+    game.setSpeed(lastPositiveSpeed);
+    dayResultModal.hidden = true;
+  }
+  applyDayLoopModeUI();
+});
+
+beginObserveBtn.addEventListener('click', () => {
+  if (dayLoop.phase !== 'prepare') return;
+  dayLoop = beginObserve(dayLoop);
+  beginObserveBtn.hidden = true;
+  dayLoopRemainingEl.hidden = false;
+  setPlaybackControlsEnabled(true);
+  game.setSpeed(lastPositiveSpeed);
+  game.runUntilTick(dayLoop.targetTick);
+});
+
+drNextBtn.addEventListener('click', () => {
+  if (dayLoop.phase !== 'result') return;
+  enterPrepare(dayLoop.targetTick);
+});
+
+drAlbumBtn.addEventListener('click', () => {
+  const snap = game.snapshot();
+  canvas!.toBlob((blob) => {
+    if (blob) album.add(blob, { day: dayLoop.day, stageName: snap.stage.name });
+  }, 'image/png');
+});
+
+function showDayResult(day: number): void {
+  const snap = game.snapshot();
+  dayReport.record({ day, traits: snap.traits, massKg: snap.world.massKg, areaM2: snap.world.areaM2 });
+  const delta = dayReport.delta(day);
+
+  drDay.textContent = String(day);
+  for (const { axis, valId, deltaId } of DR_AXES) {
+    const valEl = document.getElementById(valId)!;
+    const deltaEl = document.getElementById(deltaId)!;
+    valEl.textContent = `${Math.round(snap.traits[axis] * 100)}%`;
+    const dv = delta ? delta[axis] : 0;
+    if (delta && Math.abs(dv) >= 0.005) {
+      deltaEl.textContent = `${dv > 0 ? '▲' : '▼'} ${Math.abs(Math.round(dv * 100))}%`;
+      deltaEl.className = `dr-delta ${dv > 0 ? 'up' : 'down'}`;
+    } else {
+      deltaEl.textContent = delta ? '±0%' : '';
+      deltaEl.className = 'dr-delta';
+    }
+  }
+
+  drEvents.innerHTML = '';
+  const todaysEvo = game.evolution().filter((e) => Math.floor(e.tick / TICKS_PER_DAY) === day);
+  const shown = todaysEvo.length > 0 ? todaysEvo : [{ tick: day * TICKS_PER_DAY, text: '静かな一日だった…' }];
+  for (const e of shown) {
+    const li = document.createElement('li');
+    li.textContent = e.text;
+    drEvents.appendChild(li);
+  }
+
+  if (dayResultThumb) { URL.revokeObjectURL(dayResultThumb); dayResultThumb = null; }
+  void renderer.renderThumbnail(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, 200).then((url) => {
+    dayResultThumb = url;
+    drThumb.src = url;
+  });
+
+  dayLoopRemainingEl.hidden = true;
+  setPlaybackControlsEnabled(false);
+  dayResultModal.hidden = false;
+}
 
 // ── 入力: カーソル位置と押下状態 ──────────────────────
 // マウス: 左ボタン (ドラッグ含む) はツールの適用、右ボタンのドラッグはパン、
@@ -293,6 +453,12 @@ let lastHeavyFrameMs = 0;
 function frame() {
   perfHud.frame();
   if (game.ready) {
+    // M9: 日境界への到達は消費型フラグなので、間引かれる可能性のある
+    // 「重い」フレーム処理より前に、間引かれない全フレームで拾う。
+    if (dayLoopMode && dayLoop.phase === 'observe' && game.consumeDayCompleted()) {
+      dayLoop = completeDay(dayLoop);
+      showDayResult(dayLoop.day);
+    }
     const nowMs0 = performance.now();
     if (game.fastForward && nowMs0 - lastHeavyFrameMs < FAST_FORWARD_FRAME_INTERVAL_MS) {
       requestAnimationFrame(frame);
@@ -311,6 +477,14 @@ function frame() {
     const snap = game.snapshot();
     renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx);
     minimap.draw(snap.colonyMarkers, camera.view());
+
+    // M9: 観察中の残り時間 = (targetTick - tick) / 実効tick毎秒。
+    if (dayLoopMode && dayLoop.phase === 'observe') {
+      const perf = game.perf();
+      const ticksPerSecond = perf.effectiveSpeed * (1000 / 16);
+      const remainingTicks = dayLoop.targetTick - snap.state.tick;
+      dayLoopRemainingN.textContent = ticksPerSecond > 0 ? formatMMSS(remainingTicks / ticksPerSecond) : '--:--';
+    }
     // 育ちが浅いうち (Day 3 未満) は個性が定まっていないので図鑑には記録しない。
     if (snap.day >= 3) {
       encyclopedia.record(snap.typeInfo.id, snap.typeInfo.label, snap.genome, snap.individuality, snap.state.seed, snap.day);

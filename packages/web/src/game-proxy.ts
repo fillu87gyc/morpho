@@ -17,6 +17,9 @@ export class GameProxy {
   private recentEvents: string[] = [];
   private evoLog: EvolutionLog[] = [];
   private latestPerf: PerfInfo = NO_PERF;
+  // M9: Worker が日境界に到達して自動停止したことを、メインループが
+  // 1回だけ拾えるようにするフラグ (consumeDayCompleted で読むと消費される)。
+  private dayCompletedFlag = false;
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -40,6 +43,8 @@ export class GameProxy {
         this.recentEvents = msg.events;
         this.evoLog = msg.evolution;
         this.latestPerf = msg.perf;
+      } else if (msg.type === 'dayCompleted') {
+        this.dayCompletedFlag = true;
       }
     };
     if (parentGenome) this.send({ type: 'reset', parentGenome });
@@ -65,7 +70,19 @@ export class GameProxy {
   // 浮いた予算をtickに全振りするよう Worker に伝える。
   setFastForward(v: boolean): void { this.fastForward = v; this.send({ type: 'setFastForward', enabled: v }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
-  reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void { this.send({ type: 'reset', seed, stageId, parentGenome }); }
+  reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void {
+    this.send({ type: 'reset', seed, stageId, parentGenome });
+    this.dayCompletedFlag = false;
+  }
+  // M9: target tick まで自動で進め、到達したら Worker が speed=0 に止める。
+  // null で日境界のキャップを解除する。
+  runUntilTick(target: number | null): void { this.send({ type: 'runUntilTick', target }); }
+  // 直近で日境界に到達していたら true を1度だけ返す (消費型)。
+  consumeDayCompleted(): boolean {
+    const v = this.dayCompletedFlag;
+    this.dayCompletedFlag = false;
+    return v;
+  }
 
   snapshot(): GameSnapshot { return this.current(); }
   events(): string[] { return this.recentEvents; }

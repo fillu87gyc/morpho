@@ -40,6 +40,11 @@ export class TickScheduler {
   setBudgetMs(v: number): void { this.config.budgetMs = v; }
   setMaxDebtTicks(v: number): void { this.config.maxDebtTicks = v; }
 
+  // M9: 日境界で speed=0 に止めた後、次の日の観察開始時に持ち越し debt を
+  // 捨てる。持ち越すと「新しい日が始まった瞬間に前日の余り debt を一気に
+  // 消化する」ような不自然な速度ジャンプが起こるため。
+  reset(): void { this.debt = 0; }
+
   // このフレームで「本来」進めたい tick 数 (speed スライダー) を渡すと、
   // 予算内に収まると見積もれる tick 数を返す。返り値が targetSpeed より
   // 少ない場合、差分は borrow として次回以降に持ち越される。
