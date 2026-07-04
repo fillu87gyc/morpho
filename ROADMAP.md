@@ -7,6 +7,7 @@
 
 - **`@morpho/sim`** — 粘菌のローカル則 (グラフ成長 / Biomass膜 / Activity場 / 環境ツール) は完成済み。Node から PNG を吐く `scripts/render.ts` で挙動確認可能。
 - **`@morpho/web`** (本リリースで新設) — `@morpho/sim` を `<canvas>` に貼り、最小の HUD とツールパレットで「触って育てる」素体ができた状態。
+- **速度** — M0〜M7 で機能は揃ったが、計測の結果、速度スライダーの上限 ×24 は実際には出ていない (実効 ×8 前後)。ボトルネックの内訳と対策は M8 参照。
 
 ## マイルストーン
 
@@ -21,7 +22,7 @@
 
 ### M1 — 「観察する」を気持ちよくする
 - [x] BiomassField の差分のみを再描画 (60fps 安定 / モバイル可)
-- [ ] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け)
+- [ ] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け) → M8-P3 に統合
 - [x] Web Worker でシミュレーションを分離 (UI 操作を止めない)
 - [x] スナップショット採取: Day 1 / 5 / 10 ... を縮小サムネで成長タイムラインに表示
 - [x] 環境ヒートマップ表示の ON/OFF (栄養 / 水 / 光)
@@ -97,6 +98,57 @@
   - `web/src/main.ts`: Pointer Events で1本指タップ/ドラッグ (ツール配置、マウスと共通の経路) と2本指ピンチ (ズーム+パン) を判別。2本指ピンチの1本目として誤ってツールが置かれないよう、1本指タップの確定を短く遅延 (`TAP_GRACE_MS`) させ、2本目が来ればタップを破棄する
   - `#canvas` に `touch-action: none` を設定し、ブラウザ標準のスクロール/ピンチズーム/ダブルタップズームと競合しないようにする
 - [ ] GitHub Pages へ自動デプロイ (`.github/workflows/pages.yml`)
+
+### M8 — 速くする (パフォーマンス)
+
+> ゲームを「早く」するためのマイルストーン。計測に基づく現状と、足りないものの棚卸し。
+
+#### 現状の計測 (2026-07 / Node 22 / petri 3コロニー / 60日走行, 約350ノード・360エッジ)
+
+| 項目 | 実測 | 影響 |
+| --- | --- | --- |
+| 1 tick | 1.5〜2.1 ms (エッジ数にほぼ比例して増加) | 速度×24 は 16ms 予算に対し 36〜50ms 必要 → **実効 ×8 前後で頭打ち**。スライダーの ×24 は看板倒れ (モバイルではさらに低い) |
+| tick 内訳 | biomass 41% / activity 40% / flux 10% / index 6% | 上位2つ = エッジ毎の場書き込み + 毎tick全面拡散 + `crowdingAt` が全体の約8割 |
+| snapshot の structuredClone | 0.9〜1.1 ms | Worker→メインへ **60Hz で毎回** クローン送信 (env/bio の Float32Array 5面 ≈ 180KB + 全ノード/エッジのオブジェクト群)。GC 圧の主因 |
+| snapshot の派生計算 | 0.05〜0.6 ms | `computeTraits` / `computeIndividuality` / `computeColonyNetworks` (Union-Find) / 全面グリッド走査×2 (balance/world) を tick が進んでいなくても 60Hz で再計算 |
+
+ボトルネックの所在 (コード上の根拠):
+
+- `sim/graph/life.ts` `updateActivity()` — エッジ毎に `crowdingAt()` を呼ぶ。`crowdingAt` は全ノード線形走査なので **O(エッジ数×ノード数) が毎tick** (350×360 ≈ 13万距離計算/tick)。さらにエッジ毎の `env.sampleGrowthContext()` + `actField.deposit()` + 毎tickの全面 `diffuse()`
+- `sim/graph/life.ts` `updateBiomass()` — エッジ毎に `depositSegment()` (線分に沿ってディスクを重ね塗り) + 毎tickの全面 `diffuse()`
+- `sim/graph/flux.ts` `updateFlux()` — **sink 毎に毎tick BFS**。sink は成長で増え続けるため後半ほど重い
+- `sim/graph/step.ts` — `buildIndex()` が毎tick Map/Set をゼロから再構築 (増分更新なし)
+- `web/src/sim-worker.ts` — `setTimeout(16)` 固定で「speed 回ぶん全部回してから snapshot」。時間予算の概念がなく、間に合わないと黙って遅れる。実効速度の観測手段もない
+- `web/src/render.ts` `drawEdges()` — 毎フレーム `new Map(nodes)` + `[...edges].sort()` + エッジ毎に `strokeStyle` 設定と `stroke()` 呼び出し (スタイルバッチなし)。`drawNodes()` も毎フレーム radial gradient を生成
+- `web/src/main.ts` `frame()` — `ui.render()` / achievements / scoreboard / challenge 判定を差分有無に関わらず毎 RAF 実行
+
+#### 足りないもの (このマイルストーンで揃える)
+
+- [ ] **P0: 計測基盤** — 何もない状態なので最初に揃える
+  - [ ] perf HUD (ms/tick, 描画ms, FPS, 実効速度倍率をオーバーレイ表示。`?debug` で有効化)
+  - [ ] `sim/scripts/bench.ts` (tick コストの成長カーブ + サブステップ内訳を出力する再現可能ベンチ)
+  - [ ] CI にベンチのスモーク実行を追加 (極端な回帰の検出。閾値は緩めに)
+- [ ] **P1: sim の熱いループ** — 目標: 1 tick を 0.5ms 以下 (×24 が 16ms 予算に収まる = 24×0.5+描画で間に合う)
+  - [ ] `crowdingAt` の O(E×N) を撤廃: ノード密度を粗いグリッド場に毎tick一度だけ焼き、エッジはそれを sample する (O(N+E) 化)
+  - [ ] `updateFlux` の sink毎BFS を、全 sink を起点にした 1 回のマルチソース BFS に統合。頻度も 2〜4 tick 毎へ (flux は減衰項があるので視覚上の差は小さい)
+  - [ ] `buildIndex` の増分更新 (growth/prune 時だけ差分適用。まず prune 直後だけ再構築でも大きい)
+  - [ ] activity / biomass の全面 `diffuse()` を 2 tick 毎に間引く (係数を等価調整して見た目を保つ)
+  - [ ] `depositSegment` のディスク重ね塗りを line-stamp 一発 (距離場ベース) に置き換え
+- [ ] **P2: Worker ⇄ メインのパイプライン** — 目標: snapshot 送信を 60Hz クローンから「描画に必要な最小データの transfer」へ
+  - [ ] 時間予算スケジューラ: 16ms 予算内で回せるだけ tick を回し、間に合わない分は繰り越す。実効速度を HUD に出す (「×24 と言いつつ ×8」の可視化と解消)
+  - [ ] 描画用スナップショットを typed array 化 (nodes/edges を Float32Array にパック) して postMessage の transferable で渡す (クローンゼロ化)。env/bio の Float32Array も transfer + Worker 側でダブルバッファ
+  - [ ] 派生計算 (traits / individuality / colonyNetworks / balance / world / quests) を「tick が進んだときだけ + 250ms 毎」に間引く (描画データと別チャンネルで低頻度送信)
+- [ ] **P3: 描画** — 目標: 描画 3ms/frame 以下 (モバイル込み)
+  - [ ] `drawEdges`: nodeMap を snapshot 間で再利用し、sort を radius バケツ分け (数段階) に置き換え、同スタイルのエッジを 1 path にバッチ
+  - [ ] `drawNodes`: グロー gradient をオフスクリーン sprite に一度だけ焼いて `drawImage` する
+  - [ ] WebGL2 or `OffscreenCanvas` バックエンド (M1 の未了項目をここへ吸収。P1/P2/P3 の Canvas2D 改善で足りればスコープアウト可)
+  - [ ] `renderThumbnail` の同期 `toDataURL` を `convertToBlob` (非同期) 化
+- [ ] **P4: 「早送り」体験** (モックアップの早送りボタン)
+  - [ ] 早送りモード: 描画を 10fps に間引いて浮いた予算を tick に全振り (P2 のスケジューラ上に載せる)
+  - [ ] UI 更新 (`ui.render()` / 実績・記録判定) を早送り中はさらに低頻度化
+
+実施順は P0 → P1 → P2 → P3 → P4。P1 と P2 だけで「スライダー通りの ×24」が現実になる見込み
+(1 tick 0.5ms × 24 = 12ms + 転送ゼロ化 + 描画 3ms ≈ 16ms 予算内)。
 
 ## アーキテクチャ方針
 
