@@ -7,14 +7,15 @@
 // ポインタ移動によるホバー表示) は止まらない。
 
 import { Game } from './game.js';
-import type { ToWorkerMessage, FromWorkerMessage } from './worker-protocol.js';
+import type { ToWorkerMessage, FromWorkerMessage, WireSnapshot } from './worker-protocol.js';
 import { TickScheduler } from './tick-scheduler.js';
 import type { DerivedSnapshot } from './game.js';
+import { packNodes, packEdges } from './snapshot-codec.js';
 
 // self は DOM の Window 型として推論されるため (tsconfig の lib: DOM)、
 // worker 実行時にだけ現れる postMessage/onmessage を緩く型付けする。
 const ctx = self as unknown as {
-  postMessage(msg: FromWorkerMessage): void;
+  postMessage(msg: FromWorkerMessage, transfer?: Transferable[]): void;
   onmessage: ((e: MessageEvent<ToWorkerMessage>) => void) | null;
 };
 
@@ -86,13 +87,25 @@ function loop(): void {
       lastDerivedAtMs = now;
       forceDerived = false;
     }
+    const { state, ...fastRest } = game.snapshotFast();
+    // M8 P2: nodes/edges だけ Float32Array にパックし、transferable として
+    // ゼロコピーで送る (structuredClone がオブジェクト配列を辿るコストを避ける)。
+    const nodesBuf = packNodes(state.nodes);
+    const edgesBuf = packEdges(state.edges);
+    const wire: WireSnapshot = {
+      ...fastRest,
+      ...lastDerived,
+      stateMeta: { tick: state.tick, seed: state.seed, nextNodeId: state.nextNodeId, nextEdgeId: state.nextEdgeId, worldSize: state.worldSize },
+      nodesBuf,
+      edgesBuf,
+    };
     ctx.postMessage({
       type: 'snapshot',
-      snapshot: { ...game.snapshotFast(), ...lastDerived },
+      snapshot: wire,
       events: game.events(),
       evolution: game.evolution(),
       perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed },
-    });
+    }, [nodesBuf.buffer, edgesBuf.buffer]);
     dirty = false;
   }
   setTimeout(loop, TICK_INTERVAL_MS);

@@ -6,7 +6,8 @@
 
 import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type StageId } from './game.js';
 import type { ToWorkerMessage, FromWorkerMessage, PerfInfo } from './worker-protocol.js';
-import type { Genome, Vec2 } from '@morpho/sim';
+import type { Genome, SimState, Vec2 } from '@morpho/sim';
+import { unpackNodes, unpackEdges } from './snapshot-codec.js';
 
 const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
 
@@ -30,7 +31,11 @@ export class GameProxy {
     this.worker.onmessage = (e: MessageEvent<FromWorkerMessage>) => {
       const msg = e.data;
       if (msg.type === 'snapshot') {
-        this.latest = msg.snapshot;
+        // M8 P2: nodes/edges は Float32Array で届くので、既存のコンシューマ
+        // (render.ts / quests.ts 等) がそのまま使えるようオブジェクトに復元する。
+        const { stateMeta, nodesBuf, edgesBuf, ...rest } = msg.snapshot;
+        const state: SimState = { ...stateMeta, nodes: unpackNodes(nodesBuf), edges: unpackEdges(edgesBuf) };
+        this.latest = { ...rest, state } as GameSnapshot;
         this.recentEvents = msg.events;
         this.evoLog = msg.evolution;
         this.latestPerf = msg.perf;

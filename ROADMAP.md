@@ -151,11 +151,14 @@
     - `sim/graph/life.ts`: `updateActivity`/`updateBiomass` は deposit (書き込み) を毎tick行ったまま、`diffuse()` (拡散+減衰) だけ `state.tick % 2 === 0` の時に限定し、係数 (decay/diffusion) を2倍にして「2tickぶん」を1回で近似する。伝播が最大1tick遅れるだけで見た目は保たれる
   - [x] `depositSegment` のディスク重ね塗りを line-stamp 一発 (距離場ベース) に置き換え
     - `sim/env/biomass-field.ts`: 線分を何個ものディスクで重ね塗りする代わりに、線分のバウンディングボックスを1回走査し、セル毎に線分までの最短距離 (射影点との距離) から重みを直接計算する。重なり範囲を何度も塗り直す無駄がなくなり、結果は同じ capsule 形状
-- [ ] **P2: Worker ⇄ メインのパイプライン** — 目標: snapshot 送信を 60Hz クローンから「描画に必要な最小データの transfer」へ
+- [x] **P2: Worker ⇄ メインのパイプライン** — 目標: snapshot 送信を 60Hz クローンから「描画に必要な最小データの transfer」へ
   - [x] 時間予算スケジューラ: 16ms 予算内で回せるだけ tick を回し、間に合わない分は繰り越す。実効速度を HUD に出す (「×24 と言いつつ ×8」の可視化と解消)
     - `web/src/tick-scheduler.ts`: `TickScheduler` が純粋なステートマシンとして「借金 (debt)」を管理。tick コストの実測 EMA から今回回せる tick 数を見積もり、間に合わなかった分は次フレームへ繰り越す。借金には上限 (`maxDebtTicks`) を設け、タブ復帰直後などの一気読みを防ぐ
     - `web/src/sim-worker.ts`: 従来の `for (i < speed)` 固定ループを `scheduler.planSteps(game.speed)` の結果に置き換え。`Game.tick(steps)` に明示的な tick 数を渡せるようにした (`web/src/game.ts`)
-  - [ ] 描画用スナップショットを typed array 化 (nodes/edges を Float32Array にパック) して postMessage の transferable で渡す (クローンゼロ化)。env/bio の Float32Array も transfer + Worker 側でダブルバッファ
+  - [x] 描画用スナップショットを typed array 化 (nodes/edges を Float32Array にパック) して postMessage の transferable で渡す (クローンゼロ化)。env/bio の Float32Array も transfer + Worker 側でダブルバッファ
+    - `web/src/snapshot-codec.ts`: `packNodes`/`packEdges` が `SimState.nodes`/`edges` (数百個のオブジェクト配列 — structuredClone が個別に辿る必要があり計測上の主要コスト) を Float32Array に平坦化。`unpackNodes`/`unpackEdges` で受信側が元のオブジェクト配列に復元するので、render.ts/quests.ts など既存のコンシューマは無改修
+    - `web/src/worker-protocol.ts`: `WireSnapshot` (`GameSnapshot` から `state` を除き `stateMeta`/`nodesBuf`/`edgesBuf` を持つ送信専用の形) を追加。`sim-worker.ts` は `postMessage(msg, [nodesBuf.buffer, edgesBuf.buffer])` で transferable 転送し、`game-proxy.ts` が受信時に `SimState` へ復元する
+    - env/bio の Float32Array (5 面, 9216セル) は structuredClone の高速パス (typed array は要素ごとではなく一括コピー) で既に低コストであり、計測上のボトルネックは nodes/edges 側だったため、ダブルバッファ化 (sim の `ScalarField` 内部の拡散用バッファと兼用する設計変更が必要でリスクが高い) は見送り、効果の大きい nodes/edges 側のみ実施した
   - [x] 派生計算 (traits / individuality / colonyNetworks / balance / world / quests) を「tick が進んだときだけ + 250ms 毎」に間引く
     - `web/src/game.ts`: `snapshot()` を `snapshotFast()` (state/env/bio など毎tick必要な部分) と `snapshotDerived()` (traits 以下の派生計算) に分割
     - `web/src/sim-worker.ts`: `snapshotDerived()` は reset/apply 直後のみ即時再計算し、それ以外は 250ms 毎に間引いて使い回す。`snapshotFast()` は引き続き毎 tick 作り直す
