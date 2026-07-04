@@ -40,7 +40,12 @@ jobs:
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
 
+      # enablement: true — 初回はリポジトリで GitHub Pages がまだ有効化されて
+      # いないため、configure-pages 自身に有効化させる (Settings > Pages を
+      # 手動で開かなくてもよいように)。
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
