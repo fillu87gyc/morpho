@@ -262,6 +262,79 @@ test('M6: 起動時に3つのコロニーが配置され、ミニマップをク
   expect(errors).toEqual([]);
 });
 
+test('M7: 撮影ボタンでアルバムに追加され、削除ボタンで消せる', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await expect(page.locator('#album-count')).toHaveText('0');
+  await page.click('#screenshot');
+  await expect.poll(async () => (await page.locator('#album-count').textContent())?.trim(), { timeout: 5_000 }).toBe('1');
+  await expect(page.locator('.album-shot')).toHaveCount(1);
+
+  await page.click('.album-shot-del');
+  await expect(page.locator('#album-count')).toHaveText('0');
+  await expect(page.locator('.album-shot')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('M7: 環境音トグルでAudioContextが生成・再開され、ステージ切替でもエラーが出ない', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await expect(page.locator('#toggle-ambient')).not.toHaveClass(/active/);
+  await page.click('#toggle-ambient');
+  await expect(page.locator('#toggle-ambient')).toHaveClass(/active/);
+
+  await page.selectOption('#stage-select', 'wetland');
+  await page.waitForTimeout(300);
+
+  await page.click('#toggle-ambient');
+  await expect(page.locator('#toggle-ambient')).not.toHaveClass(/active/);
+
+  expect(errors).toEqual([]);
+});
+
+test('M8 P3: Day 1 で成長タイムラインに非同期エンコードされたサムネイルが追加される', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await setSpeedSlider(page, 24);
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThanOrEqual(1);
+
+  const thumb = page.locator('#timeline .timeline-entry img').first();
+  await expect(thumb).toHaveCount(1, { timeout: 10_000 });
+  const src = await thumb.getAttribute('src');
+  expect(src).toMatch(/^blob:/);
+
+  expect(errors).toEqual([]);
+});
+
+test('M8 P4: 早送りモードをONにするとDAYが進み続け、OFFに戻せる', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await setSpeedSlider(page, 24);
+  await expect(page.locator('#fast-forward')).not.toHaveClass(/active/);
+  await page.click('#fast-forward');
+  await expect(page.locator('#fast-forward')).toHaveClass(/active/);
+
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThan(0);
+
+  await page.click('#fast-forward');
+  await expect(page.locator('#fast-forward')).not.toHaveClass(/active/);
+
+  // OFFに戻した後も通常通り進み続ける (Workerのループ間隔が壊れていない)。
+  const dayAfterToggleOff = Number(await dayText(page));
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 15_000 }).toBeGreaterThan(dayAfterToggleOff);
+
+  expect(errors).toEqual([]);
+});
+
 test('Day 5 以降に種を採取すると系統樹に記録され、世代が進む', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');

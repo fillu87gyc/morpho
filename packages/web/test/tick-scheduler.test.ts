@@ -62,4 +62,21 @@ describe('TickScheduler', () => {
     expect(s.pendingDebt).toBe(0);
     expect(totalRan).toBeGreaterThan(0);
   });
+
+  it('M8 P4: setBudgetMs/setMaxDebtTicks で早送りモード相当の再設定ができる', () => {
+    const s = new TickScheduler({ budgetMs: 16, maxDebtTicks: 96 });
+    // 通常モードでは 16ms 予算の枠に収まる分しか返らない (見積もりが重いと仮定)。
+    s.report(24, 48); // 2ms/tick と判明
+    const before = s.planSteps(24);
+    expect(before).toBeLessThan(24);
+
+    // 早送り (100ms/10fps) 相当に切り替え: 予算と借金上限を比率分だけ引き上げる。
+    const ratio = 100 / 16;
+    s.setBudgetMs(100);
+    s.setMaxDebtTicks(Math.round(96 * ratio));
+    const demand = 24 * ratio; // ループ間隔が伸びた分、要求量も比例して増やす
+    const after = s.planSteps(demand);
+    // 100ms 予算なら 2ms/tick でも 50 tick 程度は収まり、16ms 予算のときより多く進む。
+    expect(after).toBeGreaterThan(before);
+  });
 });

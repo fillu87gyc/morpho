@@ -7,19 +7,29 @@
 // ポインタ移動によるホバー表示) は止まらない。
 
 import { Game } from './game.js';
-import type { ToWorkerMessage, FromWorkerMessage } from './worker-protocol.js';
+import type { ToWorkerMessage, FromWorkerMessage, WireSnapshot } from './worker-protocol.js';
 import { TickScheduler } from './tick-scheduler.js';
 import type { DerivedSnapshot } from './game.js';
+import { packNodes, packEdges } from './snapshot-codec.js';
 
 // self は DOM の Window 型として推論されるため (tsconfig の lib: DOM)、
 // worker 実行時にだけ現れる postMessage/onmessage を緩く型付けする。
 const ctx = self as unknown as {
-  postMessage(msg: FromWorkerMessage): void;
+  postMessage(msg: FromWorkerMessage, transfer?: Transferable[]): void;
   onmessage: ((e: MessageEvent<ToWorkerMessage>) => void) | null;
 };
 
 const game = new Game();
 const TICK_INTERVAL_MS = 16;
+// M8 P4: 早送りモード。描画/スナップショット送信をこれまでの ~60fps 相当
+// (16ms 間隔) から 10fps (100ms 間隔) まで落とし、浮いた時間をすべて
+// tick に回す。ループ間隔を伸ばす分、スケジューラの予算 (budgetMs) と
+// 借金の上限 (maxDebtTicks) も同じ比率で引き上げないと、単に「呼ばれる
+// 回数が減っただけ」で総 tick 数がむしろ減ってしまう。
+const FAST_FORWARD_INTERVAL_MS = 100;
+const FAST_FORWARD_RATIO = FAST_FORWARD_INTERVAL_MS / TICK_INTERVAL_MS;
+let fastForward = false;
+let loopIntervalMs = TICK_INTERVAL_MS;
 // 一時停止中 (speed=0) は tick が進まないので、盤面を変えた
 // (apply/reset) 直後だけ再送すれば十分。毎フレーム同じスナップショットを
 // clone して送り続けるのは無駄な GC 圧になる。
@@ -56,12 +66,23 @@ ctx.onmessage = (e) => {
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;
     case 'apply': game.apply(msg.pos); dirty = true; forceDerived = true; break;
+    case 'setFastForward': {
+      fastForward = msg.enabled;
+      loopIntervalMs = fastForward ? FAST_FORWARD_INTERVAL_MS : TICK_INTERVAL_MS;
+      scheduler.setBudgetMs(loopIntervalMs);
+      scheduler.setMaxDebtTicks(fastForward ? Math.round(96 * FAST_FORWARD_RATIO) : 96);
+      break;
+    }
   }
 };
 
 function loop(): void {
   if (game.speed > 0) {
-    const steps = scheduler.planSteps(game.speed);
+    // 早送り中はループの呼び出し間隔自体が伸びる (16ms → 100ms) ので、
+    // 1回あたりに積む debt もその比率だけ大きくする。そうしないと
+    // 「呼ばれる頻度が減っただけ」で秒間の総 tick 数がむしろ落ちてしまう。
+    const demand = fastForward ? game.speed * FAST_FORWARD_RATIO : game.speed;
+    const steps = scheduler.planSteps(demand);
     if (steps > 0) {
       const t0 = performance.now();
       game.tick(steps);
@@ -86,15 +107,27 @@ function loop(): void {
       lastDerivedAtMs = now;
       forceDerived = false;
     }
+    const { state, ...fastRest } = game.snapshotFast();
+    // M8 P2: nodes/edges だけ Float32Array にパックし、transferable として
+    // ゼロコピーで送る (structuredClone がオブジェクト配列を辿るコストを避ける)。
+    const nodesBuf = packNodes(state.nodes);
+    const edgesBuf = packEdges(state.edges);
+    const wire: WireSnapshot = {
+      ...fastRest,
+      ...lastDerived,
+      stateMeta: { tick: state.tick, seed: state.seed, nextNodeId: state.nextNodeId, nextEdgeId: state.nextEdgeId, worldSize: state.worldSize },
+      nodesBuf,
+      edgesBuf,
+    };
     ctx.postMessage({
       type: 'snapshot',
-      snapshot: { ...game.snapshotFast(), ...lastDerived },
+      snapshot: wire,
       events: game.events(),
       evolution: game.evolution(),
       perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed },
-    });
+    }, [nodesBuf.buffer, edgesBuf.buffer]);
     dirty = false;
   }
-  setTimeout(loop, TICK_INTERVAL_MS);
+  setTimeout(loop, loopIntervalMs);
 }
 loop();

@@ -2,7 +2,13 @@ import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// GitHub Pages はリポジトリ名のサブパス (https://<user>.github.io/<repo>/) に
+// 配置される。ローカル開発・プレビューはルート ('/') のままで、
+// pages.yml が `VITE_BASE=/<repo>/` を渡してビルドするときだけ変わる。
+const BASE = process.env.VITE_BASE || '/';
+
 export default defineConfig({
+  base: BASE,
   resolve: {
     alias: {
       '@morpho/sim': resolve(__dirname, '../sim/src/index.ts'),
@@ -30,13 +36,13 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icons/icon-192.png', 'icons/icon-512.png'],
       manifest: {
-        id: '/',
+        id: BASE,
         name: 'モルフォ — 委ねて、育ついのち',
         short_name: 'モルフォ',
         description: '粘菌を育てる、委ねて観察するWebゲーム',
         lang: 'ja',
-        start_url: '/',
-        scope: '/',
+        start_url: BASE,
+        scope: BASE,
         display: 'standalone',
         orientation: 'any',
         background_color: '#0b0d0c',
@@ -52,7 +58,7 @@ export default defineConfig({
         // モルフォは1画面 SPA。オフライン起動できるよう全ビルド成果物を
         // プリキャッシュし、ナビゲーションは常に index.html にフォールバックする。
         globPatterns: ['**/*.{js,css,html,svg,png}'],
-        navigateFallback: '/index.html',
+        navigateFallback: `${BASE}index.html`,
       },
       devOptions: {
         // dev サーバでも SW を有効にして手元で挙動確認できるようにする。

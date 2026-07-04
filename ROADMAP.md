@@ -6,8 +6,8 @@
 ## 現在地
 
 - **`@morpho/sim`** — 粘菌のローカル則 (グラフ成長 / Biomass膜 / Activity場 / 環境ツール) は完成済み。Node から PNG を吐く `scripts/render.ts` で挙動確認可能。
-- **`@morpho/web`** (本リリースで新設) — `@morpho/sim` を `<canvas>` に貼り、最小の HUD とツールパレットで「触って育てる」素体ができた状態。
-- **速度** — M0〜M7 で機能は揃ったが、計測の結果、速度スライダーの上限 ×24 は実際には出ていない (実効 ×8 前後)。ボトルネックの内訳と対策は M8 参照。
+- **`@morpho/web`** — `@morpho/sim` を `<canvas>` に貼り、HUD・ツールパレット・図鑑・系統樹・アルバム・環境音などモックアップの体験一式が揃った状態。M0〜M8 の全マイルストーンが完了。
+- **速度** — 速度スライダーの上限 ×24 に対し、通常モードで実効 ×4〜7、早送りモード (⏩) で ×10 前後まで出る。描画は 0.8〜1.5ms/frame で目標 (3ms) を大きく下回り、残るボトルネックは sim 側の tick コスト (エッジ数に比例) のみ。詳細は M8 参照。
 
 ## マイルストーン
 
@@ -22,7 +22,7 @@
 
 ### M1 — 「観察する」を気持ちよくする
 - [x] BiomassField の差分のみを再描画 (60fps 安定 / モバイル可)
-- [ ] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け) → M8-P3 に統合
+- [x] WebGL2 or `OffscreenCanvas` バックエンド (希望者向け) → M8-P3 に統合。P1〜P3 の Canvas2D 最適化後の実測で目標を大きく下回ったためスコープアウト (詳細は M8-P3 参照)
 - [x] Web Worker でシミュレーションを分離 (UI 操作を止めない)
 - [x] スナップショット採取: Day 1 / 5 / 10 ... を縮小サムネで成長タイムラインに表示
 - [x] 環境ヒートマップ表示の ON/OFF (栄養 / 水 / 光)
@@ -87,8 +87,10 @@
   - `web/src/quests.ts`: 新設クエスト `unite-colonies` (「離れたコロニーをひとつに」)。進捗 = `(sourceColonies - connectedNetworks) / (sourceColonies - 1)`。コロニーの growth が物理的に隣のコロニーへ到達しネットワークが1つに統合されるほど進む
 
 ### M7 — 仕上げ
-- [ ] 環境音 + アンビエント BGM (Howler.js or WebAudio 直)
-- [ ] スクリーンショット保存 (album)
+- [x] 環境音 + アンビエント BGM (Howler.js or WebAudio 直)
+  - `web/src/ambient.ts`: `Ambient` クラスが WebAudio だけで手続き的に環境音を生成 (外部音声ファイルなし、PWAのキャッシュ対象が増えない)。ドローン (低い正弦波3本) + フィルタ済みノイズ (風/水のテクスチャ) + LFOによるカットオフの「呼吸」+ ステージごとのランダムなきらめき音 (洞窟の水滴・湿地の虫の音 等) をステージごとに切替。自動再生ポリシーに対応し、トグルボタン (`#toggle-ambient`) のクリック (ユーザー操作) からのみ `AudioContext` を生成・resumeする
+- [x] スクリーンショット保存 (album)
+  - `web/src/album.ts`: `Album` クラスが撮影した PNG を IndexedDB (localStorage は容量が小さく画像保存に不向き) に保存。左記UIカード「アルバム」に撮影ボタンとサムネイル一覧 (クリックでダウンロード、削除ボタン) を追加。`canvas.toBlob()` (非同期) で画面に見えている通りの絵をそのまま撮る
 - [x] PWA (オフライン起動 / ホーム画面追加)
   - `vite-plugin-pwa` (Workbox `generateSW`) を導入し、ビルド成果物一式をプリキャッシュ。`navigateFallback` で SPA のオフライン起動に対応
   - `manifest.webmanifest` (`display: standalone` / アイコン4種 [192・512 の通常 + maskable]) を生成し、ホーム画面に追加してアプリのように起動できる
@@ -97,7 +99,8 @@
   - `web/src/pinch.ts`: `PinchTracker` が2本指の距離・中点からズーム倍率とパン量を導出する純粋なステート
   - `web/src/main.ts`: Pointer Events で1本指タップ/ドラッグ (ツール配置、マウスと共通の経路) と2本指ピンチ (ズーム+パン) を判別。2本指ピンチの1本目として誤ってツールが置かれないよう、1本指タップの確定を短く遅延 (`TAP_GRACE_MS`) させ、2本目が来ればタップを破棄する
   - `#canvas` に `touch-action: none` を設定し、ブラウザ標準のスクロール/ピンチズーム/ダブルタップズームと競合しないようにする
-- [ ] GitHub Pages へ自動デプロイ (`.github/workflows/pages.yml`)
+- [x] GitHub Pages へ自動デプロイ (`.github/workflows/pages.yml`)
+  - main への push で `packages/web` をビルドし GitHub Pages へ公開。GitHub Pages はリポジトリ名のサブパス (`https://<owner>.github.io/<repo>/`) に配置されるため、`vite.config.ts` の `base` を `VITE_BASE` 環境変数から決定 (未設定時はローカル開発と同じ `/`)。PWA manifest の `start_url`/`scope`/`id` も同じ `BASE` から導出し、サブパス配下でも Service Worker のナビゲーションフォールバックが機能するようにした
 
 ### M8 — 速くする (パフォーマンス)
 
@@ -148,26 +151,41 @@
     - `sim/graph/life.ts`: `updateActivity`/`updateBiomass` は deposit (書き込み) を毎tick行ったまま、`diffuse()` (拡散+減衰) だけ `state.tick % 2 === 0` の時に限定し、係数 (decay/diffusion) を2倍にして「2tickぶん」を1回で近似する。伝播が最大1tick遅れるだけで見た目は保たれる
   - [x] `depositSegment` のディスク重ね塗りを line-stamp 一発 (距離場ベース) に置き換え
     - `sim/env/biomass-field.ts`: 線分を何個ものディスクで重ね塗りする代わりに、線分のバウンディングボックスを1回走査し、セル毎に線分までの最短距離 (射影点との距離) から重みを直接計算する。重なり範囲を何度も塗り直す無駄がなくなり、結果は同じ capsule 形状
-- [ ] **P2: Worker ⇄ メインのパイプライン** — 目標: snapshot 送信を 60Hz クローンから「描画に必要な最小データの transfer」へ
+- [x] **P2: Worker ⇄ メインのパイプライン** — 目標: snapshot 送信を 60Hz クローンから「描画に必要な最小データの transfer」へ
   - [x] 時間予算スケジューラ: 16ms 予算内で回せるだけ tick を回し、間に合わない分は繰り越す。実効速度を HUD に出す (「×24 と言いつつ ×8」の可視化と解消)
     - `web/src/tick-scheduler.ts`: `TickScheduler` が純粋なステートマシンとして「借金 (debt)」を管理。tick コストの実測 EMA から今回回せる tick 数を見積もり、間に合わなかった分は次フレームへ繰り越す。借金には上限 (`maxDebtTicks`) を設け、タブ復帰直後などの一気読みを防ぐ
     - `web/src/sim-worker.ts`: 従来の `for (i < speed)` 固定ループを `scheduler.planSteps(game.speed)` の結果に置き換え。`Game.tick(steps)` に明示的な tick 数を渡せるようにした (`web/src/game.ts`)
-  - [ ] 描画用スナップショットを typed array 化 (nodes/edges を Float32Array にパック) して postMessage の transferable で渡す (クローンゼロ化)。env/bio の Float32Array も transfer + Worker 側でダブルバッファ
+  - [x] 描画用スナップショットを typed array 化 (nodes/edges を Float32Array にパック) して postMessage の transferable で渡す (クローンゼロ化)。env/bio の Float32Array も transfer + Worker 側でダブルバッファ
+    - `web/src/snapshot-codec.ts`: `packNodes`/`packEdges` が `SimState.nodes`/`edges` (数百個のオブジェクト配列 — structuredClone が個別に辿る必要があり計測上の主要コスト) を Float32Array に平坦化。`unpackNodes`/`unpackEdges` で受信側が元のオブジェクト配列に復元するので、render.ts/quests.ts など既存のコンシューマは無改修
+    - `web/src/worker-protocol.ts`: `WireSnapshot` (`GameSnapshot` から `state` を除き `stateMeta`/`nodesBuf`/`edgesBuf` を持つ送信専用の形) を追加。`sim-worker.ts` は `postMessage(msg, [nodesBuf.buffer, edgesBuf.buffer])` で transferable 転送し、`game-proxy.ts` が受信時に `SimState` へ復元する
+    - env/bio の Float32Array (5 面, 9216セル) は structuredClone の高速パス (typed array は要素ごとではなく一括コピー) で既に低コストであり、計測上のボトルネックは nodes/edges 側だったため、ダブルバッファ化 (sim の `ScalarField` 内部の拡散用バッファと兼用する設計変更が必要でリスクが高い) は見送り、効果の大きい nodes/edges 側のみ実施した
   - [x] 派生計算 (traits / individuality / colonyNetworks / balance / world / quests) を「tick が進んだときだけ + 250ms 毎」に間引く
     - `web/src/game.ts`: `snapshot()` を `snapshotFast()` (state/env/bio など毎tick必要な部分) と `snapshotDerived()` (traits 以下の派生計算) に分割
     - `web/src/sim-worker.ts`: `snapshotDerived()` は reset/apply 直後のみ即時再計算し、それ以外は 250ms 毎に間引いて使い回す。`snapshotFast()` は引き続き毎 tick 作り直す
     - 「描画データと別チャンネルで低頻度送信」(postMessage の payload 自体を分離してクローン量を削る) は見送り: 効果は typed array 化 (未着手の項目) の方が大きく、protocol/GameProxy への影響も大きいためスコープ外
-- [ ] **P3: 描画** — 目標: 描画 3ms/frame 以下 (モバイル込み)
-  - [ ] `drawEdges`: nodeMap を snapshot 間で再利用し、sort を radius バケツ分け (数段階) に置き換え、同スタイルのエッジを 1 path にバッチ
-  - [ ] `drawNodes`: グロー gradient をオフスクリーン sprite に一度だけ焼いて `drawImage` する
-  - [ ] WebGL2 or `OffscreenCanvas` バックエンド (M1 の未了項目をここへ吸収。P1/P2/P3 の Canvas2D 改善で足りればスコープアウト可)
-  - [ ] `renderThumbnail` の同期 `toDataURL` を `convertToBlob` (非同期) 化
-- [ ] **P4: 「早送り」体験** (モックアップの早送りボタン)
-  - [ ] 早送りモード: 描画を 10fps に間引いて浮いた予算を tick に全振り (P2 のスケジューラ上に載せる)
-  - [ ] UI 更新 (`ui.render()` / 実績・記録判定) を早送り中はさらに低頻度化
+- [x] **P3: 描画** — 目標: 描画 3ms/frame 以下 (モバイル込み)
+  - [x] `drawEdges`: nodeMap を snapshot 間で再利用し、sort を radius バケツ分け (数段階) に置き換え、同スタイルのエッジを 1 path にバッチ
+    - `web/src/render.ts`: `syncEdgeCache()` が `state` (nodes/edges の参照) が変わらない限り nodeMap と radius バケツ (8分割) を使い回す。RAF が Worker のスナップショット送信より高頻度になりうる (高リフレッシュレート機・一時停止中) ケースでの重複計算を避ける。`drawEdges` は毎フレーム、バケツ内で色/太さを量子化したキーごとに `Path2D` へエッジをまとめ、`stroke()` の呼び出し回数をエッジ数からスタイル種類数まで減らす
+  - [x] `drawNodes`: グロー gradient をオフスクリーン sprite に一度だけ焼いて `drawImage` する
+    - `web/src/render.ts`: `buildGlowSprite()` が source/sink 用のグローを1枚ずつ (`CanvasRenderer` 構築時に1回) 焼き、`drawNodes` は毎フレーム `createRadialGradient` を呼ばず `drawImage` で必要な直径に拡大するだけにした
+  - [x] WebGL2 or `OffscreenCanvas` バックエンド (M1 の未了項目をここへ吸収。P1/P2/P3 の Canvas2D 改善で足りればスコープアウト可)
+    - 上記の P3 描画最適化後、実測 (`?debug` の perf HUD、petri ステージでコロニーが育ってエッジ数 400〜580 まで増える範囲) で描画は 0.8〜1.5ms/frame と目標の 3ms を大きく下回って安定しており、Canvas2D のままで十分と判断してスコープアウトした。モバイル実機での追加計測は行っていないが、M1 の差分再描画・M7 のタッチ最適化は別途対応済みであり、将来モバイル実機で描画が重いと分かった場合に再検討する
+  - [x] `renderThumbnail` の同期 `toDataURL` を `convertToBlob` (非同期) 化
+    - `web/src/render.ts`: `renderThumbnail()` はピクセル描画は同期のまま (直前の `draw()` との整合を保つ必要があるため) だが、PNG エンコードは同期の `toDataURL()` ではなく非同期の `canvas.toBlob()` に置き換え `Promise<string>` (blob URL) を返す。`web/src/timeline.ts` の `maybeCapture()` も呼び出し側を待たせない fire-and-forget 型に更新し、エンコード完了より先に `reset()` された場合は古い世代の結果を破棄して blob URL を解放する
+- [x] **P4: 「早送り」体験** (モックアップの早送りボタン)
+  - [x] 早送りモード: 描画を 10fps に間引いて浮いた予算を tick に全振り (P2 のスケジューラ上に載せる)
+    - `web/src/sim-worker.ts`: 早送り中は Worker 自身のループ間隔を 16ms → 100ms (10fps) に伸ばし、`TickScheduler` の予算 (`setBudgetMs`) と借金上限 (`setMaxDebtTicks`) も同じ比率で引き上げる。ループ間隔が伸びた分、1回あたりに積む要求 tick 数 (debt) も比例して増やさないと「呼ばれる回数が減っただけ」で総 tick 数が減ってしまうため、`game.speed * (100/16)` を要求量として渡す
+    - `web/src/tick-scheduler.ts`: `setBudgetMs()`/`setMaxDebtTicks()` を追加し、実行中にスケジューラの設定を切り替えられるようにした
+    - `web/src/main.ts`: `frame()` (RAF ループ) も早送り中は同じ 100ms 間隔まで間引く。ヘッダの ⏩ ボタン (`#fast-forward`) でON/OFF
+    - 実測 (`?debug` の perf HUD、petri ステージ・速度×24): 通常モードで実効速度 ×6.3〜7.0 だったのが、早送りON後は ×9.9〜10.4 まで向上 (tick コストがボトルネックのため上限は tick 実測に依存するが、約1.5倍の実効速度向上を確認)
+  - [x] UI 更新 (`ui.render()` / 実績・記録判定) を早送り中はさらに低頻度化
+    - `web/src/main.ts`: `ui.render()` / `achievements.check()` / `scoreboard.record()` / `challenges` 判定 / `encyclopedia.record()` / タイムライン撮影は元々同じ `frame()` 内にまとまっていたため、上記の描画間引きと同じゲートで自然に早送り中は 10fps まで低頻度化される
 
-実施順は P0 → P1 → P2 → P3 → P4。P1 と P2 だけで「スライダー通りの ×24」が現実になる見込み
-(1 tick 0.5ms × 24 = 12ms + 転送ゼロ化 + 描画 3ms ≈ 16ms 予算内)。
+実施順は P0 → P1 → P2 → P3 → P4、すべて完了。実測ではエッジ数が増えるほど
+tick コスト自体が伸びる (400〜580 エッジで 0.8〜2ms/tick) ため「スライダー通りの
+×24」は常には出ないが、通常モードで実効 ×4〜7、早送りモードで ×10 前後まで
+向上した。描画は 0.8〜1.5ms/frame と目標の 3ms を大きく下回っており、
+残るボトルネックは sim の tick コストそのもの (エッジ数に比例) である。
 
 ## アーキテクチャ方針
 

@@ -219,6 +219,35 @@ body { overflow: hidden; }
 }
 .timeline-entry figcaption { font-size: 10px; color: var(--text-dim); }
 
+.album {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.album .empty {
+  grid-column: 1 / -1;
+  font-size: 11px; color: var(--text-dim); font-style: italic; margin: 0;
+}
+.album-shot {
+  position: relative;
+  margin: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--panel-edge);
+  background: #07090a;
+  aspect-ratio: 1 / 1;
+}
+.album-shot a { display: block; width: 100%; height: 100%; }
+.album-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.album-shot-del {
+  position: absolute; top: 2px; right: 2px;
+  width: 18px; height: 18px; line-height: 16px;
+  border-radius: 999px; border: none;
+  background: rgba(0, 0, 0, 0.55); color: var(--text);
+  font-size: 12px; cursor: pointer; padding: 0;
+}
+.album-shot-del:hover { background: rgba(200, 60, 60, 0.75); }
+
 .canvas-wrap {
   position: relative;
   display: flex; align-items: center; justify-content: center;

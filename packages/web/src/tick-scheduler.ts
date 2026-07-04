@@ -33,6 +33,13 @@ export class TickScheduler {
   /** 直近の推定 tick コスト (ms)。 */
   get estimatedTickMs(): number { return this.estTickMs; }
 
+  // M8 P4: 早送りモードはループ間隔そのものを (16ms → 100ms/10fps に)
+  // 変えるので、予算と借金の上限も同じ比率で再設定できるようにする
+  // (呼び出し間隔が長くなる分、1回あたりに使える予算・溜め込める借金も
+  // 比例して大きくしないと、逆に tick が回らなくなってしまう)。
+  setBudgetMs(v: number): void { this.config.budgetMs = v; }
+  setMaxDebtTicks(v: number): void { this.config.maxDebtTicks = v; }
+
   // このフレームで「本来」進めたい tick 数 (speed スライダー) を渡すと、
   // 予算内に収まると見積もれる tick 数を返す。返り値が targetSpeed より
   // 少ない場合、差分は borrow として次回以降に持ち越される。
