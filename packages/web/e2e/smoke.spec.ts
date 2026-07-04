@@ -262,6 +262,41 @@ test('M6: 起動時に3つのコロニーが配置され、ミニマップをク
   expect(errors).toEqual([]);
 });
 
+test('M7: 撮影ボタンでアルバムに追加され、削除ボタンで消せる', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await expect(page.locator('#album-count')).toHaveText('0');
+  await page.click('#screenshot');
+  await expect.poll(async () => (await page.locator('#album-count').textContent())?.trim(), { timeout: 5_000 }).toBe('1');
+  await expect(page.locator('.album-shot')).toHaveCount(1);
+
+  await page.click('.album-shot-del');
+  await expect(page.locator('#album-count')).toHaveText('0');
+  await expect(page.locator('.album-shot')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('M7: 環境音トグルでAudioContextが生成・再開され、ステージ切替でもエラーが出ない', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await expect(page.locator('#toggle-ambient')).not.toHaveClass(/active/);
+  await page.click('#toggle-ambient');
+  await expect(page.locator('#toggle-ambient')).toHaveClass(/active/);
+
+  await page.selectOption('#stage-select', 'wetland');
+  await page.waitForTimeout(300);
+
+  await page.click('#toggle-ambient');
+  await expect(page.locator('#toggle-ambient')).not.toHaveClass(/active/);
+
+  expect(errors).toEqual([]);
+});
+
 test('Day 5 以降に種を採取すると系統樹に記録され、世代が進む', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');

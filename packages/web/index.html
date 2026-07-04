@@ -194,6 +194,14 @@
           </section>
 
           <section class="card">
+            <h2>アルバム <span id="album-count" class="badge">0</span></h2>
+            <button id="screenshot" class="harvest-btn" title="今の画面をPNGとして保存する">📷 撮影</button>
+            <div id="album" class="album">
+              <p class="empty">まだ撮影していない…</p>
+            </div>
+          </section>
+
+          <section class="card">
             <h2>進化の記録</h2>
             <ul id="evo" class="evo">
               <li class="empty">まだ何も起きていない…</li>
@@ -236,6 +244,7 @@
             <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>
             <button id="reset-view">全体を見る</button>
+            <button id="toggle-ambient" title="環境音 + アンビエントBGMを再生する (WebAudioで生成)">🔈 環境音</button>
           </section>
         </aside>
       </main>

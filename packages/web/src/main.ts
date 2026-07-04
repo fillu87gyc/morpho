@@ -14,6 +14,8 @@ import { Scoreboard } from './scoreboard.js';
 import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
 import { PinchTracker } from './pinch.js';
 import { PerfHud, debugModeEnabled } from './perf-hud.js';
+import { Album } from './album.js';
+import { Ambient } from './ambient.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -23,6 +25,8 @@ const achievements = new Achievements();
 const challenges = new DailyChallengeTracker();
 const scoreboard = new Scoreboard();
 const lineage = new Lineage();
+const album = new Album();
+const ambient = new Ambient();
 
 // 系統に採取済みの種があれば、初回起動から継承した個体で始める
 // (M5: セッションをまたいで系統樹を続けられる)。
@@ -47,7 +51,7 @@ minimapCanvas.addEventListener('click', (e) => {
   camera.focusOn(minimap.toWorld(px, py));
 });
 
-const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage }, {
+const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album }, {
   onSpeed: (s) => game.setSpeed(s),
   onTool: (t) => game.setTool(t),
   onBrush: (r) => game.setBrush(r),
@@ -68,6 +72,13 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     timeline.reset();
     camera.reset();
     fitCanvas();
+    ambient.setStage(id);
+  },
+  onToggleAmbient: () => {
+    void ambient.setEnabled(!ambient.enabled);
+    const btn = document.getElementById('toggle-ambient');
+    btn?.classList.toggle('active', ambient.enabled);
+    if (btn) btn.textContent = ambient.enabled ? '🔊 環境音' : '🔈 環境音';
   },
   onHarvestSeed: () => {
     const snap = game.snapshot();
@@ -82,6 +93,14 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
       stageId: snap.stage.id,
       stageName: snap.stage.name,
     });
+  },
+  onScreenshot: () => {
+    const snap = game.snapshot();
+    // toBlob は非同期 (メインスレッドをブロックしない)。画面に見えている
+    // 通りの絵 (カメラのズーム/パン込み) をそのまま撮る。
+    canvas.toBlob((blob) => {
+      if (blob) album.add(blob, { day: snap.day, stageName: snap.stage.name });
+    }, 'image/png');
   },
 });
 

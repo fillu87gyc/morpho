@@ -9,6 +9,7 @@ import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
 import { dailyChallengeFor, type DailyChallengeTracker } from './challenges.js';
 import type { Scoreboard } from './scoreboard.js';
 import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
+import type { Album } from './album.js';
 
 type El = HTMLElement;
 
@@ -95,6 +96,10 @@ export class Ui {
   private lineageList = el('lineage');
   private harvestBtn = el('harvest-seed') as HTMLButtonElement;
   private harvestHint = el('harvest-hint');
+  // アルバム
+  private albumGrid = el('album');
+  private albumCount = el('album-count');
+  private screenshotBtn = el('screenshot') as HTMLButtonElement;
   // logs
   private log = el('log');
   private evo = el('evo');
@@ -107,6 +112,7 @@ export class Ui {
   private lastAchVersion = -1;
   private lastBoardVersion = -1;
   private lastLineageVersion = -1;
+  private lastAlbumVersion = -1;
   private lastChalKey = '';
   private lastHarvestable = false;
   private lastStageId: StageId | null = null;
@@ -119,6 +125,7 @@ export class Ui {
       challenges: DailyChallengeTracker;
       scoreboard: Scoreboard;
       lineage: Lineage;
+      album: Album;
     },
     private hooks: {
       onSpeed: (s: number) => void;
@@ -129,9 +136,13 @@ export class Ui {
       onResetView: () => void;
       onStageChange: (id: StageId) => void;
       onHarvestSeed: () => void;
+      onScreenshot: () => void;
+      onToggleAmbient: () => void;
     },
   ) {
     this.harvestBtn.addEventListener('click', () => this.hooks.onHarvestSeed());
+    this.screenshotBtn.addEventListener('click', () => this.hooks.onScreenshot());
+    (el('toggle-ambient') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleAmbient());
     // 再生速度: スライダーで連続的に選べる。一時停止ボタンは直前の速度を
     // 覚えておいて、押し直したときに同じ速度へ戻す。
     const pauseBtn = el('pause-toggle') as HTMLButtonElement;
@@ -400,6 +411,46 @@ export class Ui {
           li.appendChild(label);
           li.appendChild(meta);
           this.lineageList.appendChild(li);
+        }
+      }
+    }
+
+    // アルバム (バージョンが変わった = 撮影/削除があったときだけ書き換える)
+    if (this.lastAlbumVersion !== this.trackers.album.version) {
+      this.lastAlbumVersion = this.trackers.album.version;
+      const shots = this.trackers.album.list();
+      setText(this.albumCount, String(shots.length));
+      this.albumGrid.innerHTML = '';
+      if (shots.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'empty';
+        empty.textContent = 'まだ撮影していない…';
+        this.albumGrid.appendChild(empty);
+      } else {
+        for (const shot of [...shots].reverse()) {
+          const fig = document.createElement('figure');
+          fig.className = 'album-shot';
+          const link = document.createElement('a');
+          link.href = shot.url;
+          link.download = `morpho-day${shot.day}-${shot.id}.png`;
+          link.title = `Day ${shot.day} ・ ${shot.stageName} (クリックで保存)`;
+          const img = document.createElement('img');
+          img.src = shot.url;
+          img.alt = `Day ${shot.day} のスクリーンショット`;
+          link.appendChild(img);
+          const del = document.createElement('button');
+          del.className = 'album-shot-del';
+          del.type = 'button';
+          del.title = '削除';
+          del.textContent = '×';
+          del.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.trackers.album.remove(shot.id);
+          });
+          fig.appendChild(link);
+          fig.appendChild(del);
+          this.albumGrid.appendChild(fig);
         }
       }
     }

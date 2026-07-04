@@ -87,8 +87,10 @@
   - `web/src/quests.ts`: 新設クエスト `unite-colonies` (「離れたコロニーをひとつに」)。進捗 = `(sourceColonies - connectedNetworks) / (sourceColonies - 1)`。コロニーの growth が物理的に隣のコロニーへ到達しネットワークが1つに統合されるほど進む
 
 ### M7 — 仕上げ
-- [ ] 環境音 + アンビエント BGM (Howler.js or WebAudio 直)
-- [ ] スクリーンショット保存 (album)
+- [x] 環境音 + アンビエント BGM (Howler.js or WebAudio 直)
+  - `web/src/ambient.ts`: `Ambient` クラスが WebAudio だけで手続き的に環境音を生成 (外部音声ファイルなし、PWAのキャッシュ対象が増えない)。ドローン (低い正弦波3本) + フィルタ済みノイズ (風/水のテクスチャ) + LFOによるカットオフの「呼吸」+ ステージごとのランダムなきらめき音 (洞窟の水滴・湿地の虫の音 等) をステージごとに切替。自動再生ポリシーに対応し、トグルボタン (`#toggle-ambient`) のクリック (ユーザー操作) からのみ `AudioContext` を生成・resumeする
+- [x] スクリーンショット保存 (album)
+  - `web/src/album.ts`: `Album` クラスが撮影した PNG を IndexedDB (localStorage は容量が小さく画像保存に不向き) に保存。左記UIカード「アルバム」に撮影ボタンとサムネイル一覧 (クリックでダウンロード、削除ボタン) を追加。`canvas.toBlob()` (非同期) で画面に見えている通りの絵をそのまま撮る
 - [x] PWA (オフライン起動 / ホーム画面追加)
   - `vite-plugin-pwa` (Workbox `generateSW`) を導入し、ビルド成果物一式をプリキャッシュ。`navigateFallback` で SPA のオフライン起動に対応
   - `manifest.webmanifest` (`display: standalone` / アイコン4種 [192・512 の通常 + maskable]) を生成し、ホーム画面に追加してアプリのように起動できる
@@ -97,7 +99,8 @@
   - `web/src/pinch.ts`: `PinchTracker` が2本指の距離・中点からズーム倍率とパン量を導出する純粋なステート
   - `web/src/main.ts`: Pointer Events で1本指タップ/ドラッグ (ツール配置、マウスと共通の経路) と2本指ピンチ (ズーム+パン) を判別。2本指ピンチの1本目として誤ってツールが置かれないよう、1本指タップの確定を短く遅延 (`TAP_GRACE_MS`) させ、2本目が来ればタップを破棄する
   - `#canvas` に `touch-action: none` を設定し、ブラウザ標準のスクロール/ピンチズーム/ダブルタップズームと競合しないようにする
-- [ ] GitHub Pages へ自動デプロイ (`.github/workflows/pages.yml`)
+- [x] GitHub Pages へ自動デプロイ (`.github/workflows/pages.yml`)
+  - main への push で `packages/web` をビルドし GitHub Pages へ公開。GitHub Pages はリポジトリ名のサブパス (`https://<owner>.github.io/<repo>/`) に配置されるため、`vite.config.ts` の `base` を `VITE_BASE` 環境変数から決定 (未設定時はローカル開発と同じ `/`)。PWA manifest の `start_url`/`scope`/`id` も同じ `BASE` から導出し、サブパス配下でも Service Worker のナビゲーションフォールバックが機能するようにした
 
 ### M8 — 速くする (パフォーマンス)
 
