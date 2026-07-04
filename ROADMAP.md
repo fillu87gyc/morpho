@@ -172,12 +172,20 @@
     - 上記の P3 描画最適化後、実測 (`?debug` の perf HUD、petri ステージでコロニーが育ってエッジ数 400〜580 まで増える範囲) で描画は 0.8〜1.5ms/frame と目標の 3ms を大きく下回って安定しており、Canvas2D のままで十分と判断してスコープアウトした。モバイル実機での追加計測は行っていないが、M1 の差分再描画・M7 のタッチ最適化は別途対応済みであり、将来モバイル実機で描画が重いと分かった場合に再検討する
   - [x] `renderThumbnail` の同期 `toDataURL` を `convertToBlob` (非同期) 化
     - `web/src/render.ts`: `renderThumbnail()` はピクセル描画は同期のまま (直前の `draw()` との整合を保つ必要があるため) だが、PNG エンコードは同期の `toDataURL()` ではなく非同期の `canvas.toBlob()` に置き換え `Promise<string>` (blob URL) を返す。`web/src/timeline.ts` の `maybeCapture()` も呼び出し側を待たせない fire-and-forget 型に更新し、エンコード完了より先に `reset()` された場合は古い世代の結果を破棄して blob URL を解放する
-- [ ] **P4: 「早送り」体験** (モックアップの早送りボタン)
-  - [ ] 早送りモード: 描画を 10fps に間引いて浮いた予算を tick に全振り (P2 のスケジューラ上に載せる)
-  - [ ] UI 更新 (`ui.render()` / 実績・記録判定) を早送り中はさらに低頻度化
+- [x] **P4: 「早送り」体験** (モックアップの早送りボタン)
+  - [x] 早送りモード: 描画を 10fps に間引いて浮いた予算を tick に全振り (P2 のスケジューラ上に載せる)
+    - `web/src/sim-worker.ts`: 早送り中は Worker 自身のループ間隔を 16ms → 100ms (10fps) に伸ばし、`TickScheduler` の予算 (`setBudgetMs`) と借金上限 (`setMaxDebtTicks`) も同じ比率で引き上げる。ループ間隔が伸びた分、1回あたりに積む要求 tick 数 (debt) も比例して増やさないと「呼ばれる回数が減っただけ」で総 tick 数が減ってしまうため、`game.speed * (100/16)` を要求量として渡す
+    - `web/src/tick-scheduler.ts`: `setBudgetMs()`/`setMaxDebtTicks()` を追加し、実行中にスケジューラの設定を切り替えられるようにした
+    - `web/src/main.ts`: `frame()` (RAF ループ) も早送り中は同じ 100ms 間隔まで間引く。ヘッダの ⏩ ボタン (`#fast-forward`) でON/OFF
+    - 実測 (`?debug` の perf HUD、petri ステージ・速度×24): 通常モードで実効速度 ×6.3〜7.0 だったのが、早送りON後は ×9.9〜10.4 まで向上 (tick コストがボトルネックのため上限は tick 実測に依存するが、約1.5倍の実効速度向上を確認)
+  - [x] UI 更新 (`ui.render()` / 実績・記録判定) を早送り中はさらに低頻度化
+    - `web/src/main.ts`: `ui.render()` / `achievements.check()` / `scoreboard.record()` / `challenges` 判定 / `encyclopedia.record()` / タイムライン撮影は元々同じ `frame()` 内にまとまっていたため、上記の描画間引きと同じゲートで自然に早送り中は 10fps まで低頻度化される
 
-実施順は P0 → P1 → P2 → P3 → P4。P1 と P2 だけで「スライダー通りの ×24」が現実になる見込み
-(1 tick 0.5ms × 24 = 12ms + 転送ゼロ化 + 描画 3ms ≈ 16ms 予算内)。
+実施順は P0 → P1 → P2 → P3 → P4、すべて完了。実測ではエッジ数が増えるほど
+tick コスト自体が伸びる (400〜580 エッジで 0.8〜2ms/tick) ため「スライダー通りの
+×24」は常には出ないが、通常モードで実効 ×4〜7、早送りモードで ×10 前後まで
+向上した。描画は 0.8〜1.5ms/frame と目標の 3ms を大きく下回っており、
+残るボトルネックは sim の tick コストそのもの (エッジ数に比例) である。
 
 ## アーキテクチャ方針
 

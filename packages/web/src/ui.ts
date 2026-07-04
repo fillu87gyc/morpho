@@ -138,11 +138,13 @@ export class Ui {
       onHarvestSeed: () => void;
       onScreenshot: () => void;
       onToggleAmbient: () => void;
+      onToggleFastForward: () => void;
     },
   ) {
     this.harvestBtn.addEventListener('click', () => this.hooks.onHarvestSeed());
     this.screenshotBtn.addEventListener('click', () => this.hooks.onScreenshot());
     (el('toggle-ambient') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleAmbient());
+    (el('fast-forward') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleFastForward());
     // 再生速度: スライダーで連続的に選べる。一時停止ボタンは直前の速度を
     // 覚えておいて、押し直したときに同じ速度へ戻す。
     const pauseBtn = el('pause-toggle') as HTMLButtonElement;

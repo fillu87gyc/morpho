@@ -313,6 +313,28 @@ test('M8 P3: Day 1 で成長タイムラインに非同期エンコードされ�
   expect(errors).toEqual([]);
 });
 
+test('M8 P4: 早送りモードをONにするとDAYが進み続け、OFFに戻せる', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.goto('/');
+  await waitForReady(page);
+
+  await setSpeedSlider(page, 24);
+  await expect(page.locator('#fast-forward')).not.toHaveClass(/active/);
+  await page.click('#fast-forward');
+  await expect(page.locator('#fast-forward')).toHaveClass(/active/);
+
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThan(0);
+
+  await page.click('#fast-forward');
+  await expect(page.locator('#fast-forward')).not.toHaveClass(/active/);
+
+  // OFFに戻した後も通常通り進み続ける (Workerのループ間隔が壊れていない)。
+  const dayAfterToggleOff = Number(await dayText(page));
+  await expect.poll(async () => Number(await dayText(page)), { timeout: 15_000 }).toBeGreaterThan(dayAfterToggleOff);
+
+  expect(errors).toEqual([]);
+});
+
 test('Day 5 以降に種を採取すると系統樹に記録され、世代が進む', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');

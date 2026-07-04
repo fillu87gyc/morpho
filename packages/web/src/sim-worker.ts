@@ -21,6 +21,15 @@ const ctx = self as unknown as {
 
 const game = new Game();
 const TICK_INTERVAL_MS = 16;
+// M8 P4: 早送りモード。描画/スナップショット送信をこれまでの ~60fps 相当
+// (16ms 間隔) から 10fps (100ms 間隔) まで落とし、浮いた時間をすべて
+// tick に回す。ループ間隔を伸ばす分、スケジューラの予算 (budgetMs) と
+// 借金の上限 (maxDebtTicks) も同じ比率で引き上げないと、単に「呼ばれる
+// 回数が減っただけ」で総 tick 数がむしろ減ってしまう。
+const FAST_FORWARD_INTERVAL_MS = 100;
+const FAST_FORWARD_RATIO = FAST_FORWARD_INTERVAL_MS / TICK_INTERVAL_MS;
+let fastForward = false;
+let loopIntervalMs = TICK_INTERVAL_MS;
 // 一時停止中 (speed=0) は tick が進まないので、盤面を変えた
 // (apply/reset) 直後だけ再送すれば十分。毎フレーム同じスナップショットを
 // clone して送り続けるのは無駄な GC 圧になる。
@@ -57,12 +66,23 @@ ctx.onmessage = (e) => {
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;
     case 'apply': game.apply(msg.pos); dirty = true; forceDerived = true; break;
+    case 'setFastForward': {
+      fastForward = msg.enabled;
+      loopIntervalMs = fastForward ? FAST_FORWARD_INTERVAL_MS : TICK_INTERVAL_MS;
+      scheduler.setBudgetMs(loopIntervalMs);
+      scheduler.setMaxDebtTicks(fastForward ? Math.round(96 * FAST_FORWARD_RATIO) : 96);
+      break;
+    }
   }
 };
 
 function loop(): void {
   if (game.speed > 0) {
-    const steps = scheduler.planSteps(game.speed);
+    // 早送り中はループの呼び出し間隔自体が伸びる (16ms → 100ms) ので、
+    // 1回あたりに積む debt もその比率だけ大きくする。そうしないと
+    // 「呼ばれる頻度が減っただけ」で秒間の総 tick 数がむしろ落ちてしまう。
+    const demand = fastForward ? game.speed * FAST_FORWARD_RATIO : game.speed;
+    const steps = scheduler.planSteps(demand);
     if (steps > 0) {
       const t0 = performance.now();
       game.tick(steps);
@@ -108,6 +128,6 @@ function loop(): void {
     }, [nodesBuf.buffer, edgesBuf.buffer]);
     dirty = false;
   }
-  setTimeout(loop, TICK_INTERVAL_MS);
+  setTimeout(loop, loopIntervalMs);
 }
 loop();

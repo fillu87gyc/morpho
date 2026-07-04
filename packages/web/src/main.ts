@@ -102,6 +102,10 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
       if (blob) album.add(blob, { day: snap.day, stageName: snap.stage.name });
     }, 'image/png');
   },
+  onToggleFastForward: () => {
+    game.setFastForward(!game.fastForward);
+    document.getElementById('fast-forward')?.classList.toggle('active', game.fastForward);
+  },
 });
 
 let showHeat = false;
@@ -278,9 +282,23 @@ fitCanvas();
 // tick は sim-worker.ts が自前のタイマーで進める。ここでは Worker から
 // 届いた最新スナップショットを描画するだけ (UI 操作は tick の重さに
 // 影響されない)。
+//
+// M8 P4: 早送りモード中は、描画と HUD/実績/記録などの派生更新をまとめて
+// 10fps (100ms 間隔) に間引く。浮いた分の CPU 時間は sim-worker.ts 側の
+// tick スケジューラに回るので (ループ間隔と予算をそちらでも同時に
+// 100ms へ切り替えている)、体感の速度が上がる。
+const FAST_FORWARD_FRAME_INTERVAL_MS = 100;
+let lastHeavyFrameMs = 0;
+
 function frame() {
   perfHud.frame();
   if (game.ready) {
+    const nowMs0 = performance.now();
+    if (game.fastForward && nowMs0 - lastHeavyFrameMs < FAST_FORWARD_FRAME_INTERVAL_MS) {
+      requestAnimationFrame(frame);
+      return;
+    }
+    lastHeavyFrameMs = nowMs0;
     const drawT0 = performance.now();
     const size = viewportSize();
     const zoomedScale = size * camera.zoom / game.worldSize;

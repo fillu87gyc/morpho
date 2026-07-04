@@ -10,7 +10,11 @@ export type ToWorkerMessage =
   | { type: 'setSpeed'; speed: number }
   | { type: 'setTool'; tool: Tool }
   | { type: 'setBrush'; radius: number }
-  | { type: 'apply'; pos: Vec2 };
+  | { type: 'apply'; pos: Vec2 }
+  // M8 P4: 早送りモード。描画/スナップショット送信の頻度を10fpsまで落とし、
+  // 浮いた予算をtickに全振りする (sim-worker.ts のループ間隔と
+  // TickScheduler の予算/借金上限を切り替える)。
+  | { type: 'setFastForward'; enabled: boolean };
 
 // M8 P0: 計測基盤。perf HUD (`?debug`) 表示用の Worker 側計測値。
 export interface PerfInfo {
