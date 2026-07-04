@@ -31,7 +31,12 @@ export function updateActivity(
       e.activity * params.activityDeposit, 3,
     );
   }
-  actField.diffuse(params.activityFieldDecay, params.activityFieldDiffusion);
+  // 拡散 (spread/decay) は 2 tick に 1 回だけ回し、係数を2倍にして
+  // 「2tickぶん」を1回でまとめる近似にする。deposit (書き込み) は
+  // 引き続き毎tick行うので、活動の伝播が1tick遅れるだけで見た目は保たれる。
+  if (state.tick % 2 === 0) {
+    actField.diffuse(params.activityFieldDecay * 2, params.activityFieldDiffusion * 2);
+  }
 
   // ノード密度を粗いグリッドへ一度だけ焼く (O(N))。
   // 各エッジの crowdingAt 判定はこのグリッドの近傍セルだけを見るので、
@@ -84,7 +89,10 @@ export function updateBiomass(
     const r = params.biomassRadius + Math.min(1.8, e.radius * 0.6);
     bioField.depositSegment(a.pos, b.pos, amount, r);
   }
-  bioField.diffuse(params.biomassDecay, params.biomassDiffusion);
+  // activity と同じ理由で 2 tick に 1 回 (係数2倍)。
+  if (state.tick % 2 === 0) {
+    bioField.diffuse(params.biomassDecay * 2, params.biomassDiffusion * 2);
+  }
 }
 
 // ── Radius: activity * flux で太る、fatigue で細る ─
