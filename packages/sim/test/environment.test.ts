@@ -80,4 +80,20 @@ describe('GridEnvironment.decay', () => {
     env.placeDrain({ x: 50, y: 50 }, 6, 0.2);
     expect(env.moisture.data[idx]).toBeLessThan(before);
   });
+
+  it('placeWaterBody は water を立てつつ obstacle にも同じ形を重ねて通行不能にする (M14)', () => {
+    const env = new GridEnvironment({ worldSize: 100, fieldSize: 32, baseMoisture: 0.2 });
+    const idx = 16 * 32 + 16;
+    env.placeWaterBody({ x: 50, y: 50 }, 5);
+    expect(env.water.data[idx]).toBeGreaterThan(0.5);
+    expect(env.obstacle.data[idx]).toBeGreaterThan(0.5);
+  });
+
+  it('placeWaterBody は周囲の湿度も底上げする (M14)', () => {
+    const env = new GridEnvironment({ worldSize: 100, fieldSize: 32, baseMoisture: 0.2 });
+    const idx = 16 * 32 + 16;
+    const before = env.moisture.data[idx] ?? 0;
+    env.placeWaterBody({ x: 50, y: 50 }, 5);
+    expect(env.moisture.data[idx]).toBeGreaterThan(before);
+  });
 });

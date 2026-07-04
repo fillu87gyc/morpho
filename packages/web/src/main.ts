@@ -24,6 +24,7 @@ import { Identity } from './identity.js';
 import { starsOf, traitChipsFor, environmentTagsFor } from './trait-labels.js';
 import { CatalogueThumbs } from './catalogue-thumbs.js';
 import type { CatalogueContext } from './catalogue.js';
+import { localTimeFor, nightFactorFor } from './daytime.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -96,6 +97,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
+    lastEraName = '胞子期';
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleHeat: () => {
@@ -114,6 +116,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
+    lastEraName = '胞子期';
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleAmbient: () => {
@@ -161,11 +164,15 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
+    lastEraName = '胞子期';
     if (dayLoopMode) enterPrepare(0);
   },
 });
 
 let showHeat = false;
+// M14: 時代が切り替わった節目で 🍄 を1度だけ贈る。game.ts の reset() 既定
+// ('胞子期') と揃え、ステージ/系統樹からの再開時も明示的に揃え直す。
+let lastEraName = '胞子期';
 
 // ── M10: 「やり直す」(Undo) ────────────────────────────
 const undoBtn = document.getElementById('undo-stroke') as HTMLButtonElement;
@@ -267,6 +274,7 @@ const indStarsEl = document.getElementById('ind-stars') as HTMLElement;
 const indChipsEl = document.getElementById('ind-chips') as HTMLElement;
 const indEnvChipsEl = document.getElementById('ind-env-chips') as HTMLElement;
 const trackToggleBtn = document.getElementById('track-toggle') as HTMLButtonElement;
+const localTimeEl = document.getElementById('local-time') as HTMLElement;
 
 indNameBtn.addEventListener('click', () => {
   const next = window.prompt('この個体の名前', identity.name());
@@ -689,13 +697,20 @@ function frame() {
       tool: game.tool as Tool,
     } : undefined;
     const snap = game.snapshot();
+    // M14: 時代が切り替わった節目に 🍄 を1度だけ贈る (進化の記録には
+    // game.ts 側の eraLog で既に残っている、ここは通貨報酬だけを付与)。
+    if (snap.era.name !== lastEraName) {
+      lastEraName = snap.era.name;
+      wallet.earn('horoishi', 1, `時代が「${snap.era.name}」に進んだ`);
+    }
     // M12: 「個体を追跡する」— 選択コロニーの重心へ毎フレーム滑らかに寄せる。
     if (tracking && trackedColonyIndex !== null) {
       const marker = snap.colonyMarkers[trackedColonyIndex];
       if (marker) camera.panToward(marker.centroid, 0.08);
     }
-    renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx);
+    renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx, nightFactorFor(snap.state.tick));
     minimap.draw(snap.colonyMarkers, camera.view());
+    localTimeEl.textContent = localTimeFor(snap.state.tick);
     renderIdentity();
 
     // M9: 観察中の残り時間 = (targetTick - tick) / 実効tick毎秒。

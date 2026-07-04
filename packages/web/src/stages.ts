@@ -6,7 +6,14 @@
 
 import { type GridEnvironment, type SeededRNG, type SimParams, type Vec2 } from '@morpho/sim';
 
-export type StageId = 'petri' | 'cave' | 'desert' | 'ruins' | 'wetland';
+export type StageId = 'petri' | 'cave' | 'desert' | 'ruins' | 'wetland' | 'continent';
+
+// M14: 大陸ステージ専用。source (拠点の種となるコロニー核) と
+// 食料拠点を手続き的に生成して返す。
+export interface WorldPoints {
+  sources: Vec2[];
+  food: { pos: Vec2; radius: number; amount: number }[];
+}
 
 export interface StageConfig {
   id: StageId;
@@ -31,9 +38,13 @@ export interface StageConfig {
   // を描く目印として使う座標を返す。ステージの「らしさ」を一目で伝えるための
   // 装飾用途のみで、sim の判定には一切影響しない。
   generateTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[];
+  // M14: 省略時は game.ts 側の固定 SOURCE_POINTS/FOOD_POINTS を使う
+  // (既存5ステージの挙動・rng 消費順は一切変えない)。大陸ステージだけが
+  // これを定義し、拠点をポアソンディスク風に手続き生成する。
+  worldPoints?(rng: SeededRNG, worldSize: number): WorldPoints;
 }
 
-export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland'];
+export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland', 'continent'];
 
 function dist(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -224,6 +235,54 @@ function generateWetlandTerrain(env: GridEnvironment, rng: SeededRNG, worldSize:
   return landmarks;
 }
 
+// ── 大陸: 広大な世界。source 6 箇所・食料拠点 20〜30 個をポアソンディスク風に
+// 配置し、湖や入り江を水域として散らす ──
+
+// 「半径以内に既存点/avoid点がないか」だけを見る素朴な棄却サンプリング。
+// 拠点は多くても数十個なので O(N²) で十分 (game.ts の clusterCount と同じ考え方)。
+function poissonPoints(rng: SeededRNG, worldSize: number, margin: number, count: number, minDist: number, avoid: Vec2[]): Vec2[] {
+  const pts: Vec2[] = [];
+  const maxAttempts = count * 300;
+  let attempts = 0;
+  while (pts.length < count && attempts < maxAttempts) {
+    attempts++;
+    const p: Vec2 = { x: rng.range(margin, worldSize - margin), y: rng.range(margin, worldSize - margin) };
+    if (avoid.some((a) => dist(p, a) < minDist)) continue;
+    if (pts.some((q) => dist(p, q) < minDist)) continue;
+    pts.push(p);
+  }
+  return pts;
+}
+
+function generateContinentWorldPoints(rng: SeededRNG, worldSize: number): WorldPoints {
+  const sources = poissonPoints(rng, worldSize, 10, 6, 16, []);
+  const food = poissonPoints(rng, worldSize, 6, 24, 7, sources).map((pos) => ({
+    pos, radius: rng.range(3.0, 5.0), amount: rng.range(0.75, 1.1),
+  }));
+  return { sources, food };
+}
+
+function generateContinentTerrain(env: GridEnvironment, rng: SeededRNG, worldSize: number, avoidPoints: Vec2[]): Vec2[] {
+  const avoidRadius = 8;
+  const landmarks: Vec2[] = [];
+  // 湖・入り江: 拠点を避けて水域を敷く (通行不能 + 周囲の湿度供給、環境側で実装)。
+  const lakeCount = rng.int(4, 7);
+  for (let i = 0; i < lakeCount; i++) {
+    const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
+    if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
+    env.placeWaterBody(center, rng.range(5, 11));
+    if (rng.next() < 0.6) landmarks.push(center); // 水辺の葦
+  }
+  // 岩場: 大陸らしい起伏を少量だけ散らす (詰まりすぎないよう控えめに)
+  const rockCount = rng.int(3, 6);
+  for (let i = 0; i < rockCount; i++) {
+    const center: Vec2 = { x: rng.range(0, worldSize), y: rng.range(0, worldSize) };
+    if (avoidPoints.some((p) => dist(p, center) < avoidRadius)) continue;
+    placeRockCluster(env, rng, center, rng.range(5, 9), avoidPoints, avoidRadius);
+  }
+  return landmarks;
+}
+
 export const STAGES: Record<StageId, StageConfig> = {
   petri: {
     id: 'petri',
@@ -301,5 +360,23 @@ export const STAGES: Record<StageId, StageConfig> = {
     // 水の流れが毒素を洗い流しやすい。
     toxinDecayPerTick: 0.0022,
     generateTerrain: generateWetlandTerrain,
+  },
+  continent: {
+    id: 'continent',
+    name: '大陸',
+    description: '拠点20〜30・湖の点在する広大な世界。水域を避けて大陸全体へ広がろう。',
+    baseMoisture: 0.32,
+    baseBrightness: 0.22,
+    baseTemperature: 0.5,
+    // 拠点間の距離が長く迂回も増えるため、都市跡ほどではないが障害物 (水域含む) を
+    // 少し避けやすくする。
+    paramOverrides: { obstaclePenalty: 1.6 },
+    foodAmountMultiplier: 1.0,
+    nutrientDecayPerTick: 0.0007,
+    moistureRelaxPerTick: 0.0009,
+    tempRelaxPerTick: 0.0009,
+    toxinDecayPerTick: 0.0015,
+    generateTerrain: generateContinentTerrain,
+    worldPoints: generateContinentWorldPoints,
   },
 };

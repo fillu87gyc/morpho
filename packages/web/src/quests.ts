@@ -11,6 +11,10 @@ export interface QuestInput {
   // 省略時 (=単一コロニー扱い) は常に達成済みとして扱う。
   sourceColonies?: number;
   connectedNetworks?: number;
+  // M14: 大陸ステージ専用 (陸地セルのうち biomass 網が届いた比率, [0,1])。
+  // 大陸以外のステージでも計算はされるが、クエストカードの表示は
+  // stage.id === 'continent' のときだけ (UI 側でガードする)。
+  landCoverage?: number;
 }
 
 export interface QuestStatus {
@@ -53,6 +57,12 @@ const QUEST_DEFS: QuestDef[] = [
       const networks = i.connectedNetworks ?? 1;
       return total > 1 ? (total - networks) / (total - 1) : 1;
     },
+  },
+  {
+    id: 'continent-nutrient',
+    title: '大陸全体に栄養を届けよう',
+    description: '水域を避けながら、陸地の隅々までネットワークを行き渡らせよう',
+    progress: (i) => i.landCoverage ?? 0,
   },
 ];
 

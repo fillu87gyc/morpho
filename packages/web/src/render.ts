@@ -33,8 +33,8 @@ export interface RenderOptions {
 }
 
 // paintFieldLayer が焼くレイヤ数: biomass / nutrients / moisture / brightness /
-// obstacle / temperature / toxin (M10)。
-const FIELD_LAYER_COUNT = 7;
+// obstacle / temperature / toxin (M10) / water (M14)。
+const FIELD_LAYER_COUNT = 8;
 // 生の浮動小数比較だと biomass の減衰が皿全体でごく僅かに毎tick進み続けるため、
 // 見た目に影響しない変化まで「差分」扱いになってしまう。可視のバイト値
 // (0-255) が変わらない程度の揺れは無視する。
@@ -72,20 +72,26 @@ const HEAT_COLD: [number, number, number] = [110, 140, 235];
 // ステージごとの背景トーンと障害物 (石) の色味。「洞窟の岩」「砂漠の岩」
 // 「都市跡の風化した石材」を見分けられるよう、ステージごとに変える。
 const STAGE_BG: Record<StageId, { inner: [number, number, number]; outer: [number, number, number] }> = {
-  petri:   { inner: [14, 20, 17], outer: [6, 8, 10] },
-  cave:    { inner: [11, 15, 22], outer: [3, 4, 7] },
-  desert:  { inner: [30, 23, 15], outer: [13, 10, 7] },
-  ruins:   { inner: [25, 21, 17], outer: [10, 8, 7] },
-  wetland: { inner: [10, 21, 18], outer: [4, 9, 8] },
+  petri:     { inner: [14, 20, 17], outer: [6, 8, 10] },
+  cave:      { inner: [11, 15, 22], outer: [3, 4, 7] },
+  desert:    { inner: [30, 23, 15], outer: [13, 10, 7] },
+  ruins:     { inner: [25, 21, 17], outer: [10, 8, 7] },
+  wetland:   { inner: [10, 21, 18], outer: [4, 9, 8] },
+  continent: { inner: [12, 18, 20], outer: [5, 8, 10] },
 };
 
 const STAGE_ROCK_COLOR: Record<StageId, [number, number, number]> = {
-  petri:   [70, 65, 75],
-  cave:    [58, 64, 78],
-  desert:  [124, 98, 66],
-  ruins:   [156, 132, 98], // 風化した石材 (暖かいベージュ)
-  wetland: [72, 78, 68],
+  petri:     [70, 65, 75],
+  cave:      [58, 64, 78],
+  desert:    [124, 98, 66],
+  ruins:     [156, 132, 98], // 風化した石材 (暖かいベージュ)
+  wetland:   [72, 78, 68],
+  continent: [90, 88, 80],
 };
+
+// M14: 大陸ステージの水域 (通行不能な水面)。obstacle の石色より青く、
+// 常時見える (石とは塗り分ける)。
+const WATER_BODY_COLOR: [number, number, number] = [45, 95, 150];
 
 // 角丸矩形のパスを作る (Canvas の roundRect API は環境依存が残るため自前実装)。
 function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
@@ -160,7 +166,9 @@ export class CanvasRenderer {
 
   setShowHeat(v: boolean): void { this.opts.showHeat = v; }
 
-  draw(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], view: WorldView, hoverPx?: { x: number; y: number; radius: number; tool: string }): void {
+  // M14: nightFactor [0,1] は演出用の昼夜トーン (洞窟は常に暗いので無効)。
+  // 省略時 (サムネイル撮影など) は 0 = 昼間のまま。
+  draw(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], view: WorldView, hoverPx?: { x: number; y: number; radius: number; tool: string }, nightFactor = 0): void {
     const { ctx } = this;
     const cssW = this.canvas.width / this.dpr;
     const cssH = this.canvas.height / this.dpr;
@@ -204,7 +212,13 @@ export class CanvasRenderer {
     // 5. source / sink
     this.drawNodes(ctx, state, scale, offX, offY);
 
-    // 6. カーソル
+    // 6. 昼夜のトーン (洞窟は元々暗いので変調しない)
+    if (stageId !== 'cave' && nightFactor > 0) {
+      ctx.fillStyle = `rgba(6, 10, 20, ${(nightFactor * 0.4).toFixed(3)})`;
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
+
+    // 7. カーソル
     if (hoverPx) this.drawHover(hoverPx);
   }
 
@@ -249,6 +263,7 @@ export class CanvasRenderer {
     const obData = env.obstacle.data;
     const tempData = env.temperature.data;
     const toxData = env.toxin.data;
+    const waterData = env.water.data;
     const baseTemp = env.baseTemperature;
 
     let maxBio = 0;
@@ -270,7 +285,7 @@ export class CanvasRenderer {
     const rockColor = STAGE_ROCK_COLOR[stageId];
 
     const dirty = this.tracker.update(
-      [bioData, nutData, moiData, briData, obData, tempData, toxData],
+      [bioData, nutData, moiData, briData, obData, tempData, toxData, waterData],
       full,
       (i) => {
         const di = i * 4;
@@ -333,6 +348,14 @@ export class CanvasRenderer {
         const ob = obData[i] ?? 0;
         if (ob > 0.5) {
           [r, g, b] = blend(r, g, b, rockColor[0], rockColor[1], rockColor[2], 0.85);
+          a = Math.max(a, 0.85);
+        }
+
+        // M14: 水域 (大陸ステージ) — obstacle と同じ形に立つが、石ではなく
+        // 水と分かるよう青で上書きする (通行不能な地形という点は obstacle と共通)。
+        const wb = waterData[i] ?? 0;
+        if (wb > 0.5) {
+          [r, g, b] = blend(r, g, b, WATER_BODY_COLOR[0], WATER_BODY_COLOR[1], WATER_BODY_COLOR[2], 0.85);
           a = Math.max(a, 0.85);
         }
 
@@ -486,6 +509,7 @@ export class CanvasRenderer {
         case 'cave': this.drawCrystalCluster(ctx, x, y, scale); break;
         case 'desert': this.drawCactus(ctx, x, y, scale); break;
         case 'wetland': this.drawReeds(ctx, x, y, scale); break;
+        case 'continent': this.drawReeds(ctx, x, y, scale); break; // 大陸の水辺も葦で表現
         default: break;
       }
     }

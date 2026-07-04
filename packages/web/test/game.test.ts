@@ -67,18 +67,21 @@ describe('Game', () => {
     expect(g.snapshot().state.tick).toBe(before);
   });
 
-  it('day は state.tick / 40 切り捨て、日数が進むにつれ era 名が変わる', () => {
+  it('day は state.tick / 40 切り捨て、時代は条件達成 (拠点接続等) に応じて進む (M14)', () => {
     const g = new Game(11);
     g.setSpeed(1);
-    const eras = new Set<string>();
+    const eraNames = new Set<string>();
     for (let i = 0; i < 400; i++) {
       g.tick();
-      eras.add(g.snapshot().era);
+      eraNames.add(g.snapshot().era.name);
     }
     expect(g.snapshot().day).toBe(10);
-    expect(g.snapshot().era).toBe('拡散期');
-    // 胞子期 (day<10) は少なくとも一度は観測されているはず。
-    expect(eras.has('胞子期')).toBe(true);
+    // 起動直後の胞子期は必ず観測されているはず。
+    expect(eraNames.has('胞子期')).toBe(true);
+    // 400 tick も経てば、最初の拠点接続 (拡散期) 以上には進んでいるはず。
+    expect(['拡散期', '変形体期', '成熟期']).toContain(g.snapshot().era.name);
+    expect(g.snapshot().era.progress).toBeGreaterThanOrEqual(0);
+    expect(g.snapshot().era.progress).toBeLessThanOrEqual(1);
   });
 
   it('food ツールを適用すると拠点総数が増え、イベントログに記録される', () => {

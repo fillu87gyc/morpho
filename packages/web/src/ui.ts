@@ -38,6 +38,7 @@ export class Ui {
   // header
   private day = el('day');
   private era = el('era');
+  private eraRing = el('era-ring');
   private stageName = el('stage-name');
   // メインクエスト (固定2本) + M6 ワールド目標 (コロニー統合)
   private qConnectBar = el('q-connect-bar');
@@ -46,6 +47,10 @@ export class Ui {
   private qExploreN = el('q-explore-n');
   private qUniteBar = el('q-unite-bar');
   private qUniteN = el('q-unite-n');
+  // M14: 大陸ステージのみ表示するクエスト
+  private qContinentItem = el('q-continent-item');
+  private qContinentBar = el('q-continent-bar');
+  private qContinentN = el('q-continent-n');
   // M11: チャレンジ一覧 (3種常時表示)
   private chalList = el('chal-list');
   private chalProgress = el('chal-progress');
@@ -195,7 +200,9 @@ export class Ui {
   render(): void {
     const s = this.game.snapshot();
     setText(this.day, String(s.day));
-    setText(this.era, s.era);
+    setText(this.era, s.era.name);
+    this.eraRing.style.setProperty('--era-progress', String(s.era.progress));
+    this.eraRing.title = `次の時代まで ${pct(s.era.progress)}`;
     setText(this.stageName, s.stage.name);
     this.stageName.title = s.stage.description;
     if (this.lastStageId !== s.stage.id) {
@@ -219,6 +226,17 @@ export class Ui {
     if (uniteQuest) {
       setBar(this.qUniteBar, uniteQuest.progress);
       setText(this.qUniteN, pct(uniteQuest.progress));
+    }
+    // M14: 大陸ステージのときだけカードを出す (他ステージでは landCoverage の
+    // 意味が薄いため隠す)。
+    const isContinent = s.stage.id === 'continent';
+    if (this.qContinentItem.hidden !== !isContinent) this.qContinentItem.hidden = !isContinent;
+    if (isContinent) {
+      const continentQuest = s.quests.find((q) => q.id === 'continent-nutrient');
+      if (continentQuest) {
+        setBar(this.qContinentBar, continentQuest.progress);
+        setText(this.qContinentN, pct(continentQuest.progress));
+      }
     }
 
     // 系統樹: 採取できる日数に達したかどうかだけ見て、変わったときだけ書き換える。

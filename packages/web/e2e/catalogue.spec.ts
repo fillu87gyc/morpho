@@ -1,4 +1,4 @@
-// M13: 図鑑グリッド (32枠) と実績バッジグリッドの e2e。
+// M13: 図鑑グリッド (37枠、M14で大陸ステージが加わり32→37) と実績バッジグリッドの e2e。
 
 import { test, expect, type Page } from '@playwright/test';
 
@@ -32,13 +32,13 @@ async function setSpeedSlider(page: Page, value: number): Promise<void> {
   }, value);
 }
 
-test('図鑑は32枠のグリッドで始まり、Day3を超えると1枠発見してサムネイルとカウントが更新される', async ({ page }) => {
+test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見してサムネイルとカウントが更新される', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.goto('/');
   await waitForReady(page);
 
-  await expect(page.locator('#ency-progress')).toHaveText('0/32');
-  await expect(page.locator('.ency-slot')).toHaveCount(32);
+  await expect(page.locator('#ency-progress')).toHaveText('0/37');
+  await expect(page.locator('.ency-slot')).toHaveCount(37);
   await expect(page.locator('.ency-slot.discovered')).toHaveCount(0);
 
   await setSpeedSlider(page, 24);
@@ -46,7 +46,7 @@ test('図鑑は32枠のグリッドで始まり、Day3を超えると1枠発見�
     .toBeGreaterThanOrEqual(3);
 
   await expect.poll(async () => page.locator('.ency-slot.discovered').count(), { timeout: 10_000 }).toBeGreaterThan(0);
-  await expect(page.locator('#ency-progress')).not.toHaveText('0/32');
+  await expect(page.locator('#ency-progress')).not.toHaveText('0/37');
   await expect.poll(
     async () => page.locator('.ency-slot.discovered .ency-thumb img').count(),
     { timeout: 10_000 },

@@ -20,6 +20,7 @@ import { computeQuests, type QuestStatus } from './quests.js';
 import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 import { TICKS_PER_DAY } from './day-loop.js';
 import { UndoStack } from './undo.js';
+import { eraFor, type EraStatus } from './era.js';
 
 export type { StageId } from './stages.js';
 
@@ -62,7 +63,6 @@ export interface FastSnapshot {
   bio: BiomassField;
   genome: Genome;
   day: number;
-  era: string;
   thickEdges: number;
   stage: { id: StageId; name: string; description: string };
   // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
@@ -78,6 +78,9 @@ export interface DerivedSnapshot {
   quests: QuestStatus[];
   // M6: ミニマップ用の各コロニー位置 + 現在の統合状態。
   colonyMarkers: ColonyMarker[];
+  // M14: 時代は条件達成型になったため、traits/world (どちらも派生計算側で
+  // 間引いて再計算される) を必要とする。tick 毎の FastSnapshot からここへ移した。
+  era: EraStatus;
 }
 
 export type GameSnapshot = FastSnapshot & DerivedSnapshot;
@@ -87,8 +90,10 @@ export const FIELD = 96;
 
 // M6: 単一 source ではなく、大マップに複数のコロニー (群体) を離して配置する。
 // ズームアウト (zoom=1) すると全コロニーを見渡せ、ズームインすると
-// 1コロニーだけの「個体ビュー」になる。FOOD_POINTS とも十分な間隔を空ける。
-const SOURCE_POINTS: Vec2[] = [
+// 1コロニーだけの「個体ビュー」になる。DEFAULT_FOOD_POINTS とも十分な間隔を空ける。
+// M14: 大陸ステージは stage.worldPoints() で拠点を手続き生成するため、
+// これは「省略時のデフォルト」に格下げした (Game.sourcePoints/foodPoints が実体)。
+const DEFAULT_SOURCE_POINTS: Vec2[] = [
   { x: 30, y: 30 },
   { x: 70, y: 30 },
   { x: 50, y: 75 },
@@ -96,7 +101,7 @@ const SOURCE_POINTS: Vec2[] = [
 
 // 皿の外周 6 箇所の固定食料点 (main petri デモと同じ構図)。
 // バイオード生成で岩場をここに重ねないための「避けるべき地点」にも使う。
-const FOOD_POINTS: { pos: Vec2; radius: number; amount: number }[] = [
+const DEFAULT_FOOD_POINTS: { pos: Vec2; radius: number; amount: number }[] = [
   { pos: { x: 22, y: 22 }, radius: 4.5, amount: 0.95 },
   { pos: { x: 78, y: 22 }, radius: 5.0, amount: 1.10 },
   { pos: { x: 82, y: 55 }, radius: 4.0, amount: 0.85 },
@@ -144,6 +149,10 @@ export class Game {
   private stepCache!: StepCache;
   private lastEra = '';
   private landmarks: Vec2[] = [];
+  // M14: 拠点。既存5ステージは DEFAULT_SOURCE_POINTS/DEFAULT_FOOD_POINTS を
+  // そのまま使うが、大陸ステージは stage.worldPoints() でここを埋め替える。
+  private sourcePoints: Vec2[] = DEFAULT_SOURCE_POINTS;
+  private foodPoints: { pos: Vec2; radius: number; amount: number }[] = DEFAULT_FOOD_POINTS;
   // M10: 環境フィールドへのスタンプの取り消し (stroke 単位、深さ10)。
   private undo!: UndoStack;
 
@@ -154,6 +163,10 @@ export class Game {
   fieldSize = FIELD;
 
   private evoLog: EvolutionLog[] = [];
+  // M14: 時代の切り替わりは生涯で最大3件しか起きない希少な節目なので、
+  // 頻発する他のイベント (太い幹が育った 等) と同じ回転バッファを共有すると
+  // すぐ流れて消えてしまう。専用の別枠に保持し、evolution() で合流させる。
+  private eraLog: EvolutionLog[] = [];
   private recentEvents: string[] = [];
   // 太い管に「初めて」育った瞬間を1度だけ拾うための既知集合。
   private thickenedSeen = new Set<number>();
@@ -197,21 +210,28 @@ export class Game {
     this.state = createInitialState(seed, WORLD);
     this.stepCache = createStepCache();
 
-    for (const p of SOURCE_POINTS) {
+    // M14: 大陸ステージは worldPoints() で拠点を手続き生成する (rng は genome の
+    // あとに消費するので、既存5ステージの rng 消費順には影響しない)。
+    const wp = this.stage.worldPoints?.(this.rng, WORLD);
+    this.sourcePoints = wp?.sources ?? DEFAULT_SOURCE_POINTS;
+    this.foodPoints = wp?.food ?? DEFAULT_FOOD_POINTS;
+
+    for (const p of this.sourcePoints) {
       clearAroundSource(this.env, p, 4);
       seedSource(this.state, p, 6);
     }
-    for (const f of FOOD_POINTS) this.env.placeFood(f.pos, f.radius, f.amount * this.stage.foodAmountMultiplier);
-    this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [...SOURCE_POINTS, ...FOOD_POINTS.map((f) => f.pos)]);
+    for (const f of this.foodPoints) this.env.placeFood(f.pos, f.radius, f.amount * this.stage.foodAmountMultiplier);
+    this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [...this.sourcePoints, ...this.foodPoints.map((f) => f.pos)]);
 
     this.evoLog = [];
+    this.eraLog = [];
     this.recentEvents = [];
     this.thickenedSeen.clear();
     this.lastLoopAtTick = -999;
     this.lastObstacleAvoidedAtTick = -999;
     this.lastSporeFormedAtTick = -999;
-    this.coloniesTotal = 6;
-    this.lastEra = eraName(0);
+    this.coloniesTotal = this.foodPoints.length;
+    this.lastEra = '胞子期'; // 起動直後の初期時代 (eraFor() の既定と一致させる)
     this.pushEvent(`新しい${this.stage.name}が用意された`);
   }
 
@@ -229,19 +249,27 @@ export class Game {
         this.stage.nutrientDecayPerTick, this.stage.moistureRelaxPerTick,
         this.stage.tempRelaxPerTick, this.stage.toxinDecayPerTick,
       );
+      // M14: 条件達成型の時代判定は WorldInfo (colonyNetworks の Union-Find を
+      // 含む) が要るため、growthStep と同じ 12 tick に 1 回のペースに間引く
+      // (毎tickだと M8 で間引いた分の計算コストが復活してしまう)。
+      if (this.state.tick % 12 === 0) this.checkEraTransition();
     }
     this.drainBus();
-    this.checkEraTransition();
   }
 
-  // 「時代」(胞子期 → 拡散期 → 変形体期 → 成熟期) が切り替わった節目を
-  // 進化の記録に残す。DAY カウンタの派生量なので tick 側で監視する。
+  // 「時代」(胞子期 → 拡散期 → 変形体期 → 成熟期) が切り替わった節目を進化の記録に残す。
   private checkEraTransition(): void {
-    const day = Math.floor(this.state.tick / TICKS_PER_DAY);
-    const era = eraName(day);
-    if (era !== this.lastEra) {
-      this.pushEvo(this.state.tick, `${era}に入った`);
-      this.lastEra = era;
+    const colonies = computeColonyNetworks(this.state, this.sourcePoints);
+    const world = this.computeWorld(colonies.networksCount);
+    const traits = computeTraits(this.state);
+    const era = eraFor({
+      coloniesReached: world.coloniesReached, massKg: world.massKg,
+      connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
+      exploration: traits.exploration,
+    });
+    if (era.name !== this.lastEra) {
+      this.eraLog.unshift({ tick: this.state.tick, text: `${era.name}に入った` });
+      this.lastEra = era.name;
     }
   }
 
@@ -394,7 +422,7 @@ export class Game {
     const thickEdges = this.state.edges.filter((e) => e.radius > 1.5).length;
     return {
       state: this.state, env: this.env, bio: this.bio, genome: this.genome,
-      day, era: eraName(day), thickEdges,
+      day, thickEdges,
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
       landmarks: this.landmarks,
     };
@@ -405,13 +433,19 @@ export class Game {
     const individuality = computeIndividuality(this.state);
     const typeInfo = classifyIndividual(individuality);
     const balance = this.computeBalance();
-    const colonies = computeColonyNetworks(this.state, SOURCE_POINTS);
+    const colonies = computeColonyNetworks(this.state, this.sourcePoints);
     const world = this.computeWorld(colonies.networksCount);
     const quests = computeQuests({
       coloniesReached: world.coloniesReached, coloniesTotal: world.coloniesTotal, traits,
       sourceColonies: world.sourceColonies, connectedNetworks: world.connectedNetworks,
+      landCoverage: this.computeLandCoverage(),
     });
-    return { traits, individuality, typeInfo, balance, world, quests, colonyMarkers: colonies.markers };
+    const era = eraFor({
+      coloniesReached: world.coloniesReached, massKg: world.massKg,
+      connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
+      exploration: traits.exploration,
+    });
+    return { traits, individuality, typeInfo, balance, world, quests, colonyMarkers: colonies.markers, era };
   }
 
   snapshot(): GameSnapshot {
@@ -419,7 +453,10 @@ export class Game {
   }
 
   events(): string[] { return this.recentEvents; }
-  evolution(): EvolutionLog[] { return this.evoLog; }
+  // 時代の節目 (eraLog, 最大3件) を頻発イベント (evoLog) より優先して先頭に出す。
+  evolution(): EvolutionLog[] {
+    return [...this.eraLog, ...this.evoLog].sort((a, b) => b.tick - a.tick);
+  }
 
   pushEvent(msg: string): void {
     const day = Math.floor(this.state.tick / TICKS_PER_DAY);
@@ -482,17 +519,25 @@ export class Game {
       networkLinks: this.state.edges.length,
       coloniesReached,
       coloniesTotal,
-      sourceColonies: SOURCE_POINTS.length,
+      sourceColonies: this.sourcePoints.length,
       connectedNetworks,
     };
   }
-}
 
-function eraName(day: number): string {
-  if (day < 10) return '胞子期';
-  if (day < 25) return '拡散期';
-  if (day < 60) return '変形体期';
-  return '成熟期';
+  // M14: 大陸ステージの「大陸全体に栄養を届けよう」クエスト用。陸地セル
+  // (water が立っていないセル) のうち、biomass が一定以上あるセルの比率。
+  // 水域を持たないステージでは land が全セル数と一致し、単純な「粘菌の
+  // 被覆率」相当になる (無害なので常時計算する)。
+  private computeLandCoverage(): number {
+    const n = this.fieldSize * this.fieldSize;
+    let land = 0, covered = 0;
+    for (let i = 0; i < n; i++) {
+      if ((this.env.water.data[i] ?? 0) > 0.5) continue;
+      land++;
+      if ((this.bio.field.data[i] ?? 0) > 0.03) covered++;
+    }
+    return land > 0 ? covered / land : 0;
+  }
 }
 
 // 環境変化と子孫個性の連動 (M5): 自然減衰が速い (=過酷な) ステージほど、

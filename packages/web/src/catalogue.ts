@@ -24,10 +24,11 @@ const STAGE_NOUN: Record<StageId, string> = {
   desert: 'すなちの',
   ruins: 'いせきの',
   wetland: 'しっちの',
+  continent: 'たいりくの',
 };
 
 const STAGE_NAME: Record<StageId, string> = {
-  petri: '皿', cave: '洞窟', desert: '砂漠', ruins: '都市跡', wetland: '湿地',
+  petri: '皿', cave: '洞窟', desert: '砂漠', ruins: '都市跡', wetland: '湿地', continent: '大陸',
 };
 
 const TYPE_NOUN: Record<IndividualTypeId, string> = {

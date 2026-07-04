@@ -32,7 +32,10 @@
         </div>
         <div class="time">
           <div class="day">DAY <span id="day">0</span></div>
-          <div class="era" id="era">胞子期</div>
+          <div class="era-wrap" title="時代の達成条件への進捗">
+            <span id="era-ring" class="era-ring"></span>
+            <span class="era" id="era">胞子期</span>
+          </div>
           <div class="era stage-name" id="stage-name">皿</div>
           <div class="controls">
             <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
@@ -59,6 +62,10 @@
             <div class="quest-item">
               <div class="quest-head"><span class="quest-title">大陸の70%を探索する</span><span class="num" id="q-explore-n">0%</span></div>
               <div class="progress"><div id="q-explore-bar" class="bar"></div></div>
+            </div>
+            <div class="quest-item" id="q-continent-item" hidden>
+              <div class="quest-head"><span class="quest-title">大陸全体に栄養を届けよう</span><span class="num" id="q-continent-n">0%</span></div>
+              <div class="progress"><div id="q-continent-bar" class="bar"></div></div>
             </div>
           </section>
 
@@ -129,6 +136,7 @@
             <div class="ind-header">
               <button id="ind-name" class="ind-name" title="タップして名前を変える">ねばりのこ #1</button>
               <span id="ind-stars" class="ind-stars" title="個性の総合評価">★★★☆☆</span>
+              <span id="local-time" class="local-time" title="ローカルタイム (1日=24時間換算)">00:00:00</span>
               <button id="track-toggle" class="track-toggle" title="この個体を追跡する (カメラが重心へついてくる)">🎯 追跡</button>
             </div>
             <div id="ind-chips" class="chip-row"></div>
@@ -282,6 +290,7 @@
               <option value="desert">砂漠</option>
               <option value="ruins">都市跡</option>
               <option value="wetland">湿地</option>
+              <option value="continent">大陸</option>
             </select>
             <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>

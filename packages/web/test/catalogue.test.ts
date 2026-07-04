@@ -25,10 +25,10 @@ function ctx(overrides: Partial<CatalogueContext> = {}): CatalogueContext {
 }
 
 describe('catalogue', () => {
-  it('全部で32種になる (5タイプ×5ステージ + 特殊7種)', () => {
-    expect(CATALOGUE_TOTAL).toBe(32);
-    expect(allCatalogueEntries().length).toBe(32);
-    expect(new Set(allCatalogueEntries().map((e) => e.id)).size).toBe(32);
+  it('全部で37種になる (5タイプ×6ステージ + 特殊7種、M14で大陸ステージが加わった)', () => {
+    expect(CATALOGUE_TOTAL).toBe(37);
+    expect(allCatalogueEntries().length).toBe(37);
+    expect(new Set(allCatalogueEntries().map((e) => e.id)).size).toBe(37);
   });
 
   it('標準条件では型×ステージの1件だけが該当する', () => {

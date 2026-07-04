@@ -50,6 +50,12 @@ export class GridEnvironment implements Environment {
   // 毒素は 0 から始まり、プレイヤーが撒かない限り常に 0 のまま。
   temperature: FieldGrid;
   toxin: FieldGrid;
+  // M14: 大陸ステージの水域 (地形描画専用マーカー)。placeWater (moisture の
+  // 「水を引く」ツール) とは別物 — こちらは「通行不能な水面」を表す。
+  // 通行不能自体は既存の obstacle フィールドに同じ形を重ね書きして実現する
+  // (growth/life 側のコード変更ゼロ)。water は描画が石と水を塗り分けるため
+  // だけに持つ薄いマーカーで、成長判定は一切参照しない。
+  water: FieldGrid;
   // 「土地本来」の水分/明るさ/温度。decay() が戻す先の平衡点として使う
   // (= ステージごとの乾き/湿りやすさ・暑さ寒さは base値 との差で決まる)。
   baseMoisture: number;
@@ -68,6 +74,7 @@ export class GridEnvironment implements Environment {
     this.obstacle = makeField(this.fieldSize);
     this.temperature = makeField(this.fieldSize, this.baseTemperature);
     this.toxin = makeField(this.fieldSize);
+    this.water = makeField(this.fieldSize);
   }
 
   private toField(pos: Vec2): Vec2 {
@@ -119,6 +126,15 @@ export class GridEnvironment implements Environment {
   placeToxin(pos: Vec2, radius = 6, amount = 0.5) {
     const fp = this.toField(pos);
     stampGaussian(this.toxin, fp.x, fp.y, radius, amount);
+  }
+  // M14: 大陸ステージの地形生成専用 (プレイヤーツールではない)。水面を置き、
+  // obstacle にも同じ形を重ねて通行不能にし、周囲の湿度を底上げする
+  // (「障害物と同様に通行不能だが、湿度を周囲に供給する」水域の挙動)。
+  placeWaterBody(pos: Vec2, radius = 6) {
+    const fp = this.toField(pos);
+    stampObstacle(this.water, fp.x, fp.y, radius);
+    stampObstacle(this.obstacle, fp.x, fp.y, radius);
+    stampGaussian(this.moisture, fp.x, fp.y, radius * 1.8, 0.3);
   }
 
   // 自然減衰: 放置すると土地は少しずつ「元の姿」に戻っていく。
