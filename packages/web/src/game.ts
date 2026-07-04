@@ -51,26 +51,34 @@ export interface EvolutionLog {
   text: string;
 }
 
-export interface GameSnapshot {
+// M8 P2: 描画に毎tick必要な部分 (state/env/bio 等) と、頻繁には変わらない
+// 派生計算 (traits/individuality/balance/world/quests/colonyMarkers) を分離。
+// Worker 側は後者を 250ms 毎に間引いて計算し直す (snapshotDerived() 参照)。
+export interface FastSnapshot {
   state: SimState;
   env: GridEnvironment;
   bio: BiomassField;
-  traits: Traits;
-  individuality: Individuality;
-  typeInfo: IndividualTypeInfo;
   genome: Genome;
-  balance: EnvBalance;
-  world: WorldInfo;
   day: number;
   era: string;
   thickEdges: number;
-  quests: QuestStatus[];
   stage: { id: StageId; name: string; description: string };
   // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
   landmarks: Vec2[];
+}
+
+export interface DerivedSnapshot {
+  traits: Traits;
+  individuality: Individuality;
+  typeInfo: IndividualTypeInfo;
+  balance: EnvBalance;
+  world: WorldInfo;
+  quests: QuestStatus[];
   // M6: ミニマップ用の各コロニー位置 + 現在の統合状態。
   colonyMarkers: ColonyMarker[];
 }
+
+export type GameSnapshot = FastSnapshot & DerivedSnapshot;
 
 export const WORLD = 100;
 export const FIELD = 96;
@@ -201,8 +209,11 @@ export class Game {
   setBrush(r: number): void { this.brushRadius = r; }
   setSpeed(s: number): void { this.speed = Math.max(0, s | 0); }
 
-  tick(): void {
-    for (let i = 0; i < this.speed; i++) {
+  // steps を省略すると従来通り this.speed 回まわす。M8 P2 の時間予算
+  // スケジューラ (sim-worker.ts) は、予算に収まると見積もった tick 数を
+  // 明示的に渡す (speed そのままとは限らない)。
+  tick(steps: number = this.speed): void {
+    for (let i = 0; i < steps; i++) {
       step(this.state, this.env, this.act, this.bio, this.params, this.rng, this.bus, this.stepCache);
       this.env.decay(this.stage.nutrientDecayPerTick, this.stage.moistureRelaxPerTick);
     }
@@ -306,29 +317,33 @@ export class Game {
     }
   }
 
-  snapshot(): GameSnapshot {
+  snapshotFast(): FastSnapshot {
+    const day = Math.floor(this.state.tick / TICKS_PER_DAY);
+    const thickEdges = this.state.edges.filter((e) => e.radius > 1.5).length;
+    return {
+      state: this.state, env: this.env, bio: this.bio, genome: this.genome,
+      day, era: eraName(day), thickEdges,
+      stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
+      landmarks: this.landmarks,
+    };
+  }
+
+  snapshotDerived(): DerivedSnapshot {
     const traits = computeTraits(this.state);
     const individuality = computeIndividuality(this.state);
     const typeInfo = classifyIndividual(individuality);
     const balance = this.computeBalance();
     const colonies = computeColonyNetworks(this.state, SOURCE_POINTS);
     const world = this.computeWorld(colonies.networksCount);
-    const thickEdges = this.state.edges.filter((e) => e.radius > 1.5).length;
-    const day = Math.floor(this.state.tick / TICKS_PER_DAY);
     const quests = computeQuests({
       coloniesReached: world.coloniesReached, coloniesTotal: world.coloniesTotal, traits,
       sourceColonies: world.sourceColonies, connectedNetworks: world.connectedNetworks,
     });
-    return {
-      state: this.state, env: this.env, bio: this.bio,
-      traits, individuality, typeInfo, genome: this.genome,
-      balance, world,
-      day, era: eraName(day),
-      thickEdges, quests,
-      stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
-      landmarks: this.landmarks,
-      colonyMarkers: colonies.markers,
-    };
+    return { traits, individuality, typeInfo, balance, world, quests, colonyMarkers: colonies.markers };
+  }
+
+  snapshot(): GameSnapshot {
+    return { ...this.snapshotFast(), ...this.snapshotDerived() };
   }
 
   events(): string[] { return this.recentEvents; }
