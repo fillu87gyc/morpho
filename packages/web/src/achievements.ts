@@ -85,16 +85,18 @@ export class Achievements {
   isUnlocked(id: AchievementId): boolean { return this.unlocked.has(id); }
 
   // 毎フレーム呼ばれる。未解除の実績だけ条件判定し、満たしたものを記録する。
-  check(input: AchievementCheckInput, seed: number, day: number): void {
-    let changed = false;
+  // 戻り値: この呼び出しで新たに解除された実績 ID (呼び出し側の報酬付与用、M11)。
+  check(input: AchievementCheckInput, seed: number, day: number): AchievementId[] {
+    const newlyUnlocked: AchievementId[] = [];
     for (const def of ACHIEVEMENT_DEFS) {
       if (this.unlocked.has(def.id)) continue;
       if (!isSatisfied(def.id, input)) continue;
       this.unlocked.set(def.id, { id: def.id, unlockedAt: new Date().toISOString(), seed, day });
-      changed = true;
+      newlyUnlocked.push(def.id);
     }
-    if (!changed) return;
+    if (newlyUnlocked.length === 0) return newlyUnlocked;
     this.version++;
     this.save();
+    return newlyUnlocked;
   }
 }

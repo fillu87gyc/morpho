@@ -9,7 +9,7 @@ import { Camera } from './camera.js';
 import { Minimap } from './minimap.js';
 import { Encyclopedia, TOTAL_TYPE_COUNT } from './encyclopedia.js';
 import { Achievements } from './achievements.js';
-import { dailyChallengeFor, DailyChallengeTracker } from './challenges.js';
+import { allChallenges, DailyChallengeTracker } from './challenges.js';
 import { Scoreboard } from './scoreboard.js';
 import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
 import { PinchTracker } from './pinch.js';
@@ -18,6 +18,8 @@ import { Album } from './album.js';
 import { Ambient } from './ambient.js';
 import { DayReport } from './day-report.js';
 import { createDayLoop, beginObserve, completeDay, advanceToNextDay, TICKS_PER_DAY } from './day-loop.js';
+import { Wallet, type CurrencyKind } from './wallet.js';
+import { DailyTracker } from './dailies.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -30,6 +32,8 @@ const lineage = new Lineage();
 const album = new Album();
 const ambient = new Ambient();
 const dayReport = new DayReport();
+const wallet = new Wallet();
+const dailies = new DailyTracker();
 
 // 系統に採取済みの種があれば、初回起動から継承した個体で始める
 // (M5: セッションをまたいで系統樹を続けられる)。
@@ -129,6 +133,89 @@ window.addEventListener('keydown', (e) => {
     game.undoStroke();
   }
 });
+
+// ── M11: 通貨HUD ──────────────────────────────────────
+const CURRENCY_ICON: Record<CurrencyKind, string> = { sizuku: '🪙', wakaba: '🍃', horoishi: '🍄' };
+const curEl: Record<CurrencyKind, HTMLElement> = {
+  sizuku: document.getElementById('cur-sizuku') as HTMLElement,
+  wakaba: document.getElementById('cur-wakaba') as HTMLElement,
+  horoishi: document.getElementById('cur-horoishi') as HTMLElement,
+};
+const chipEl: Record<CurrencyKind, HTMLElement> = {
+  sizuku: curEl.sizuku.closest('.wallet-chip') as HTMLElement,
+  wakaba: curEl.wakaba.closest('.wallet-chip') as HTMLElement,
+  horoishi: curEl.horoishi.closest('.wallet-chip') as HTMLElement,
+};
+const lastShownBalance: Partial<Record<CurrencyKind, number>> = {};
+
+const toolButtons = [...document.querySelectorAll<HTMLButtonElement>('button.tool')];
+for (const btn of toolButtons) {
+  const tool = btn.dataset.tool ?? '';
+  btn.dataset.baseTitle = btn.title;
+  const cost = wallet.costOf(tool);
+  if (!cost) continue;
+  const badge = document.createElement('span');
+  badge.className = 'tool-cost';
+  badge.textContent = `${CURRENCY_ICON[cost.currency]}${cost.amount}`;
+  btn.appendChild(badge);
+}
+
+function updateWalletUi(): void {
+  const b = wallet.all();
+  for (const currency of Object.keys(curEl) as CurrencyKind[]) {
+    const v = b[currency];
+    if (lastShownBalance[currency] === v) continue;
+    if (lastShownBalance[currency] !== undefined) {
+      chipEl[currency].classList.add('flash');
+      setTimeout(() => chipEl[currency].classList.remove('flash'), 400);
+    }
+    lastShownBalance[currency] = v;
+    curEl[currency].textContent = v.toLocaleString('ja-JP');
+  }
+  for (const btn of toolButtons) {
+    const tool = btn.dataset.tool ?? '';
+    const cost = wallet.costOf(tool);
+    if (!cost) continue;
+    const afford = wallet.canAfford(tool);
+    btn.classList.toggle('unaffordable', !afford);
+    btn.title = afford
+      ? (btn.dataset.baseTitle ?? '')
+      : `${btn.dataset.baseTitle ?? ''} (${CURRENCY_ICON[cost.currency]}${cost.amount} が足りません)`;
+  }
+}
+updateWalletUi();
+
+// ── M11: ゆるいデイリー UI ─────────────────────────────
+const dailiesEl = document.getElementById('dailies') as HTMLElement;
+let lastDailiesVersion = -1;
+let lastDailiesDateKey = '';
+
+function renderDailies(): void {
+  const today = new Date();
+  const key = today.toDateString();
+  if (lastDailiesVersion === dailies.version && lastDailiesDateKey === key) return;
+  lastDailiesVersion = dailies.version;
+  lastDailiesDateKey = key;
+  dailiesEl.innerHTML = '';
+  for (const task of dailies.tasksToday(today)) {
+    const li = document.createElement('li');
+    const done = dailies.isDone(task);
+    li.className = done ? 'done' : '';
+    const check = document.createElement('span');
+    check.className = 'check';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = task.title;
+    const n = document.createElement('span');
+    n.className = 'n';
+    n.textContent = `${Math.min(dailies.progressOf(task.id), task.target)}/${task.target}`;
+    li.appendChild(check);
+    li.appendChild(label);
+    li.appendChild(n);
+    dailiesEl.appendChild(li);
+  }
+}
+renderDailies();
 
 // ── M9: デイループ (仕込む→委ねる→受け取る) ──────────────
 // 既存の「見守り (連続再生)」を既定のまま残し (継続的な DAY 自動進行を
@@ -274,6 +361,10 @@ function showDayResult(day: number): void {
     dayResultThumb = url;
     drThumb.src = url;
   });
+
+  // M11: 日次結果の成長量に応じて 🪙 を付与する (基本給 + 前日比が伸びたボーナス)。
+  const growthBonus = delta ? Math.max(0, Math.round((delta.exploration + delta.efficiency + delta.stability) * 20)) : 0;
+  wallet.earn('sizuku', 10 + growthBonus, `Day ${day} の成長`);
 
   dayLoopRemainingEl.hidden = true;
   setPlaybackControlsEnabled(false);
@@ -441,9 +532,18 @@ canvas.addEventListener('wheel', (e) => {
 canvas.addEventListener('dblclick', () => camera.reset());
 
 function applyAt(x: number, y: number): void {
+  // M11: 残高不足のツールは適用しない (グレーアウト表示と対になる)。
+  if (!wallet.canAfford(game.tool)) return;
+  wallet.spendForTool(game.tool);
   const worldPos = camera.screenToWorld(viewportSize(), x, y);
   game.apply(worldPos);
   lastApplyMs = performance.now();
+
+  // M11: ゆるいデイリーの配置カウント判定 (sim の状態は見ない、適用イベントのみ)。
+  if (dailies.recordApply(game.tool)) {
+    wallet.earn('wakaba', 5, 'ゆるいデイリー全達成');
+    dailies.markBonusGranted();
+  }
 }
 
 // ── レイアウト ────────────────────────────────────────
@@ -479,6 +579,10 @@ function frame() {
       dayLoop = completeDay(dayLoop);
       showDayResult(dayLoop.day);
     }
+    // M11: 🪙 の詰み防止自動回復。間引かれない全フレームで呼ぶ (内部で間隔制御)。
+    wallet.tickRecovery(performance.now());
+    updateWalletUi();
+    renderDailies();
     const nowMs0 = performance.now();
     if (game.fastForward && nowMs0 - lastHeavyFrameMs < FAST_FORWARD_FRAME_INTERVAL_MS) {
       requestAnimationFrame(frame);
@@ -520,15 +624,15 @@ function frame() {
       areaM2: snap.world.areaM2,
     });
 
-    const today = new Date();
-    const todaysChallenge = dailyChallengeFor(today);
-    if (!challenges.isCompletedToday(today) && todaysChallenge.isComplete({
-      connectProgress, day: snap.day, networkLinks: snap.world.networkLinks, toxin: snap.balance.toxin,
-    })) {
-      challenges.complete(today, todaysChallenge.kind, snap.day, snap.state.seed);
+    // M11: 3種すべてを常時チェックし、初回達成のものだけ 🍃 報酬を付与する。
+    for (const chal of allChallenges()) {
+      if (challenges.isCompleted(chal.kind)) continue;
+      if (!chal.isComplete({ connectProgress, day: snap.day, networkLinks: snap.world.networkLinks, toxin: snap.balance.toxin })) continue;
+      challenges.complete(chal.kind, snap.day, snap.state.seed);
+      wallet.earn('wakaba', 8, `チャレンジ「${chal.title}」達成`);
     }
 
-    achievements.check({
+    const newlyUnlocked = achievements.check({
       connectProgress,
       individuality: snap.individuality,
       thickEdges: snap.thickEdges,
@@ -537,6 +641,8 @@ function frame() {
       stagesPlayed: scoreboard.stagesPlayedCount(),
       dailyChallengesCompleted: challenges.completedCount(),
     }, snap.state.seed, snap.day);
+    // M11: 実績解除は希少通貨 🍄 の報酬源。
+    for (const id of newlyUnlocked) wallet.earn('horoishi', 1, `実績「${id}」解除`);
 
     ui.render();
     timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, snap.stage.id, snap.landmarks, 96));

@@ -1,7 +1,11 @@
-// デイリーチャレンジ (M4)。「最短でつなぐ」「最小コストでつなぐ」
-// 「障害物を避けてつなぐ」の3種のうち1つを、日付から決定的に選ぶ
-// (サーバがないので日付文字列のハッシュで疑似乱数に代える)。
-// 達成状態は encyclopedia.ts と同じパターンで localStorage に永続化する。
+// チャレンジ (M4→M11)。「最短でつなぐ」「最小コストでつなぐ」
+// 「障害物を避けてつなぐ」の3種。
+//
+// M11: 「1日1種ランダム表示」から「3種を常時表示し、任意に挑戦できる」へ変更した
+// (モックアップ①は3枚のカードが並ぶ)。達成状態は日付ではなく種別ごとに記録し、
+// それぞれ初回達成で報酬 (呼び出し側 = main.ts が 🍃 を付与する)。
+// 既存の localStorage (v1: 日付ごとの記録) は初回読み込み時に v2 (種別ごとの記録)
+// へマイグレーションする。
 
 export type ChallengeKind = 'fastest' | 'cheapest' | 'clean';
 
@@ -44,6 +48,12 @@ const CHALLENGES: Record<ChallengeKind, ChallengeDef> = {
   },
 };
 
+export const CHALLENGE_KINDS: ChallengeKind[] = ['fastest', 'cheapest', 'clean'];
+
+export function allChallenges(): ChallengeDef[] {
+  return CHALLENGE_KINDS.map((k) => CHALLENGES[k]);
+}
+
 export function dateKey(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -51,43 +61,58 @@ export function dateKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-
-const KIND_ORDER: ChallengeKind[] = ['fastest', 'cheapest', 'clean'];
-
-export function dailyChallengeFor(date: Date): ChallengeDef {
-  const kind = KIND_ORDER[hashString(dateKey(date)) % KIND_ORDER.length]!;
-  return CHALLENGES[kind];
-}
-
-export interface DailyChallengeRecord {
-  date: string;
+export interface ChallengeRecord {
   kind: ChallengeKind;
   completedAt: string;
   day: number;
   seed: number;
 }
 
-const STORAGE_KEY = 'morpho.challenges.v1';
+const STORAGE_KEY_V1 = 'morpho.challenges.v1';
+const STORAGE_KEY = 'morpho.challenges.v2';
+
+// v1 は「その日に達成した1種」を日付キーで保持していた。v2 は種別ごとの
+// 初回達成のみを持つので、v1 の各レコードから種別を重複なく引き継ぐ。
+function migrateFromV1(): ChallengeRecord[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_V1);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const migrated: ChallengeRecord[] = [];
+    const seen = new Set<string>();
+    for (const rec of parsed as Partial<ChallengeRecord>[]) {
+      if (!rec || typeof rec.kind !== 'string' || seen.has(rec.kind)) continue;
+      seen.add(rec.kind);
+      migrated.push({
+        kind: rec.kind as ChallengeKind,
+        completedAt: rec.completedAt ?? new Date().toISOString(),
+        day: rec.day ?? 0,
+        seed: rec.seed ?? 0,
+      });
+    }
+    return migrated;
+  } catch {
+    return [];
+  }
+}
 
 export class DailyChallengeTracker {
-  private records = new Map<string, DailyChallengeRecord>(); // dateKey -> record
+  private records = new Map<ChallengeKind, ChallengeRecord>();
   version = 0;
 
   constructor() {
-    for (const r of this.load()) this.records.set(r.date, r);
+    for (const r of this.load()) this.records.set(r.kind, r);
   }
 
-  private load(): DailyChallengeRecord[] {
+  private load(): ChallengeRecord[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return [];
-      const parsed: unknown = JSON.parse(raw);
-      return Array.isArray(parsed) ? (parsed as DailyChallengeRecord[]) : [];
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed as ChallengeRecord[];
+      }
+      return migrateFromV1();
     } catch {
       return [];
     }
@@ -101,15 +126,14 @@ export class DailyChallengeTracker {
     }
   }
 
-  isCompletedToday(date: Date): boolean { return this.records.has(dateKey(date)); }
-  todayRecord(date: Date): DailyChallengeRecord | undefined { return this.records.get(dateKey(date)); }
+  isCompleted(kind: ChallengeKind): boolean { return this.records.has(kind); }
+  recordOf(kind: ChallengeKind): ChallengeRecord | undefined { return this.records.get(kind); }
   completedCount(): number { return this.records.size; }
 
-  // その日まだ未達成の場合のみ記録する (1日1回)。
-  complete(date: Date, kind: ChallengeKind, day: number, seed: number): void {
-    const key = dateKey(date);
-    if (this.records.has(key)) return;
-    this.records.set(key, { date: key, kind, completedAt: new Date().toISOString(), day, seed });
+  // 種別ごとに初回達成のときだけ記録する (以後は何度満たしても再記録しない)。
+  complete(kind: ChallengeKind, day: number, seed: number): void {
+    if (this.records.has(kind)) return;
+    this.records.set(kind, { kind, completedAt: new Date().toISOString(), day, seed });
     this.version++;
     this.save();
   }

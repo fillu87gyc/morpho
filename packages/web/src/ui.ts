@@ -6,7 +6,7 @@ import type { Tool, StageId } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
 import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
-import { dailyChallengeFor, type DailyChallengeTracker } from './challenges.js';
+import { allChallenges, type DailyChallengeTracker } from './challenges.js';
 import type { Scoreboard } from './scoreboard.js';
 import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 import type { Album } from './album.js';
@@ -43,11 +43,9 @@ export class Ui {
   private qExploreN = el('q-explore-n');
   private qUniteBar = el('q-unite-bar');
   private qUniteN = el('q-unite-n');
-  // デイリーチャレンジ
-  private chalTitle = el('chal-title');
-  private chalDesc = el('chal-desc');
-  private chalGoal = el('chal-goal');
-  private chalStatus = el('chal-status');
+  // M11: チャレンジ一覧 (3種常時表示)
+  private chalList = el('chal-list');
+  private chalProgress = el('chal-progress');
   // world info
   private wArea = el('w-area');
   private wMass = el('w-mass');
@@ -227,18 +225,37 @@ export class Ui {
     }
     setText(this.lineageGen, `現在 ${this.trackers.lineage.nextGeneration()}代目`);
 
-    // デイリーチャレンジ (日付が変わるか達成したときだけ書き換える)
-    const today = new Date();
-    const chal = dailyChallengeFor(today);
-    const chalDone = this.trackers.challenges.isCompletedToday(today);
-    const chalKey = `${chal.kind}:${chalDone}`;
+    // M11: チャレンジ一覧 (3種常時表示、達成状況が変わったときだけ書き換える)
+    const chalKey = allChallenges().map((c) => `${c.kind}:${this.trackers.challenges.isCompleted(c.kind)}`).join(',');
     if (this.lastChalKey !== chalKey) {
       this.lastChalKey = chalKey;
-      setText(this.chalTitle, chal.title);
-      setText(this.chalDesc, chal.description);
-      setText(this.chalGoal, chal.goal);
-      setText(this.chalStatus, chalDone ? '本日の挑戦、達成済み ✓' : '挑戦中…');
-      this.chalStatus.classList.toggle('done', chalDone);
+      const completed = allChallenges().filter((c) => this.trackers.challenges.isCompleted(c.kind)).length;
+      setText(this.chalProgress, `${completed}/3`);
+      this.chalList.innerHTML = '';
+      for (const chal of allChallenges()) {
+        const done = this.trackers.challenges.isCompleted(chal.kind);
+        const li = document.createElement('li');
+        const title = document.createElement('div');
+        title.className = 'challenge-title';
+        const titleText = document.createElement('span');
+        titleText.textContent = chal.title;
+        title.appendChild(titleText);
+        const desc = document.createElement('div');
+        desc.className = 'challenge-desc';
+        desc.textContent = chal.description;
+        const goal = document.createElement('div');
+        goal.className = 'challenge-goal';
+        goal.textContent = chal.goal;
+        const status = document.createElement('span');
+        status.className = 'challenge-status';
+        status.classList.toggle('done', done);
+        status.textContent = done ? '達成済み ✓' : '挑戦中…';
+        li.appendChild(title);
+        li.appendChild(desc);
+        li.appendChild(goal);
+        li.appendChild(status);
+        this.chalList.appendChild(li);
+      }
     }
 
     // ワールド情報
