@@ -1,6 +1,6 @@
 // M12: 個体の同定 (名前・★・特性チップ) と追跡カメラの e2e。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

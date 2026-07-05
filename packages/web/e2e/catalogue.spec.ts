@@ -1,6 +1,6 @@
 // M13: 図鑑グリッド (37枠、M14で大陸ステージが加わり32→37) と実績バッジグリッドの e2e。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

@@ -2,7 +2,7 @@
 // このファイルだけは localStorage を汚さず、フレッシュな状態で
 // オンボーディングが実際に出ることを確かめる。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

@@ -2,7 +2,7 @@
 // 既定は「見守り (連続)」のままなので (smoke.spec.ts / mobile.spec.ts を
 // 壊さないため)、ここではヘッダのトグルで明示的にデイループへ切り替えてから検証する。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

@@ -11,6 +11,7 @@ import type { ToWorkerMessage, FromWorkerMessage, WireSnapshot } from './worker-
 import { TickScheduler } from './tick-scheduler.js';
 import type { DerivedSnapshot } from './game.js';
 import { packNodes, packEdges } from './snapshot-codec.js';
+import { TICKS_PER_DAY } from './day-loop.js';
 
 // self は DOM の Window 型として推論されるため (tsconfig の lib: DOM)、
 // worker 実行時にだけ現れる postMessage/onmessage を緩く型付けする。
@@ -30,6 +31,22 @@ const FAST_FORWARD_INTERVAL_MS = 100;
 const FAST_FORWARD_RATIO = FAST_FORWARD_INTERVAL_MS / TICK_INTERVAL_MS;
 let fastForward = false;
 let loopIntervalMs = TICK_INTERVAL_MS;
+
+// M15.7: 実プレイ検証で「1日 (40 tick) が ×1 で実時間0.64秒しかない」ことが
+// 判明した (旧実装は demand=speed をそのまま毎フレームの debt に積んでいた
+// ため、事実上 1 tick ≈ 1 ループ (16ms) だった)。モックアップの「育成中…
+// 02:34」が示す "数分委ねて眺める" 体験を成立させるため、tick の生成を
+// 「実時間ベースの分数蓄積」に切り替える: ×1 における1日の実時間長 (秒) を
+// SECONDS_PER_DAY で定義し、そこから逆算した ticks/秒をフレーム経過時間分
+// だけ demandAccumulator に貯め、整数分だけ切り出して初めて scheduler へ渡す
+// (scheduler.planSteps は「渡した数だけ本当に tick する」前提の設計なので、
+// 端数のまま渡すと debt/estTickMs の計算が壊れる — 端数の保持はここでの
+// 責務にする)。TICKS_PER_DAY 自体は変えない: era/quests/challenges の
+// day ベースの閾値 (M15.5) は「1日あたりの生の tick 数」に依存しており、
+// ここを変えると全部の再調整が要る。日の「長さ」だけを実時間側で変える。
+const DEFAULT_SECONDS_PER_DAY = 120; // ×1 で1日 = 2分 (目標帯 2〜3分の下限寄り)
+let secondsPerDayAtSpeed1 = DEFAULT_SECONDS_PER_DAY;
+let demandAccumulator = 0;
 // 一時停止中 (speed=0) は tick が進まないので、盤面を変えた
 // (apply/reset) 直後だけ再送すれば十分。毎フレーム同じスナップショットを
 // clone して送り続けるのは無駄な GC 圧になる。
@@ -66,7 +83,7 @@ let forceDerived = false;
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
-    case 'reset': game.reset(msg.seed, msg.stageId, msg.parentGenome); dirty = true; forceDerived = true; break;
+    case 'reset': game.reset(msg.seed, msg.stageId, msg.parentGenome); dirty = true; forceDerived = true; demandAccumulator = 0; break;
     case 'setSpeed': game.setSpeed(msg.speed); break;
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;
@@ -88,6 +105,10 @@ ctx.onmessage = (e) => {
     case 'beginStroke': game.beginStroke(); break;
     case 'endStroke': game.endStroke(); break;
     case 'undoStroke': game.undoStroke(); dirty = true; forceDerived = true; break;
+    case 'setSecondsPerDay': {
+      if (Number.isFinite(msg.seconds) && msg.seconds > 0) secondsPerDayAtSpeed1 = msg.seconds;
+      break;
+    }
   }
 };
 
@@ -95,10 +116,16 @@ let dayCompletedPending = false;
 
 function loop(): void {
   if (game.speed > 0) {
-    // 早送り中はループの呼び出し間隔自体が伸びる (16ms → 100ms) ので、
-    // 1回あたりに積む debt もその比率だけ大きくする。そうしないと
-    // 「呼ばれる頻度が減っただけ」で秒間の総 tick 数がむしろ落ちてしまう。
-    const demand = fastForward ? game.speed * FAST_FORWARD_RATIO : game.speed;
+    // M15.7: 「speed 倍」を実時間ベースの ticks/秒に変換し、フレーム経過時間
+    // (loopIntervalMs) 分だけ demandAccumulator に貯める。早送り中もループ間隔
+    // (100ms) がそのまま経過時間として乗るので、旧 FAST_FORWARD_RATIO のような
+    // 補正は不要になった (早送りの役割は budgetMs/maxDebtTicks の引き上げに
+    // よる tick スループット天井の底上げだけに整理された)。
+    const ticksPerSecondAtSpeed1 = TICKS_PER_DAY / secondsPerDayAtSpeed1;
+    const targetTicksPerSecond = game.speed * ticksPerSecondAtSpeed1;
+    demandAccumulator += targetTicksPerSecond * (loopIntervalMs / 1000);
+    const demand = Math.floor(demandAccumulator);
+    demandAccumulator -= demand;
     let steps = scheduler.planSteps(demand);
     // M9: dayTarget を越えて進めない (日境界ちょうどで止める)。
     if (dayTarget !== null) steps = Math.min(steps, Math.max(0, dayTarget - game.state.tick));
@@ -122,8 +149,13 @@ function loop(): void {
   const now = performance.now();
   const windowElapsed = now - windowStartMs;
   if (windowElapsed >= EFFECTIVE_SPEED_WINDOW_MS) {
-    // 「1 tick ずつ ×1 で進めた場合」を基準 (1000ms / TICK_INTERVAL_MS ループ回数) にした倍率。
-    effectiveSpeed = (ticksInWindow / windowElapsed) * TICK_INTERVAL_MS;
+    // M15.7: 旧実装は「×1 ≈ 1 tick/16ms」前提で effectiveSpeed を
+    // 「倍率」として計算していたが、時間スケール変更でその前提が崩れた。
+    // 単位を実測 ticks/秒 (絶対値) に変え、main.ts の残り時間予測もこの
+    // 単位で直接使えるようにする (perf HUD の表示ラベルは変えない —
+    // 「speed x{n} / x{targetSpeed}」の n が「倍率」から「ticks/秒」に
+    // 意味を変えるだけで、既存 e2e の正規表現はどちらでも通る)。
+    effectiveSpeed = (ticksInWindow / windowElapsed) * 1000;
     ticksInWindow = 0;
     windowStartMs = now;
   }

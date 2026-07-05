@@ -1,6 +1,6 @@
 // M13: 系統樹の分岐 (1つの親から複数回採種し、任意の祖先から再開する) の e2e。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

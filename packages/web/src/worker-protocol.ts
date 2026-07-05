@@ -25,7 +25,11 @@ export type ToWorkerMessage =
   // スタンプを記録・取り消す (sim の時間そのものは巻き戻さない)。
   | { type: 'beginStroke' }
   | { type: 'endStroke' }
-  | { type: 'undoStroke' };
+  | { type: 'undoStroke' }
+  // M15.7: ×1 における「1日」の実時間長 (秒) を上書きする。既定は本番向けの
+  // 長さ (main.ts の DEFAULT_SECONDS_PER_DAY) だが、e2e テストは待ち時間を
+  // 減らすため短い値に上書きする (main.ts が起動時に一度だけ送る)。
+  | { type: 'setSecondsPerDay'; seconds: number };
 
 // M8 P0: 計測基盤。perf HUD (`?debug`) 表示用の Worker 側計測値。
 export interface PerfInfo {

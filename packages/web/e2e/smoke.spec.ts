@@ -4,7 +4,7 @@
 // `pnpm run build` 済みの dist を `vite preview` で配信して検証する
 // (playwright.config.ts の webServer)。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

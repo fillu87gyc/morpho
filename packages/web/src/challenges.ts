@@ -28,12 +28,15 @@ const CHALLENGES: Record<ChallengeKind, ChallengeDef> = {
   fastest: {
     // M15.5: 実プレイ検証で connect-all クエストが Day 4〜16 で自然に
     // 100% へ達することが判明し、「Day 15 以内」は何もしなくても達成される
-    // 状態だった。意図的に速さを狙わないと落とすラインまで引き締める。
+    // 状態だった → Day 6 まで引き締めた。
+    // M15.7 (P7): それでもなお皿ステージは受動プレイで Day 3 に全接続してしまう
+    // ことを再実測で確認 (記録カード「最短3日」)。「意図的に狙わないと落とす
+    // ライン」にするため、受動達成の実測値を下回る Day 2 まで引き締める。
     kind: 'fastest',
     title: '最短でつなぐ',
     description: 'すべての拠点をできるだけ早くつなごう',
-    goal: 'Day 6 以内に全拠点接続',
-    isComplete: (i) => i.connectProgress >= 1 && i.day <= 6,
+    goal: 'Day 2 以内に全拠点接続',
+    isComplete: (i) => i.connectProgress >= 1 && i.day <= 2,
   },
   cheapest: {
     kind: 'cheapest',

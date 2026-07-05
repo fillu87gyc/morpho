@@ -1,7 +1,7 @@
 // M14: 大陸ステージの e2e。拠点が20を超えて生成され、専用クエストが
 // 表示され、通常どおり進行することを確認する。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

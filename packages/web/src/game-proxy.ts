@@ -69,6 +69,8 @@ export class GameProxy {
   // M8 P4: 早送りモード。描画/スナップショット送信を10fpsまで落とし、
   // 浮いた予算をtickに全振りするよう Worker に伝える。
   setFastForward(v: boolean): void { this.fastForward = v; this.send({ type: 'setFastForward', enabled: v }); }
+  // M15.7: ×1 における「1日」の実時間長 (秒) を上書きする。e2e テスト用。
+  setSecondsPerDay(seconds: number): void { this.send({ type: 'setSecondsPerDay', seconds }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
   reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void {
     this.send({ type: 'reset', seed, stageId, parentGenome });

@@ -3,7 +3,7 @@
 // 発火させて検証する (JS からの合成 PointerEvent 直接 dispatch だと
 // canvas.setPointerCapture がブラウザに実タッチと認識されず失敗するため)。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 test.use({ hasTouch: true });
 
