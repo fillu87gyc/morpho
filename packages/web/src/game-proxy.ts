@@ -8,6 +8,7 @@ import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type Sta
 import type { ToWorkerMessage, FromWorkerMessage, PerfInfo } from './worker-protocol.js';
 import type { Genome, SimState, Vec2 } from '@morpho/sim';
 import { unpackNodes, unpackEdges } from './snapshot-codec.js';
+import { readDayMsOverride } from './time-scale.js';
 
 const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
 
@@ -47,6 +48,9 @@ export class GameProxy {
         this.dayCompletedFlag = true;
       }
     };
+    // M15.7: URL パラメータ/localStorage による日長の上書き (開発/e2e 用フック)。
+    // reset より前に送り、起動直後の tick から新しいペースを使う。
+    this.send({ type: 'setDayMs', ms: readDayMsOverride() });
     if (parentGenome) this.send({ type: 'reset', parentGenome });
   }
 

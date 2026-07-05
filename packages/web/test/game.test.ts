@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Game } from '../src/game.js';
+import { TICKS_PER_DAY } from '../src/day-loop.js';
 
 // env.obstacle は FieldGrid (プレーンな Float32Array) で、BiomassField 等の
 // ScalarField と違い .sample() を持たない。ワールド座標→最寄りセルの
@@ -67,18 +68,16 @@ describe('Game', () => {
     expect(g.snapshot().state.tick).toBe(before);
   });
 
-  it('day は state.tick / 40 切り捨て、時代は条件達成 (拠点接続等) に応じて進む (M14)', () => {
+  it('day は state.tick / TICKS_PER_DAY 切り捨て、時代は条件達成 (拠点接続等) に応じて進む (M14)', () => {
     const g = new Game(11);
     g.setSpeed(1);
-    const eraNames = new Set<string>();
-    for (let i = 0; i < 400; i++) {
-      g.tick();
-      eraNames.add(g.snapshot().era.name);
-    }
-    expect(g.snapshot().day).toBe(10);
     // 起動直後の胞子期は必ず観測されているはず。
-    expect(eraNames.has('胞子期')).toBe(true);
-    // 400 tick も経てば、最初の拠点接続 (拡散期) 以上には進んでいるはず。
+    expect(g.snapshot().era.name).toBe('胞子期');
+    // 1 tick ずつではなく一括で進める (M15.7: TICKS_PER_DAY が伸びた分、
+    // per-tick snapshot() での観測は不要かつ低速になるため)。
+    g.tick(TICKS_PER_DAY * 10);
+    expect(g.snapshot().day).toBe(10);
+    // Day 10 (DIFFUSE_MIN_DAY=8 超え) まで経てば、最初の拠点接続 (拡散期) 以上には進んでいるはず。
     expect(['拡散期', '変形体期', '成熟期']).toContain(g.snapshot().era.name);
     expect(g.snapshot().era.progress).toBeGreaterThanOrEqual(0);
     expect(g.snapshot().era.progress).toBeLessThanOrEqual(1);
@@ -196,7 +195,7 @@ describe('Game', () => {
   it('era が切り替わった節目が進化の記録に残る', () => {
     const g = new Game(11);
     g.setSpeed(1);
-    for (let i = 0; i < 400; i++) g.tick();
+    g.tick(TICKS_PER_DAY * 10);
     const evo = g.evolution();
     expect(evo.some((e) => e.text.includes('に入った'))).toBe(true);
     // 起動直後の胞子期そのものは「切り替わり」ではないので記録されない。

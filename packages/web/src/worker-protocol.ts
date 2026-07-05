@@ -25,7 +25,10 @@ export type ToWorkerMessage =
   // スタンプを記録・取り消す (sim の時間そのものは巻き戻さない)。
   | { type: 'beginStroke' }
   | { type: 'endStroke' }
-  | { type: 'undoStroke' };
+  | { type: 'undoStroke' }
+  // M15.7: ×1 speed での「1日の実時間 (ms)」を上書きする。既定は
+  // time-scale.ts の DEFAULT_DAY_MS。開発/e2e 用のフック (詳細は time-scale.ts)。
+  | { type: 'setDayMs'; ms: number };
 
 // M8 P0: 計測基盤。perf HUD (`?debug`) 表示用の Worker 側計測値。
 export interface PerfInfo {

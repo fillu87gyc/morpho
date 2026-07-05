@@ -28,12 +28,21 @@ const CHALLENGES: Record<ChallengeKind, ChallengeDef> = {
   fastest: {
     // M15.5: 実プレイ検証で connect-all クエストが Day 4〜16 で自然に
     // 100% へ達することが判明し、「Day 15 以内」は何もしなくても達成される
-    // 状態だった。意図的に速さを狙わないと落とすラインまで引き締める。
+    // 状態だった。意図的に速さを狙わないと落とすラインまで引き締めて「Day 6
+    // 以内」とした (旧 TICKS_PER_DAY=40 のとき 240 tick 相当)。
+    //
+    // M15.7: TICKS_PER_DAY を 40→240 (6倍) に変えたことで、この「240 tick」
+    // という絶対ラインは日数表記で言えば "Day 6" ではなく "Day 1未満" に
+    // 相当するようになった (実測: headless で皿ステージを何も操作せず
+    // 放置しても tick 70〜194 = Day 0 のうちに全拠点接続してしまう —
+    // ROADMAP.md M15.7 参照)。ライン自体の厳しさ (240 tick 以内) は据え置き、
+    // 表記だけを新しい day 定義に合わせて "Day 0 以内" (= tick < 240) へ
+    // 換算する。
     kind: 'fastest',
     title: '最短でつなぐ',
     description: 'すべての拠点をできるだけ早くつなごう',
-    goal: 'Day 6 以内に全拠点接続',
-    isComplete: (i) => i.connectProgress >= 1 && i.day <= 6,
+    goal: 'Day 0 のうちに全拠点接続',
+    isComplete: (i) => i.connectProgress >= 1 && i.day <= 0,
   },
   cheapest: {
     kind: 'cheapest',
