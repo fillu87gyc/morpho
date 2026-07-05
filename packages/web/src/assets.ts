@@ -21,6 +21,9 @@ export const SPRITE_FAMILIES: Record<string, number> = {
   'rock-cluster': 4,
   'mushroom-red': 2,
   'moss-clump': 3,
+  // 発注ブリーフには無いが、切り出し時のボーナス素材として同梱されている
+  // (CREDITS.md 参照)。M21 で小さい障害物の飛び地に使う。
+  'small-stone': 6,
 };
 
 // バリエーションを持たない単発スプライト。

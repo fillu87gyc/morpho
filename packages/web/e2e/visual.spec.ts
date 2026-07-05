@@ -69,3 +69,48 @@ test('皿ステージの地形が「ほぼ黒」に退行していない (M16.5 
 
   expect(errors).toEqual([]);
 });
+
+// 画面中央付近の正方形ブロックの輝度標準偏差 (ズーム耐性の検査用)。
+// 96×96 の fieldCanvas を単純に拡大描画するだけだと、ズームするほど
+// 1セルが画面を埋め尽くしてブロック内が単色に近づく (標準偏差→0)。
+// M21 でスクリーン解像度のタイルテクスチャ/岩スプライトを重ねたことで、
+// ズームしても実解像度のディテールが残るはず (G3 の解消条件)。
+async function centerBlockLumaStdDev(page: Page, blockSize = 48): Promise<number> {
+  return page.evaluate((size) => {
+    const canvas = document.getElementById('canvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    const cx = Math.floor(canvas.width / 2);
+    const cy = Math.floor(canvas.height / 2);
+    // 中心そのもの (コロニー核やノードのグローに当たりやすい) は避け、
+    // 少しオフセットしたブロックを地形のサンプルとして使う。
+    const x0 = Math.max(0, cx - size - 40);
+    const y0 = Math.max(0, cy - size - 40);
+    const { data } = ctx.getImageData(x0, y0, size, size);
+    const lumas: number[] = [];
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] ?? 0, g = data[i + 1] ?? 0, b = data[i + 2] ?? 0;
+      lumas.push(0.299 * r + 0.587 * g + 0.114 * b);
+    }
+    const mean = lumas.reduce((a, b) => a + b, 0) / lumas.length;
+    const variance = lumas.reduce((a, l) => a + (l - mean) ** 2, 0) / lumas.length;
+    return Math.sqrt(variance);
+  }, blockSize);
+}
+
+test('M21: 最大ズームでも地面のディテールが無地グラデーションに潰れない', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.goto('/');
+  await waitForReady(page);
+
+  const slider = page.locator('#zoom-slider');
+  await slider.fill('8');
+  await page.waitForTimeout(400);
+
+  // 無地グラデーション (旧: 96×96 を8倍拡大した先のさらにズームで単色化)
+  // なら標準偏差はほぼ0になる。タイルテクスチャ/岩スプライト/木漏れ日の
+  // まだらのいずれかが乗っていれば、最大ズームでも有意なばらつきが残る。
+  expect(await centerBlockLumaStdDev(page)).toBeGreaterThan(3);
+
+  expect(errors).toEqual([]);
+});

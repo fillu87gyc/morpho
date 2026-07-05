@@ -25,6 +25,8 @@ import type {
 import type { WorldView } from './camera.js';
 import type { StageId } from './stages.js';
 import { MultiLayerDirtyTracker } from './field-diff.js';
+import { assets, SPRITE_FAMILIES, type TileTextureName } from './assets.js';
+import { extractTerrainBlobs, SMALL_BLOB_MAX_CELLS } from './terrain-blobs.js';
 
 export interface RenderOptions {
   worldSize: number;
@@ -109,6 +111,31 @@ const WATER_BODY_DEEP:   [number, number, number] = [30, 70, 120];
 const WATER_BODY_SHALLOW: [number, number, number] = [70, 130, 175];
 const WATER_EDGE_COLOR:  [number, number, number] = [150, 205, 220]; // 縁の明るいライン
 
+// M21: ステージごとの地面タイルテクスチャ (アセット未ロード時は使われず、
+// 従来の STAGE_BG 単色+粒ノイズにフォールバックする)。湿地/大陸は苔の
+// テクスチャを流用する (専用タイルは発注ブリーフに無いため)。
+const TILE_TEXTURE_BY_STAGE: Record<StageId, TileTextureName> = {
+  petri: 'moss-ground',
+  cave: 'cave-floor',
+  desert: 'sand-dry',
+  ruins: 'stone-ruins',
+  wetland: 'moss-ground',
+  continent: 'moss-ground',
+};
+// タイル画像1枚がワールド座標で何単位分を表すか。値が大きいほど1枚が
+// 大きく引き伸ばされて見える (荒くなる) が継ぎ目は目立ちにくくなる。
+const TILE_WORLD_SIZE = 9;
+
+// M21: 木漏れ日のまだら。以前は「中央がやや明るいラジアルグラデーション
+// 1枚」だった光の表現を、ワールド座標に固定されたまばらな明るい斑点へ
+// 置き換える (ズームしても斑点の実寸が保たれ、フラットな印象にならない)。
+const DAPPLE_CELL_WORLD = 7;
+const DAPPLE_THRESHOLD = 0.62;
+const DAPPLE_MAX_ALPHA = 0.34;
+
+// M21: 岩スプライトの見かけの大きさ (obstacle 連結成分の概算半径に対する倍率)。
+const ROCK_SPRITE_SCALE = 2.4;
+
 // M16.5: 地形テクスチャ (苔の粒ノイズ・岩のまだら・水面の揺らぎ) 用の
 // 軽量な決定的疑似乱数。整数座標だけから求まるので追加のフィールドデータも
 // state も要らず、Math.sin 等より安い整数演算のみ (毎ピクセル呼ばれるため
@@ -148,6 +175,12 @@ export class CanvasRenderer {
   private prevMaxBio = -1;
   private prevShowHeat: boolean | null = null;
   private prevStageId: StageId | null = null;
+  private prevSpritesReady = false;
+
+  // M21: タイルテクスチャの CanvasPattern はテクスチャ名ごとに1度だけ作る
+  // (createPattern をフレームごとに呼ばない)。setTransform で毎フレーム
+  // カメラ位置/ズームに追従させる。
+  private patternCache = new Map<TileTextureName, CanvasPattern>();
 
   // M8 P3 drawEdges: nodeMap とバケツ分けは state (nodes/edges の参照) が
   // 変わらない限り使い回す。RAF は Worker のスナップショット送信より
@@ -180,6 +213,11 @@ export class CanvasRenderer {
 
     this.sourceGlowSprite = buildGlowSprite(SOURCE_DOT);
     this.sinkGlowSprite = buildGlowSprite(SINK_DOT);
+
+    // M20/M21: テクスチャ/スプライトの先読みを開始する (失敗しても reject
+    // しない設計なので fire-and-forget で問題ない)。未ロードの間は各
+    // 描画メソッドが従来の手続き描画へフォールバックする。
+    void assets.preloadAll();
   }
 
   resize(): void {
@@ -213,10 +251,20 @@ export class CanvasRenderer {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, cssW, cssH);
 
+    const scale = side / view.worldSpan;
+    const offX = left - view.worldLeft * scale;
+    const offY = top - view.worldTop * scale;
+
+    // 1.5 M21: 地面タイルテクスチャ (アセット未ロードなら何もせず上の
+    //     単色グラデーションがそのまま地面として見える = フォールバック)。
+    this.drawTerrainTexture(ctx, stageId, scale, offX, offY, left, top, side);
+    // 1.6 M21: 木漏れ日のまだら (ワールド座標に固定した明るい斑点)。
+    this.drawDappledLight(ctx, view, scale, offX, offY);
+
     // 2. 場系を焼いて貼る。view (カメラのズーム/パン) に応じて
     //    fieldCanvas (常に世界全体を焼いた1枚) から必要な矩形だけを
     //    切り出して拡大する。zoom=1 のときは全体をそのまま貼るのと同じ。
-    this.paintFieldLayer(env, bio, stageId);
+    const spritesReady = this.paintFieldLayer(env, bio, stageId);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     const fieldScale = this.opts.fieldSize / this.opts.worldSize;
@@ -227,10 +275,14 @@ export class CanvasRenderer {
       left, top, side, side,
     );
 
+    // 2.5 M21: 岩場のスプライト化 (ぼかし塊の代わりに rock-cluster/
+    //     small-stone を配置)。アセット未ロードの間は paintFieldLayer が
+    //     従来通りの岩色を焼くので、ここでは何も描かない。
+    if (spritesReady) {
+      this.drawRockSprites(ctx, env, scale, offX, offY);
+    }
+
     // 3. ステージの装飾アイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
-    const scale = side / view.worldSpan;
-    const offX = left - view.worldLeft * scale;
-    const offY = top - view.worldTop * scale;
     this.drawLandmarks(ctx, landmarks, stageId, scale, offX, offY);
 
     // 4. 脈管網
@@ -276,12 +328,13 @@ export class CanvasRenderer {
     thumb.height = size;
     const tctx = thumb.getContext('2d');
     if (!tctx) return Promise.resolve('');
-    this.paintFieldLayer(env, bio, stageId);
+    const spritesReady = this.paintFieldLayer(env, bio, stageId);
     tctx.fillStyle = rgb(STAGE_BG[stageId].inner);
     tctx.fillRect(0, 0, size, size);
     tctx.imageSmoothingEnabled = true;
     tctx.drawImage(this.fieldCanvas, 0, 0, size, size);
     const scale = size / this.opts.worldSize;
+    if (spritesReady) this.drawRockSprites(tctx, env, scale, 0, 0);
     this.drawLandmarks(tctx, landmarks, stageId, scale, 0, 0);
     this.drawEdges(tctx, state, scale, 0, 0);
     this.drawNodes(tctx, state, scale, 0, 0);
@@ -290,7 +343,9 @@ export class CanvasRenderer {
     });
   }
 
-  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): void {
+  // 戻り値: 岩スプライト用アセットがロード済みか (呼び出し側が
+  // drawRockSprites を呼ぶかどうかの判断に使う)。
+  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): boolean {
     const data = this.fieldImage.data;
     const bioData = bio.field.data;
     const nutData = env.nutrients.data;
@@ -317,7 +372,13 @@ export class CanvasRenderer {
       || Math.abs(maxBio - this.prevMaxBio) / Math.max(this.prevMaxBio, 1e-6) > 0.02;
     const heatChanged = this.prevShowHeat !== this.opts.showHeat;
     const stageChanged = this.prevStageId !== null && this.prevStageId !== stageId;
-    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged;
+    // M21: 岩スプライト用アセットが (ロード完了して) 使えるようになった/
+    // 使えなくなった瞬間は、既に焼いた岩色の生ピクセルを消すために
+    // 全面再計算する (以後は spritesReady のまま変わらないので通常は
+    // このチェックのコストはほぼゼロ)。
+    const spritesReady = assets.getSprite('rock-cluster', 1) !== null;
+    const spritesReadyChanged = this.prevSpritesReady !== spritesReady;
+    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged || spritesReadyChanged;
     const rockColor = STAGE_ROCK_COLOR[stageId];
     const bgInner = STAGE_BG[stageId].inner;
     // GRAIN_ALPHA を先に掛けておき、ホットループ内では乗算1回で済ませる。
@@ -413,7 +474,11 @@ export class CanvasRenderer {
         // 障害物 — ステージごとの石材色 (洞窟は青灰、砂漠は赤茶、都市跡は風化ベージュ)。
         // M16.5: 単色のぼかし塊だと質感が無いため、まだら (陰影) ノイズを
         // 明度に乗せて「陰影とエッジのある岩」に近づける。
-        if (ob > 0.5) {
+        // M21: 岩スプライトが使えるときは、ここでの塗りつぶしをやめて
+        // drawRockSprites (スクリーン解像度) に描画を譲る。ぼかし塊の
+        // 上にスプライトを重ねると輪郭からはみ出た旧ぼかしが透けて
+        // 見えてしまうため。
+        if (ob > 0.5 && !spritesReady) {
           const shade = 0.72 + hashNoise(x + 5000, y + 5000) * 0.55;
           [r, g, b] = blend(
             r, g, b,
@@ -498,6 +563,97 @@ export class CanvasRenderer {
     this.prevMaxBio = maxBio;
     this.prevShowHeat = this.opts.showHeat;
     this.prevStageId = stageId;
+    this.prevSpritesReady = spritesReady;
+    return spritesReady;
+  }
+
+  // M21: ステージごとの地面タイルテクスチャをスクリーン解像度のまま
+  // createPattern で敷き込む。96×96 の fieldCanvas とは独立にズーム/パンの
+  // カメラ変換だけをパターンの変換行列に反映するので、ズームしてもテクスチャ
+  // の実解像度が保たれる (G3 の解消条件)。アセット未ロードなら何もせず、
+  // 呼び出し側で既に描いた STAGE_BG のグラデーションがそのまま地面になる。
+  private drawTerrainTexture(ctx: CanvasRenderingContext2D, stageId: StageId, scale: number, offX: number, offY: number, left: number, top: number, side: number): void {
+    const name = TILE_TEXTURE_BY_STAGE[stageId];
+    const img = assets.getTexture(name);
+    if (!img || img.naturalWidth === 0) return;
+
+    let pattern = this.patternCache.get(name);
+    if (!pattern) {
+      const created = ctx.createPattern(img, 'repeat');
+      if (!created) return;
+      pattern = created;
+      this.patternCache.set(name, pattern);
+    }
+    const tilePx = TILE_WORLD_SIZE * scale;
+    const s = tilePx / img.naturalWidth;
+    if (typeof DOMMatrix !== 'undefined' && pattern.setTransform) {
+      pattern.setTransform(new DOMMatrix().translate(offX, offY).scale(s, s));
+    }
+    ctx.save();
+    ctx.fillStyle = pattern;
+    ctx.fillRect(left, top, side, side);
+    ctx.restore();
+  }
+
+  // M21: 「中央がやや明るいラジアルグラデーション1枚」だった光をやめ、
+  // ワールド座標に固定したまばらな明るい斑点 (木漏れ日) を敷く。カメラの
+  // 表示範囲だけを走査するので、ズーム/パンしても斑点の実寸 (=世界座標の
+  // 大きさ) は変わらない。
+  private drawDappledLight(ctx: CanvasRenderingContext2D, view: WorldView, scale: number, offX: number, offY: number): void {
+    const cell = DAPPLE_CELL_WORLD;
+    const x0 = Math.floor(view.worldLeft / cell) - 1;
+    const x1 = Math.ceil((view.worldLeft + view.worldSpan) / cell) + 1;
+    const y0 = Math.floor(view.worldTop / cell) - 1;
+    const y1 = Math.ceil((view.worldTop + view.worldSpan) / cell) + 1;
+    const cellPx = cell * scale;
+    ctx.save();
+    for (let gy = y0; gy <= y1; gy++) {
+      for (let gx = x0; gx <= x1; gx++) {
+        const n = hashNoise(gx, gy);
+        if (n < DAPPLE_THRESHOLD) continue;
+        const alpha = (n - DAPPLE_THRESHOLD) * (DAPPLE_MAX_ALPHA / (1 - DAPPLE_THRESHOLD));
+        ctx.fillStyle = `rgba(255, 240, 200, ${alpha.toFixed(3)})`;
+        ctx.fillRect(offX + gx * cellPx, offY + gy * cellPx, cellPx + 1, cellPx + 1);
+      }
+    }
+    ctx.restore();
+  }
+
+  // M21: 障害物フィールドの連結成分ごとに rock-cluster / small-stone
+  // スプライトを配置する。接地影 (AO) と輪郭の淡い明暗エッジで「陰影と
+  // エッジのある岩」を表現する (旧: 96×96 のぼかし色塊)。
+  private drawRockSprites(ctx: CanvasRenderingContext2D, env: GridEnvironment, scale: number, offX: number, offY: number): void {
+    const blobs = extractTerrainBlobs(env.obstacle.data, this.opts.fieldSize, this.opts.worldSize);
+    for (const blob of blobs) {
+      const family = blob.cellCount <= SMALL_BLOB_MAX_CELLS ? 'small-stone' : 'rock-cluster';
+      const count = SPRITE_FAMILIES[family] ?? 1;
+      const idx = 1 + Math.min(count - 1, Math.floor(hashNoise(Math.round(blob.cx * 13), Math.round(blob.cy * 13)) * count));
+      const sprite = assets.getSprite(family, idx);
+      if (!sprite) continue;
+
+      const cx = offX + blob.cx * scale;
+      const cy = offY + blob.cy * scale;
+      const sizePx = blob.radiusWorld * ROCK_SPRITE_SCALE * scale;
+      const rot = hashNoise(Math.round(blob.cx * 7), Math.round(blob.cy * 7)) * Math.PI * 2;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + sizePx * 0.26, sizePx * 0.46, sizePx * 0.17, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 245, 220, 0.22)';
+      ctx.lineWidth = Math.max(0.6, sizePx * 0.02);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, sizePx * 0.42, sizePx * 0.4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rot);
+      ctx.drawImage(sprite, -sizePx / 2, -sizePx / 2, sizePx, sizePx);
+      ctx.restore();
+    }
   }
 
   // state (nodes/edges の参照) が前回と同じなら nodeMap / radius バケツを
