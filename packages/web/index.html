@@ -70,6 +70,11 @@
 
       <main class="stage">
         <aside class="panel left">
+          <!-- M19: ドロワーのスライドイン。オーバーレイ本体 (.panel) は
+               M15.5 の教訓どおり display:none/flex のまま (position:fixed の
+               containing block を transform で変えないため)、内側の
+               .drawer-content だけを transform でスライドさせる。 -->
+          <div class="drawer-content">
           <section class="card">
             <h2>メインクエスト</h2>
             <div class="quest-item">
@@ -190,6 +195,7 @@
               <p class="empty">まだ種を採取していない…</p>
             </div>
           </section>
+          </div>
         </aside>
 
         <div class="canvas-wrap">
@@ -205,6 +211,7 @@
         </div>
 
         <aside class="panel right">
+          <div class="drawer-content">
           <section class="card">
             <h2>環境を整える</h2>
             <div class="palette">
@@ -350,6 +357,7 @@
             <button id="reset-view">全体を見る</button>
             <button id="toggle-ambient" title="環境音 + アンビエントBGMを再生する (WebAudioで生成)">🔈 環境音</button>
           </section>
+          </div>
         </aside>
       </main>
 
@@ -410,6 +418,20 @@
           <div class="dr-actions">
             <button id="onboarding-skip" title="オンボーディングをスキップする">スキップ</button>
             <button id="onboarding-next" class="harvest-btn">次へ ▶</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- M19: オンボーディング直後の初回だけ出す「デイループ / 見守り」の
+           2択。既存ユーザー (morpho.dayLoopMode.v1 が既に設定済み) には
+           出さず、現在の選択を維持する。 -->
+      <div id="day-loop-choice" class="modal-overlay onboarding-overlay" hidden>
+        <div class="modal card onboarding-card">
+          <h2>どちらで育てますか?</h2>
+          <p>「デイループ」は1日ずつ仕込んで委ねる遊び方、「見守り」は連続再生であなたのペースで眺める遊び方です。後からいつでもヘッダのボタンで切り替えられます。</p>
+          <div class="dr-actions">
+            <button id="day-loop-choice-watch" title="見守り (連続再生) で始める">見守りで眺める</button>
+            <button id="day-loop-choice-loop" class="harvest-btn" title="デイループ (1日ずつ) で始める">デイループで遊ぶ</button>
           </div>
         </div>
       </div>

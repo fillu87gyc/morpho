@@ -69,6 +69,7 @@ body { overflow: hidden; }
 /* M11: 通貨HUD */
 .wallet-bar { display: flex; gap: 8px; }
 .wallet-chip {
+  position: relative;
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 10px;
   background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 999px;
@@ -77,6 +78,22 @@ body { overflow: hidden; }
 }
 .wallet-chip.flash { color: var(--accent); border-color: var(--accent-soft); }
 .wallet-ico { font-size: 13px; }
+/* M19: 通貨増減の「+n」フロート演出 (prefers-reduced-motion では main.ts 側で
+   そもそも生成しない)。 */
+.wallet-float {
+  position: absolute; top: -2px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  pointer-events: none;
+  animation: wallet-float-up 900ms ease-out forwards;
+}
+.wallet-float.up { color: var(--green); }
+.wallet-float.down { color: var(--danger); }
+@keyframes wallet-float-up {
+  0% { opacity: 0; transform: translate(-50%, 4px); }
+  15% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -18px); }
+}
 .time { display: flex; align-items: center; gap: 16px; }
 .time .day { font-size: 13px; color: var(--text-dim); }
 .time .day span { color: var(--text); font-weight: 600; margin-left: 4px; }
@@ -195,6 +212,11 @@ body { overflow: hidden; }
 }
 
 .panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+/* M19: ドロワースライドイン用のラッパー。デスクトップでは display:contents で
+   レイアウトに関与させず (.panel の直接の flex 子であるかのように振る舞う)、
+   モバイルのドロワー内でだけ実体を持たせて transform アニメーションを効かせる
+   (900px 以下の上書きは下の @media 内)。 */
+.drawer-content { display: contents; }
 .panel::-webkit-scrollbar { width: 6px; }
 .panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
 
@@ -711,6 +733,28 @@ body { overflow: hidden; }
     display: flex;
   }
   .panel .card { flex: none; }
+
+  /* M19: ドロワーのスライドイン。.panel 自体は display 切替のまま (M15.5 の
+     containing-block 教訓)、内側の .drawer-content だけを transform で
+     動かす。left は左から、right は右からスライドインする。display:contents
+     では transform が効かないため、ここでだけ実体を持つボックスに戻す
+     (.panel と同じ column/gap を再現し、見た目のスタッキングを保つ)。 */
+  .drawer-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transform: translateX(-16px);
+    opacity: 0;
+    transition: transform 220ms ease-out, opacity 220ms ease-out;
+  }
+  .panel.right .drawer-content { transform: translateX(16px); }
+  body.drawer-open .drawer-content {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .drawer-content { transition: none; transform: none; opacity: 1; }
+  }
 
   /* 下部ツールバー: ツール一式を常時表示 (M9 の prepare 中は「観察をはじめる」
      大ボタンをその直上に固定する)。 */

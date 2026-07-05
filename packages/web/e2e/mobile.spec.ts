@@ -107,6 +107,13 @@ test.describe('縦画面レイアウト (M15)', () => {
     await page.click('#onboarding-next');
     await expect(page.locator('#onboarding')).toBeHidden();
 
+    // M19: オンボーディング直後の初回だけ出る「デイループ/見守り」の2択。
+    // このテストは既存の手動トグル (#day-loop-mode-toggle) を検証したいので
+    // 「見守り」を選んで従来通りの起点にする。
+    await expect(page.locator('#day-loop-choice')).toBeVisible();
+    await page.click('#day-loop-choice-watch');
+    await expect(page.locator('#day-loop-choice')).toBeHidden();
+
     await waitForReady(page);
     await expectNoHorizontalOverflow(page);
 

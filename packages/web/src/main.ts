@@ -283,6 +283,7 @@ function renderOnboardingStep(): void {
 function closeOnboarding(): void {
   onboardingEl.hidden = true;
   markOnboardingSeen();
+  maybeShowDayLoopChoice();
 }
 
 onboardingNextBtn.addEventListener('click', () => {
@@ -451,6 +452,18 @@ for (const btn of toolButtons) {
   btn.appendChild(badge);
 }
 
+// M19: 通貨増減の「+n」フロート演出。M11 の簡易フラッシュに追加する形で、
+// 残高チップから差分が浮いて消える。prefers-reduced-motion では出さない。
+const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function spawnCurrencyFloat(currency: CurrencyKind, delta: number): void {
+  if (delta === 0 || prefersReducedMotion()) return;
+  const el = document.createElement('span');
+  el.className = `wallet-float ${delta > 0 ? 'up' : 'down'}`;
+  el.textContent = `${delta > 0 ? '+' : ''}${delta.toLocaleString('ja-JP')}`;
+  chipEl[currency].appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
 function updateWalletUi(): void {
   const b = wallet.all();
   for (const currency of Object.keys(curEl) as CurrencyKind[]) {
@@ -459,6 +472,7 @@ function updateWalletUi(): void {
     if (lastShownBalance[currency] !== undefined) {
       chipEl[currency].classList.add('flash');
       setTimeout(() => chipEl[currency].classList.remove('flash'), 400);
+      spawnCurrencyFloat(currency, v - lastShownBalance[currency]!);
     }
     lastShownBalance[currency] = v;
     curEl[currency].textContent = v.toLocaleString('ja-JP');
@@ -618,6 +632,29 @@ function applyDayLoopModeUI(): void {
 applyDayLoopModeUI();
 if (dayLoopMode) enterPrepare(0);
 
+// M19: オンボーディング直後の初回のみ「デイループ / 見守り」の2択を出す。
+// 既存ユーザー (キーが既に設定済み = 過去にこの選択かトグル操作をしたことが
+// ある) には出さず、現在の選択をそのまま維持する。
+const dayLoopChoiceEl = document.getElementById('day-loop-choice') as HTMLElement;
+const dayLoopChoiceWatchBtn = document.getElementById('day-loop-choice-watch') as HTMLButtonElement;
+const dayLoopChoiceLoopBtn = document.getElementById('day-loop-choice-loop') as HTMLButtonElement;
+function hasChosenDayLoopMode(): boolean {
+  try { return localStorage.getItem(DAY_LOOP_MODE_KEY) !== null; } catch { return true; }
+}
+function applyDayLoopChoice(loop: boolean): void {
+  dayLoopChoiceEl.hidden = true;
+  dayLoopMode = loop;
+  saveDayLoopMode(loop);
+  applyDayLoopModeUI();
+  if (loop) enterPrepare(game.ready ? game.snapshot().state.tick : 0);
+}
+function maybeShowDayLoopChoice(): void {
+  if (hasChosenDayLoopMode()) return;
+  dayLoopChoiceEl.hidden = false;
+}
+dayLoopChoiceWatchBtn.addEventListener('click', () => applyDayLoopChoice(false));
+dayLoopChoiceLoopBtn.addEventListener('click', () => applyDayLoopChoice(true));
+
 dayLoopModeBtn.addEventListener('click', () => {
   dayLoopMode = !dayLoopMode;
   saveDayLoopMode(dayLoopMode);
@@ -683,10 +720,18 @@ function showDayResult(day: number): void {
     drEvents.appendChild(li);
   }
 
-  if (dayResultThumb) { URL.revokeObjectURL(dayResultThumb); dayResultThumb = null; }
+  // M19 (P8): renderThumbnail() は非同期 (toBlob) なので、モーダルが開く
+  // 前回の revoke で drThumb.src が「死んだ blob URL」を指したままの一瞬が
+  // 壊れ画像アイコンとして見えていた。src を先に外して背景色 (.dr-thumb の
+  // placeholder) に戻し、新しい URL が届いてから src を張って古い URL を
+  // revoke する (順序を入れ替えて「無参照の一瞬」を作らない)。
+  drThumb.removeAttribute('src');
+  const previousThumb = dayResultThumb;
+  dayResultThumb = null;
   void renderer.renderThumbnail(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, 200).then((url) => {
     dayResultThumb = url;
     drThumb.src = url;
+    if (previousThumb) URL.revokeObjectURL(previousThumb);
   });
 
   // M11: 日次結果の成長量に応じて 🪙 を付与する (基本給 + 前日比が伸びたボーナス)。
