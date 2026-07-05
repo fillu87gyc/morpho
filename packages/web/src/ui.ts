@@ -2,7 +2,7 @@
 // - 値が変わったところだけ書き換える (textContent が等しければスキップ)。
 // - 数値はモックアップに合わせて千桁区切り。
 
-import type { Tool, StageId } from './game.js';
+import type { Tool, StageId, EvolutionLog } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
 import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
@@ -12,9 +12,12 @@ import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 import type { Album } from './album.js';
 import { allCatalogueEntries } from './catalogue.js';
 import type { CatalogueThumbs } from './catalogue-thumbs.js';
-import { starsOf } from './trait-labels.js';
+import { starsOf, typeDescriptionFor } from './trait-labels.js';
 import { estimateEraEta, type EraSample } from './era.js';
 import { formatMMSS } from './day-loop.js';
+import { filterByArea, type WorldEvent } from './world-events.js';
+import type { WorldView } from './camera.js';
+import { localTimeFor } from './daytime.js';
 
 type El = HTMLElement;
 
@@ -91,6 +94,7 @@ export class Ui {
   private tVitalityN = el('t-vitality-n');
   private tAdaptN = el('t-adapt-n');
   private indTypeN = el('ind-type-n');
+  private indTypeDesc = el('ind-type-desc');
   // 図鑑
   private ency = el('ency');
   private encyProgress = el('ency-progress');
@@ -111,11 +115,16 @@ export class Ui {
   // logs
   private log = el('log');
   private evo = el('evo');
+  // M17: 「このエリアを注視中」。camera の視野内 (WorldEvent.x/y と交差) だけに
+  // 絞るトグル。座標を持たない出来事は絞り込みの対象外 (常に通す)。
+  private logAreaToggle = el('log-area-toggle') as HTMLButtonElement;
+  private logAreaLabel = el('log-area-label');
+  private areaWatch = false;
   // brush
   private brushN = el('brush-n');
 
   private lastEvoLen = -1;
-  private lastEventLen = -1;
+  private lastEventFilterKey = '';
   private lastEncyVersion = -1;
   private lastAchVersion = -1;
   private lastBoardVersion = -1;
@@ -184,6 +193,14 @@ export class Ui {
       }
     };
     for (const p of presets) p.btn.addEventListener('click', () => applyPreset(p.id, true));
+    this.logAreaToggle.addEventListener('click', () => {
+      this.areaWatch = !this.areaWatch;
+      this.logAreaToggle.setAttribute('aria-pressed', String(this.areaWatch));
+      this.logAreaLabel.hidden = !this.areaWatch;
+      // render() の filterKey に areaWatch の状態が織り込まれるため、次の
+      // render() 呼び出しで自動的に再描画される (ここで明示的にキャッシュを
+      // 破棄する必要はない)。
+    });
     let initialPreset: SpeedPreset = '1';
     try {
       const saved = localStorage.getItem(SPEED_PRESET_KEY);
@@ -216,7 +233,9 @@ export class Ui {
     document.querySelectorAll<HTMLButtonElement>('button.tool[data-tool="food"]').forEach((b) => b.classList.add('active'));
   }
 
-  render(): void {
+  // M17: extraEvo は main.ts 側で検出した突然変異・形質獲得イベント
+  // (mutation-events.ts、web 側派生で sim 無改修) を「進化の記録」に合流させる。
+  render(view?: WorldView, extraEvo: EvolutionLog[] = []): void {
     const s = this.game.snapshot();
     setText(this.day, String(s.day));
     setText(this.era, s.era.name);
@@ -324,6 +343,7 @@ export class Ui {
 
     // 個体ビュー (6軸 + タイプ)
     setText(this.indTypeN, s.typeInfo.label);
+    setText(this.indTypeDesc, typeDescriptionFor(s.typeInfo.id));
     setBar(this.tHealth, s.individuality.health);
     setBar(this.tVitality, s.individuality.vitality);
     setBar(this.tExp, s.individuality.exploration);
@@ -337,19 +357,32 @@ export class Ui {
     setText(this.tStbN, pct(s.individuality.stability));
     setText(this.tAdaptN, pct(s.individuality.adaptability));
 
-    // ログ (差分が出たときだけ書き換える)
-    const events = this.game.events();
-    if (this.lastEventLen !== events.length) {
+    // ログ (差分が出たときだけ書き換える)。M17: WorldEvent.id は単調増加なので
+    // 「最新の id + 注視フィルタの状態」をキーに判定する (length だけだと、
+    // 上限到達後は push しても length が変わらず更新を見逃す)。
+    const allEvents = this.game.events();
+    const latestId = allEvents[0]?.id ?? -1;
+    const filterKey = this.areaWatch && view ? `${view.worldLeft.toFixed(1)}_${view.worldTop.toFixed(1)}_${view.worldSpan.toFixed(1)}` : '';
+    const eventsKey = `${latestId}|${filterKey}`;
+    if (this.lastEventFilterKey !== eventsKey) {
+      const shown: readonly WorldEvent[] = this.areaWatch && view ? filterByArea(allEvents, view) : allEvents;
       this.log.innerHTML = '';
-      for (const e of events) {
+      for (const e of shown) {
         const li = document.createElement('li');
-        li.textContent = e;
+        const time = document.createElement('span');
+        time.className = 'time';
+        time.textContent = localTimeFor(e.tick).slice(0, 5);
+        const body = document.createElement('span');
+        body.className = 'body';
+        body.textContent = e.text;
+        li.appendChild(time);
+        li.appendChild(body);
         this.log.appendChild(li);
       }
-      this.lastEventLen = events.length;
+      this.lastEventFilterKey = eventsKey;
     }
 
-    const evo = this.game.evolution();
+    const evo = [...this.game.evolution(), ...extraEvo].sort((a, b) => b.tick - a.tick);
     if (this.lastEvoLen !== evo.length) {
       this.evo.innerHTML = '';
       if (evo.length === 0) {

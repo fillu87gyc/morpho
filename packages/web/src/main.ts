@@ -26,6 +26,9 @@ import { CatalogueThumbs } from './catalogue-thumbs.js';
 import type { CatalogueContext } from './catalogue.js';
 import { localTimeFor, nightFactorFor } from './daytime.js';
 import { ONBOARDING_STEPS, hasSeenOnboarding, markOnboardingSeen } from './onboarding.js';
+import { detectMutation, detectNewTraitChips, newTraitChipText } from './mutation-events.js';
+import type { EvolutionLog } from './game.js';
+import { buildChartLayout, drawChart, type ChartSeries } from './chart.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -38,6 +41,29 @@ const lineage = new Lineage();
 const album = new Album();
 const ambient = new Ambient();
 const dayReport = new DayReport();
+// M17: 突然変異・形質獲得イベント。sim には手を入れず、日境界で前日と当日の
+// DayRecord.traits / traitChipsFor() を比較した web 側派生として「進化の記録」
+// に流し込む (game.ts の evoLog/eraLog とは別に main.ts 側で保持し、
+// ui.render() で合流させる)。
+const MAX_LOCAL_EVO = 30;
+let localEvoLog: EvolutionLog[] = [];
+function pushLocalEvo(tick: number, text: string): void {
+  localEvoLog.unshift({ tick, text });
+  if (localEvoLog.length > MAX_LOCAL_EVO) localEvoLog.pop();
+}
+// 日境界で dayReport.record() の直後に呼ぶ。前日の記録がなければ何もしない
+// (初日は比較対象がない)。
+function checkMutationEvents(day: number): void {
+  const prev = dayReport.of(day - 1);
+  const cur = dayReport.of(day);
+  if (!prev || !cur) return;
+  const snap = game.snapshot();
+  const mutationText = detectMutation(prev.traits, cur.traits);
+  if (mutationText) pushLocalEvo(snap.state.tick, mutationText);
+  const newChips = detectNewTraitChips(snap.genome, prev.traits, cur.traits, snap.typeInfo.label);
+  const chipText = newTraitChipText(newChips);
+  if (chipText) pushLocalEvo(snap.state.tick, chipText);
+}
 const wallet = new Wallet();
 const dailies = new DailyTracker();
 const identity = new Identity();
@@ -110,6 +136,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     dayReport.reset();
+    localEvoLog = [];
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
@@ -130,6 +157,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     fitCanvas();
     ambient.setStage(id);
     dayReport.reset();
+    localEvoLog = [];
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
@@ -179,6 +207,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     dayReport.reset();
+    localEvoLog = [];
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
@@ -251,6 +280,43 @@ if (!hasSeenOnboarding()) {
   onboardingEl.hidden = false;
   renderOnboardingStep();
 }
+
+// ── M17: 統計グラフ ────────────────────────────────────
+// dayReport (直近60日) の3軸スコア + 質量 (右軸) を canvas 折れ線チャートで見せる。
+// buildChartLayout は chart.ts の純粋関数、描画はここで一度だけ (モーダルを
+// 開いたとき / 開いている間に新しい日が記録されたときだけ) 行えば十分。
+const chartModalEl = document.getElementById('chart-modal') as HTMLElement;
+const chartCanvasEl = document.getElementById('chart-canvas') as HTMLCanvasElement;
+const chartEmptyEl = document.getElementById('chart-empty') as HTMLElement;
+const chartOpenBtn = document.getElementById('chart-open') as HTMLButtonElement;
+const chartCloseBtn = document.getElementById('chart-close') as HTMLButtonElement;
+
+function renderChart(): void {
+  const records = dayReport.list();
+  if (records.length < 2) {
+    chartCanvasEl.hidden = true;
+    chartEmptyEl.hidden = false;
+    return;
+  }
+  chartCanvasEl.hidden = false;
+  chartEmptyEl.hidden = true;
+  const days = records.map((r) => r.day);
+  const series: ChartSeries[] = [
+    { label: '探索性', color: '#8fd0ff', values: records.map((r) => r.traits.exploration), axis: 'left' },
+    { label: '効率性', color: '#ffd27a', values: records.map((r) => r.traits.efficiency), axis: 'left' },
+    { label: '安定性', color: '#9dffa0', values: records.map((r) => r.traits.stability), axis: 'left' },
+    { label: '質量', color: '#e8b84b', values: records.map((r) => r.massKg), axis: 'right' },
+  ];
+  const layout = buildChartLayout(days, series, chartCanvasEl.width, chartCanvasEl.height);
+  const ctx = chartCanvasEl.getContext('2d');
+  if (ctx) drawChart(ctx, layout);
+}
+
+chartOpenBtn.addEventListener('click', () => {
+  chartModalEl.hidden = false;
+  renderChart();
+});
+chartCloseBtn.addEventListener('click', () => { chartModalEl.hidden = true; });
 
 // ── M11: 通貨HUD ──────────────────────────────────────
 const CURRENCY_ICON: Record<CurrencyKind, string> = { sizuku: '🪙', wakaba: '🍃', horoishi: '🍄' };
@@ -483,6 +549,7 @@ drAlbumBtn.addEventListener('click', () => {
 function showDayResult(day: number): void {
   const snap = game.snapshot();
   dayReport.record({ day, traits: snap.traits, massKg: snap.world.massKg, areaM2: snap.world.areaM2 });
+  checkMutationEvents(day);
   const delta = dayReport.delta(day);
 
   drDay.textContent = String(day);
@@ -801,6 +868,7 @@ function frame() {
     if (snap.day > lastWatchedDay) {
       if (!dayLoopMode && lastWatchedDay >= 0) {
         dayReport.record({ day: lastWatchedDay, traits: snap.traits, massKg: snap.world.massKg, areaM2: snap.world.areaM2 });
+        checkMutationEvents(lastWatchedDay);
       }
       lastWatchedDay = snap.day;
     }
@@ -886,7 +954,7 @@ function frame() {
     // M11: 実績解除は希少通貨 🍄 の報酬源。
     for (const id of newlyUnlocked) wallet.earn('horoishi', 1, `実績「${id}」解除`);
 
-    ui.render();
+    ui.render(camera.view(), localEvoLog);
     timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, snap.stage.id, snap.landmarks, 96));
     renderTimeline();
 

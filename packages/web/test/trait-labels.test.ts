@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { starsOf, traitChipsFor, environmentTagsFor } from '../src/trait-labels.js';
-import type { Genome, Individuality, Traits } from '@morpho/sim';
+import { starsOf, traitChipsFor, environmentTagsFor, typeDescriptionFor } from '../src/trait-labels.js';
+import type { Genome, Individuality, Traits, IndividualTypeId } from '@morpho/sim';
 import type { EnvBalance } from '../src/game.js';
 
 function ind(score: number): Individuality {
@@ -60,6 +60,17 @@ describe('traitChipsFor', () => {
       'X',
     );
     expect(chips.length).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('typeDescriptionFor', () => {
+  it('5タイプすべてに空でない1文が定義されている (スナップショット代わりに固定)', () => {
+    const ids: IndividualTypeId[] = ['thick-connector', 'spreader', 'efficient', 'resilient', 'balanced'];
+    for (const id of ids) {
+      const text = typeDescriptionFor(id);
+      expect(text.length).toBeGreaterThan(0);
+    }
+    expect(typeDescriptionFor('thick-connector')).toBe('太い幹をつくり、安定したネットワークを好む。');
   });
 });
 

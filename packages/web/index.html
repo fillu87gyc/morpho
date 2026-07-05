@@ -153,10 +153,13 @@
               <span id="ind-stars" class="ind-stars" title="個性の総合評価">★★★☆☆</span>
               <span id="local-time" class="local-time" title="ローカルタイム (1日=24時間換算)">00:00:00</span>
               <button id="track-toggle" class="track-toggle" title="この個体を追跡する (カメラが重心へついてくる)">🎯 追跡</button>
+              <button id="chart-open" class="track-toggle" title="日ごとの推移をグラフで見る">📊</button>
             </div>
             <div id="ind-chips" class="chip-row"></div>
             <div id="ind-env-chips" class="chip-row env-chips"></div>
             <div class="ind-type"><span class="ind-type-lbl">タイプ</span><span id="ind-type-n" class="ind-type-n">—</span></div>
+            <!-- M17: タイプ別特徴文。1文の定型文で個体の傾向を説明する。 -->
+            <p id="ind-type-desc" class="ind-type-desc"></p>
             <div class="trait">
               <span class="lbl">健康度</span>
               <div class="progress"><div id="t-health" class="bar"></div></div>
@@ -281,7 +284,12 @@
           </section>
 
           <section class="card">
-            <h2>最近の出来事</h2>
+            <h2>最近の出来事
+              <!-- M17: 座標を持つ出来事だけを、現在の視野 (camera) と交差する
+                   ものに絞る。座標なしの出来事 (道具の設置以外) は常に通す。 -->
+              <button id="log-area-toggle" class="log-area-toggle" title="今見えている範囲の出来事だけに絞る" aria-pressed="false">👁</button>
+            </h2>
+            <p id="log-area-label" class="log-area-label" hidden>このエリアを注視中</p>
             <ul id="log" class="log"></ul>
           </section>
 
@@ -379,6 +387,25 @@
           <div class="dr-actions">
             <button id="onboarding-skip" title="オンボーディングをスキップする">スキップ</button>
             <button id="onboarding-next" class="harvest-btn">次へ ▶</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- M17: 統計グラフ。個体ビューの 📊 から開く。直近60日 (dayReport) の
+           3軸スコア + 質量 (右軸) を canvas 折れ線チャートで見せる。 -->
+      <div id="chart-modal" class="modal-overlay" hidden>
+        <div class="modal card chart-card">
+          <h2>成長の推移</h2>
+          <canvas id="chart-canvas" width="480" height="260"></canvas>
+          <p id="chart-empty" class="chart-empty" hidden>まだ記録が足りません</p>
+          <div class="chart-legend">
+            <span class="chart-legend-item"><i class="dot" style="background:#8fd0ff"></i>探索性</span>
+            <span class="chart-legend-item"><i class="dot" style="background:#ffd27a"></i>効率性</span>
+            <span class="chart-legend-item"><i class="dot" style="background:#9dffa0"></i>安定性</span>
+            <span class="chart-legend-item"><i class="dot" style="background:#e8b84b"></i>質量 (右軸)</span>
+          </div>
+          <div class="dr-actions">
+            <button id="chart-close" class="harvest-btn">閉じる</button>
           </div>
         </div>
       </div>

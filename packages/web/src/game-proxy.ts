@@ -8,13 +8,14 @@ import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type Sta
 import type { ToWorkerMessage, FromWorkerMessage, PerfInfo } from './worker-protocol.js';
 import type { Genome, SimState, Vec2 } from '@morpho/sim';
 import { unpackNodes, unpackEdges } from './snapshot-codec.js';
+import type { WorldEvent } from './world-events.js';
 
 const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
 
 export class GameProxy {
   private worker: Worker;
   private latest: GameSnapshot | null = null;
-  private recentEvents: string[] = [];
+  private recentEvents: readonly WorldEvent[] = [];
   private evoLog: EvolutionLog[] = [];
   private latestPerf: PerfInfo = NO_PERF;
   // M9: Worker が日境界に到達して自動停止したことを、メインループが
@@ -91,7 +92,7 @@ export class GameProxy {
   }
 
   snapshot(): GameSnapshot { return this.current(); }
-  events(): string[] { return this.recentEvents; }
+  events(): readonly WorldEvent[] { return this.recentEvents; }
   evolution(): EvolutionLog[] { return this.evoLog; }
   perf(): PerfInfo { return this.latestPerf; }
 }

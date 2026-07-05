@@ -3,7 +3,7 @@
 //   - traitChipsFor: Genome + タイプラベルから特性チップ (2〜4個) を導出
 //   - environmentTagsFor: 環境バランスから「育った環境」タグを導出
 
-import type { Genome, Individuality, Traits } from '@morpho/sim';
+import type { Genome, Individuality, Traits, IndividualTypeId } from '@morpho/sim';
 import type { EnvBalance } from './game.js';
 
 // 6軸の単純平均を分位で1..5に量子化する。閾値は経験的に決め、テストで固定する。
@@ -33,6 +33,21 @@ export function traitChipsFor(genome: Genome, traits: Traits, typeLabel: string)
   // (履歴を追跡せず、現在の効率性だけで判定する簡易版)。
   if (traits.efficiency > 0.7) chips.push('迷路構造が得意');
   return chips.slice(0, 4);
+}
+
+// M17: タイプ別特徴文。個体ビューの特性チップ直下と図鑑エントリの
+// ツールチップに表示する1文の定型文 (モックアップ①の「太い幹をつくり、
+// 安定したネットワークを好む。」に相当)。
+const TYPE_DESCRIPTION: Record<IndividualTypeId, string> = {
+  'thick-connector': '太い幹をつくり、安定したネットワークを好む。',
+  'spreader': '細い枝を四方に伸ばし、まだ見ぬ土地を探ることを好む。',
+  'efficient': '無駄なく最短距離をつなぎ、少ない管で用を足す。',
+  'resilient': '傷んだ管をすぐに立て直し、過酷な環境でも粘り強く育つ。',
+  'balanced': 'どの方向にも偏らず、状況に応じて姿を変える。',
+};
+
+export function typeDescriptionFor(id: IndividualTypeId): string {
+  return TYPE_DESCRIPTION[id];
 }
 
 // 育った環境の実績をタグ化する。EnvBalance の5軸から導出するため、

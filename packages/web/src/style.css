@@ -165,6 +165,14 @@ body { overflow: hidden; }
   margin-bottom: 8px; font-variant-numeric: tabular-nums;
 }
 .onboarding-card p { font-size: 13px; line-height: 1.6; color: var(--text); margin: 0 0 14px; }
+
+/* M17: 統計グラフ */
+.chart-card { width: min(520px, 92vw); }
+#chart-canvas { width: 100%; height: auto; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 8px; }
+.chart-empty { font-size: 12px; color: var(--text-dim); font-style: italic; text-align: center; padding: 40px 0; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; font-size: 11px; color: var(--text-dim); }
+.chart-legend-item { display: flex; align-items: center; gap: 4px; }
+.chart-legend-item .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 #dr-album {
   background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
   border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12px;
@@ -239,9 +247,22 @@ body { overflow: hidden; }
   cursor: pointer;
 }
 
-.log { list-style: none; padding: 0; margin: 0; font-size: 11px; color: var(--text-dim); }
-.log li { padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); }
+.log { list-style: none; padding: 0; margin: 0; font-size: 11px; color: var(--text-dim); max-height: 220px; overflow-y: auto; }
+.log li {
+  display: grid; grid-template-columns: 40px 1fr; gap: 8px; align-items: baseline;
+  padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04);
+}
 .log li:last-child { border-bottom: none; }
+.log li .time { color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums; }
+.log li .body { color: var(--text-dim); }
+/* M17: 「このエリアを注視中」トグル。h2 の右肩に小さく置く。 */
+.log-area-toggle {
+  float: right; width: 22px; height: 22px; line-height: 20px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--panel-edge);
+  background: var(--panel); color: var(--text-dim); cursor: pointer; font-size: 12px;
+}
+.log-area-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.log-area-label { margin: 0 0 6px; font-size: 10px; color: var(--accent); }
 
 .evo { list-style: none; padding: 0; margin: 0; font-size: 12px; max-height: 220px; overflow-y: auto; }
 .evo li {
@@ -268,6 +289,8 @@ body { overflow: hidden; }
 }
 .ind-type-lbl { color: var(--text-dim); }
 .ind-type-n { color: var(--accent); font-weight: 600; }
+/* M17: タイプ別特徴文 */
+.ind-type-desc { font-size: 11px; color: var(--text-dim); margin: -4px 0 8px; line-height: 1.5; }
 
 /* M12: 個体ビューの名前/★評価/追跡トグル/特性チップ */
 .ind-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }

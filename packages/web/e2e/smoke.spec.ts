@@ -150,7 +150,11 @@ test('エサツールを配置すると出来事ログに記録され、拠点�
   await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.3);
 
   await expect(page.locator('#w-ct')).toHaveText(String(before + 1));
-  await expect(page.locator('#log li').first()).toContainText('栄養を撒いた');
+  // M17: 最近の出来事は道具の設置と sim イベント (太い幹が育った 等) を
+  // 時刻付きで1本のログに統合したため、見守り中に他のイベントが同時多発する
+  // と「栄養を撒いた」が必ずしも先頭 (最新) とは限らない。ログ内のどこかに
+  // 現れることだけを確認する。
+  await expect(page.locator('#log')).toContainText('栄養を撒いた');
   expect(errors).toEqual([]);
 });
 

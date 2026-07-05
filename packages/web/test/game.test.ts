@@ -92,7 +92,7 @@ describe('Game', () => {
     g.apply({ x: 10, y: 10 });
     const after = g.snapshot();
     expect(after.world.coloniesTotal).toBe(before + 1);
-    expect(g.events()[0]).toContain('栄養を撒いた');
+    expect(g.events()[0]?.text).toContain('栄養を撒いた');
   });
 
   it('stone ツールを適用すると障害物フィールドに値が乗る', () => {

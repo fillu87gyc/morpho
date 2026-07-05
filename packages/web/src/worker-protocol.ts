@@ -4,6 +4,7 @@
 
 import type { Tool, GameSnapshot, EvolutionLog, StageId } from './game.js';
 import type { Genome, Vec2 } from '@morpho/sim';
+import type { WorldEvent } from './world-events.js';
 
 export type ToWorkerMessage =
   | { type: 'reset'; seed?: number; stageId?: StageId; parentGenome?: Genome }
@@ -58,6 +59,6 @@ export type WireSnapshot = Omit<GameSnapshot, 'state'> & {
 };
 
 export type FromWorkerMessage =
-  | { type: 'snapshot'; snapshot: WireSnapshot; events: string[]; evolution: EvolutionLog[]; perf: PerfInfo }
+  | { type: 'snapshot'; snapshot: WireSnapshot; events: readonly WorldEvent[]; evolution: EvolutionLog[]; perf: PerfInfo }
   // M9: runUntilTick の target に到達し、Worker が自動で speed=0 に止めた通知。
   | { type: 'dayCompleted' };
