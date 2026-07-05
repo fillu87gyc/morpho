@@ -8,7 +8,12 @@
 
 export type DayPhase = 'prepare' | 'observe' | 'result';
 
-export const TICKS_PER_DAY = 40;
+// M15.7: 実プレイ検証で「1日 ≈ 実時間0.64秒」(旧 TICK_INTERVAL_MS=16ms × 旧
+// TICKS_PER_DAY=40) が判明し、観察フェーズが一瞬で終わってしまう問題を
+// 修正した。tick数を増やす方向は sim CPU が伸びるだけなので、実時間側の
+// 引き伸ばし (sim-worker.ts の実時間ペーシング) と組み合わせて 6倍に
+// 引き上げる (中庸案。詳細は ROADMAP.md M15.7)。
+export const TICKS_PER_DAY = 240;
 
 export interface DayLoopState {
   readonly phase: DayPhase;

@@ -85,20 +85,6 @@ let tracking = false;
 // (M5: セッションをまたいで系統樹を続けられる)。
 const game = new GameProxy(lineage.current()?.genome);
 
-// M15.7: ×1 における「1日」の実時間長 (秒) を、クエリパラメータ (手動デバッグ用)
-// または localStorage (e2e の addInitScript 用、Worker はページの localStorage を
-// 直接読めないため main.ts 経由で中継する) から上書きできるようにする。
-// 本番の既定値 (sim-worker.ts の DEFAULT_SECONDS_PER_DAY) は変更しない。
-function resolveDayMsOverride(): number | null {
-  const fromQuery = new URLSearchParams(location.search).get('dayms');
-  const fromStorage = localStorage.getItem('morpho.e2eDayMs.v1');
-  const raw = fromQuery ?? fromStorage;
-  if (!raw) return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-const dayMsOverride = resolveDayMsOverride();
-if (dayMsOverride !== null) game.setSecondsPerDay(dayMsOverride / 1000);
 const renderer = new CanvasRenderer(canvas, {
   worldSize: game.worldSize,
   fieldSize: game.fieldSize,

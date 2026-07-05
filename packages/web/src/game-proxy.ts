@@ -9,6 +9,7 @@ import type { ToWorkerMessage, FromWorkerMessage, PerfInfo } from './worker-prot
 import type { Genome, SimState, Vec2 } from '@morpho/sim';
 import { unpackNodes, unpackEdges } from './snapshot-codec.js';
 import type { WorldEvent } from './world-events.js';
+import { readDayMsOverride } from './time-scale.js';
 
 const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
 
@@ -48,6 +49,9 @@ export class GameProxy {
         this.dayCompletedFlag = true;
       }
     };
+    // M15.7: URL パラメータ/localStorage による日長の上書き (開発/e2e 用フック)。
+    // reset より前に送り、起動直後の tick から新しいペースを使う。
+    this.send({ type: 'setDayMs', ms: readDayMsOverride() });
     if (parentGenome) this.send({ type: 'reset', parentGenome });
   }
 
@@ -70,8 +74,6 @@ export class GameProxy {
   // M8 P4: 早送りモード。描画/スナップショット送信を10fpsまで落とし、
   // 浮いた予算をtickに全振りするよう Worker に伝える。
   setFastForward(v: boolean): void { this.fastForward = v; this.send({ type: 'setFastForward', enabled: v }); }
-  // M15.7: ×1 における「1日」の実時間長 (秒) を上書きする。e2e テスト用。
-  setSecondsPerDay(seconds: number): void { this.send({ type: 'setSecondsPerDay', seconds }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
   reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void {
     this.send({ type: 'reset', seed, stageId, parentGenome });

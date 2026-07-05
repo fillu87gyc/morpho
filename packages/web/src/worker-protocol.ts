@@ -27,10 +27,9 @@ export type ToWorkerMessage =
   | { type: 'beginStroke' }
   | { type: 'endStroke' }
   | { type: 'undoStroke' }
-  // M15.7: ×1 における「1日」の実時間長 (秒) を上書きする。既定は本番向けの
-  // 長さ (main.ts の DEFAULT_SECONDS_PER_DAY) だが、e2e テストは待ち時間を
-  // 減らすため短い値に上書きする (main.ts が起動時に一度だけ送る)。
-  | { type: 'setSecondsPerDay'; seconds: number };
+  // M15.7: ×1 speed での「1日の実時間 (ms)」を上書きする。既定は
+  // time-scale.ts の DEFAULT_DAY_MS。開発/e2e 用のフック (詳細は time-scale.ts)。
+  | { type: 'setDayMs'; ms: number };
 
 // M8 P0: 計測基盤。perf HUD (`?debug`) 表示用の Worker 側計測値。
 export interface PerfInfo {
