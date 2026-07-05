@@ -265,7 +265,7 @@ export class Game {
     const era = eraFor({
       coloniesReached: world.coloniesReached, massKg: world.massKg,
       connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
-      exploration: traits.exploration,
+      exploration: traits.exploration, day: Math.floor(this.state.tick / TICKS_PER_DAY),
     });
     if (era.name !== this.lastEra) {
       this.eraLog.unshift({ tick: this.state.tick, text: `${era.name}に入った` });
@@ -443,7 +443,7 @@ export class Game {
     const era = eraFor({
       coloniesReached: world.coloniesReached, massKg: world.massKg,
       connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
-      exploration: traits.exploration,
+      exploration: traits.exploration, day: Math.floor(this.state.tick / TICKS_PER_DAY),
     });
     return { traits, individuality, typeInfo, balance, world, quests, colonyMarkers: colonies.markers, era };
   }

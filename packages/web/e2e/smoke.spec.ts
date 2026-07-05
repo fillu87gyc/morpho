@@ -25,6 +25,17 @@ async function waitForReady(page: Page): Promise<void> {
     .not.toBe(0);
 }
 
+// M15.5: 実プレイ検証で発覚したレイアウト崩れ (ヘッダのはみ出し・ボタンの
+// 縦書き潰れ) は要素可視性だけを見る e2e では素通りしていた。
+// document.scrollWidth <= innerWidth の1本で headless でも検出できる。
+async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+  const { scrollWidth, innerWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+}
+
 // type=range は Playwright の locator.fill() が使えない ("cannot be filled")
 // ので、DOM 上で value を設定して input イベントを発火させる。
 async function setSpeedSlider(page: Page, value: number): Promise<void> {
@@ -82,6 +93,12 @@ test('起動してキャンバスが描画され、コンソールエラーが�
   await expect(page.locator('#canvas')).toBeVisible();
   expect(await dayText(page)).toBe('0');
   expect(errors).toEqual([]);
+
+  // M15.5: デスクトップ幅でも「🔁 見守り」トグルがラベル分の横幅を確保できず
+  // 縦書きに潰れていた回帰を検出する (潰れると1行あたり十数pxずつ高さが伸びる)。
+  await expectNoHorizontalOverflow(page);
+  const toggleHeight = await page.locator('#day-loop-mode-toggle').evaluate((el) => el.getBoundingClientRect().height);
+  expect(toggleHeight).toBeLessThanOrEqual(40);
 });
 
 test('M8 P0: `?debug` を付けると perf HUD が表示され、tick/描画コストと FPS を表示する', async ({ page }) => {

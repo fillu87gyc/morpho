@@ -73,6 +73,37 @@ test('デイループ: 1日を仕込む→委ねる→結果を受け取る→�
   expect(errors).toEqual([]);
 });
 
+test('M15.5: 見守りで数日過ごしてからデイループへ切り替えると、初日の結果パネルから前日比Δが出る', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.goto('/');
+  await waitForReady(page);
+
+  // 見守り (連続) のまま、速度を上げて数日分自然に経過させる
+  // (main.ts の frame() が snap.day の増分ごとに DayRecord を積むはず)。
+  await page.locator('#speed-slider').evaluate((el) => {
+    const input = el as HTMLInputElement;
+    input.value = '24';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
+    .toBeGreaterThanOrEqual(2);
+
+  // ここでデイループへ切り替え、初日ぶんを観察する。
+  await page.click('#day-loop-mode-toggle');
+  await expect(page.locator('#day-loop-bar')).toBeVisible();
+  await page.click('#begin-observe');
+  await expect(page.locator('#day-result-modal')).toBeVisible({ timeout: 20_000 });
+
+  // 見守り中にすでに DayRecord が積まれていれば、切替初日でも前日比Δが
+  // 空文字にならない (M15.5 以前は見守り中は一切記録されず、ここが常に
+  // 空だった)。
+  const deltaText = (await page.locator('#dr-exploration-delta').textContent())?.trim() ?? '';
+  expect(deltaText).not.toBe('');
+
+  expect(errors).toEqual([]);
+});
+
 test('デイループ: 見守り (連続) に戻すと自動で進み続ける', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));

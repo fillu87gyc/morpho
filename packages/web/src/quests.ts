@@ -43,10 +43,15 @@ const QUEST_DEFS: QuestDef[] = [
     progress: (i) => (i.coloniesTotal > 0 ? i.coloniesReached / i.coloniesTotal : 0),
   },
   {
+    // M15.5: 実プレイ検証で exploration が初期状態からすでに 0.67 前後にあり
+    // 旧閾値 0.7 は Day 1〜2 で達成されてしまうことが判明した (胞子期でも
+    // トレイト自体は形状の広がりで決まるため)。exploration は長時間かけて
+    // 0.85〜0.9 付近まで緩やかに伸びる指標なので、閾値を 0.85 へ引き上げて
+    // 長期目標として機能させる。
     id: 'explore-70',
-    title: '大陸の70%を探索する',
+    title: '大陸の85%を探索する',
     description: '個体を大きく広げて、皿の隅々まで行き渡らせよう',
-    progress: (i) => i.traits.exploration / 0.7,
+    progress: (i) => i.traits.exploration / 0.85,
   },
   {
     id: 'unite-colonies',

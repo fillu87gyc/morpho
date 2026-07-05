@@ -15,42 +15,53 @@
   <body>
     <div id="app">
       <header class="topbar">
-        <button id="menu-toggle" class="menu-toggle" title="メニュー" aria-label="メニュー">☰</button>
-        <div class="title">
-          <h1>モルフォ</h1>
-          <span class="subtitle">委ねて、育ついのち</span>
-        </div>
-        <div class="wallet-bar" id="wallet-bar">
-          <span class="wallet-chip" title="しずく — ツール使用の基軸通貨。減っても時間経過で下限まで自動回復する">
-            <span class="wallet-ico">🪙</span><span id="cur-sizuku">0</span>
-          </span>
-          <span class="wallet-chip" title="若葉 — デイリー/チャレンジの報酬。温度・毒素ツールのコスト">
-            <span class="wallet-ico">🍃</span><span id="cur-wakaba">0</span>
-          </span>
-          <span class="wallet-chip" title="胞子石 — 実績解除で得られる希少な通貨">
-            <span class="wallet-ico">🍄</span><span id="cur-horoishi">0</span>
-          </span>
-        </div>
-        <div class="time">
-          <div class="day">DAY <span id="day">0</span></div>
-          <div class="era-wrap" title="時代の達成条件への進捗">
-            <span id="era-ring" class="era-ring"></span>
-            <span class="era" id="era">胞子期</span>
-          </div>
-          <div class="era stage-name" id="stage-name">皿</div>
-          <div class="controls">
-            <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
-            <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
-            <span class="speed-n">×<span id="speed-n">1</span></span>
-            <button id="fast-forward" class="pause-toggle" title="早送り (描画を10fpsに間引いて浮いた分をtickに回す)">⏩</button>
-            <button id="day-loop-mode-toggle" class="pause-toggle" title="デイループ (仕込む→委ねる→受け取る) / 見守り (連続再生) を切り替える">🔁 見守り</button>
+        <div class="topbar-row topbar-row-main">
+          <button id="menu-toggle" class="menu-toggle" title="メニュー" aria-label="メニュー">☰</button>
+          <div class="title">
+            <h1>モルフォ</h1>
+            <span class="subtitle">委ねて、育ついのち</span>
           </div>
         </div>
-        <div id="day-loop-bar" class="day-loop-bar" hidden>
-          <button id="begin-observe" class="harvest-btn day-loop-btn">観察をはじめる ▶</button>
-          <span id="day-loop-remaining" class="day-loop-remaining" hidden>残り <span id="day-loop-remaining-n">--:--</span></span>
+        <div class="topbar-row topbar-row-meta">
+          <div class="wallet-bar" id="wallet-bar">
+            <span class="wallet-chip" title="しずく — ツール使用の基軸通貨。減っても時間経過で下限まで自動回復する">
+              <span class="wallet-ico">🪙</span><span id="cur-sizuku">0</span>
+            </span>
+            <span class="wallet-chip" title="若葉 — デイリー/チャレンジの報酬。温度・毒素ツールのコスト">
+              <span class="wallet-ico">🍃</span><span id="cur-wakaba">0</span>
+            </span>
+            <span class="wallet-chip" title="胞子石 — 実績解除で得られる希少な通貨">
+              <span class="wallet-ico">🍄</span><span id="cur-horoishi">0</span>
+            </span>
+          </div>
+          <div class="time">
+            <div class="day">DAY <span id="day">0</span></div>
+            <div class="era-wrap" title="時代の達成条件への進捗">
+              <span id="era-ring" class="era-ring"></span>
+              <span class="era" id="era">胞子期</span>
+            </div>
+            <div class="era stage-name" id="stage-name">皿</div>
+            <div class="controls">
+              <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
+              <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
+              <span class="speed-n">×<span id="speed-n">1</span></span>
+              <button id="fast-forward" class="pause-toggle" title="早送り (描画を10fpsに間引いて浮いた分をtickに回す)">⏩</button>
+              <button id="day-loop-mode-toggle" class="pause-toggle" title="デイループ (仕込む→委ねる→受け取る) / 見守り (連続再生) を切り替える">🔁 見守り</button>
+            </div>
+          </div>
         </div>
       </header>
+
+      <!-- M15.5: .topbar は backdrop-filter を持つため position:fixed の
+           containing block になってしまい、モバイルの「画面下部に固定」
+           前提の #day-loop-bar がヘッダの高さ基準でずれる (2段ヘッダ化で
+           高さが変わった際に #menu-toggle と重なりクリックを奪う回帰と
+           して発覚)。header の外に出し、素直にビューポート基準の
+           position:fixed にする。 -->
+      <div id="day-loop-bar" class="day-loop-bar" hidden>
+        <button id="begin-observe" class="harvest-btn day-loop-btn">観察をはじめる ▶</button>
+        <span id="day-loop-remaining" class="day-loop-remaining" hidden>残り <span id="day-loop-remaining-n">--:--</span></span>
+      </div>
 
       <main class="stage">
         <aside class="panel left">
@@ -61,7 +72,7 @@
               <div class="progress"><div id="q-connect-bar" class="bar"></div></div>
             </div>
             <div class="quest-item">
-              <div class="quest-head"><span class="quest-title">大陸の70%を探索する</span><span class="num" id="q-explore-n">0%</span></div>
+              <div class="quest-head"><span class="quest-title">大陸の85%を探索する</span><span class="num" id="q-explore-n">0%</span></div>
               <div class="progress"><div id="q-explore-bar" class="bar"></div></div>
             </div>
             <div class="quest-item" id="q-continent-item" hidden>
