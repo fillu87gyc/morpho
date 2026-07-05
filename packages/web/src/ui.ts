@@ -18,6 +18,8 @@ import { formatMMSS } from './day-loop.js';
 import { filterByArea, type WorldEvent } from './world-events.js';
 import type { WorldView } from './camera.js';
 import { localTimeFor } from './daytime.js';
+import { Notes, summaryText } from './notes.js';
+import type { LineageThumbs } from './lineage-thumbs.js';
 
 type El = HTMLElement;
 
@@ -98,6 +100,11 @@ export class Ui {
   // 図鑑
   private ency = el('ency');
   private encyProgress = el('ency-progress');
+  // M18: 収集・記録タブ (図鑑/マップ/メモ)
+  private recordTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.record-tab'));
+  private recordPanels = Array.from(document.querySelectorAll<HTMLElement>('.record-panel'));
+  private noteText = el('note-text') as HTMLTextAreaElement;
+  private notesList = el('notes-list');
   // アチーブメント
   private ach = el('ach');
   private achProgress = el('ach-progress');
@@ -128,8 +135,9 @@ export class Ui {
   private lastEncyVersion = -1;
   private lastAchVersion = -1;
   private lastBoardVersion = -1;
-  private lastLineageVersion = -1;
+  private lastLineageVersion = '';
   private lastAlbumVersion = -1;
+  private lastNotesVersion = -1;
   private lastChalKey = '';
   private lastHarvestable = false;
   private lastStageId: StageId | null = null;
@@ -152,6 +160,8 @@ export class Ui {
       lineage: Lineage;
       album: Album;
       catalogueThumbs: CatalogueThumbs;
+      notes: Notes;
+      lineageThumbs: LineageThumbs;
     },
     private hooks: {
       onSpeed: (s: number) => void;
@@ -231,6 +241,36 @@ export class Ui {
 
     // M15: モバイル下部ツールバーの複製ボタンも含めて全件に active を付ける。
     document.querySelectorAll<HTMLButtonElement>('button.tool[data-tool="food"]').forEach((b) => b.classList.add('active'));
+
+    // M18: 「収集・記録」タブ (図鑑/マップ/メモ)。選択は localStorage に永続化する。
+    const RECORD_TAB_KEY = 'morpho.recordTab.v1';
+    const selectRecordTab = (tab: string, persist: boolean): void => {
+      for (const btn of this.recordTabs) btn.setAttribute('aria-selected', String(btn.dataset.tab === tab));
+      for (const panel of this.recordPanels) panel.hidden = panel.dataset.panel !== tab;
+      if (persist) {
+        try { localStorage.setItem(RECORD_TAB_KEY, tab); } catch { /* private mode 等は諦める */ }
+      }
+    };
+    for (const btn of this.recordTabs) {
+      btn.addEventListener('click', () => selectRecordTab(btn.dataset.tab ?? 'ency', true));
+    }
+    let initialTab = 'ency';
+    try {
+      const saved = localStorage.getItem(RECORD_TAB_KEY);
+      if (saved && this.recordTabs.some((b) => b.dataset.tab === saved)) initialTab = saved;
+    } catch { /* private mode 等は既定の 'ency' のまま */ }
+    if (initialTab !== 'ency') selectRecordTab(initialTab, false);
+
+    // M18: メモ。「今日の成長を貼る」は現在のスナップショットから定型文を作る。
+    (el('note-add') as HTMLButtonElement).addEventListener('click', () => {
+      this.trackers.notes.add(this.game.snapshot().day, this.noteText.value);
+      this.noteText.value = '';
+    });
+    (el('note-paste-summary') as HTMLButtonElement).addEventListener('click', () => {
+      const snap = this.game.snapshot();
+      const text = summaryText(snap.day, snap.traits.exploration, snap.traits.efficiency, snap.traits.stability, snap.world.massKg);
+      this.noteText.value = this.noteText.value ? `${this.noteText.value}\n${text}` : text;
+    });
   }
 
   // M17: extraEvo は main.ts 側で検出した突然変異・形質獲得イベント
@@ -453,6 +493,38 @@ export class Ui {
       }
     }
 
+    // M18: メモ (バージョンが変わった = 追加/削除があったときだけ書き換える)
+    if (this.lastNotesVersion !== this.trackers.notes.version) {
+      this.lastNotesVersion = this.trackers.notes.version;
+      const notes = this.trackers.notes.list();
+      this.notesList.innerHTML = '';
+      if (notes.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'まだメモがない…';
+        this.notesList.appendChild(li);
+      } else {
+        for (const note of notes) {
+          const li = document.createElement('li');
+          const day = document.createElement('span');
+          day.className = 'note-day';
+          day.textContent = `Day ${note.day}`;
+          const body = document.createElement('span');
+          body.className = 'note-body';
+          body.textContent = note.text;
+          const del = document.createElement('button');
+          del.className = 'note-del';
+          del.textContent = '×';
+          del.title = 'このメモを削除';
+          del.addEventListener('click', () => this.trackers.notes.remove(note.id));
+          li.appendChild(day);
+          li.appendChild(body);
+          li.appendChild(del);
+          this.notesList.appendChild(li);
+        }
+      }
+    }
+
     // アチーブメント (バージョンが変わった = 新規解除があったときだけ書き換える)
     if (this.lastAchVersion !== this.trackers.achievements.version) {
       this.lastAchVersion = this.trackers.achievements.version;
@@ -505,9 +577,11 @@ export class Ui {
     }
 
     // M13: 系統樹を分岐ツリーへ (世代ごとの行に並べる simple tree)。
-    // バージョンが変わった = 新規採取/起点変更があったときだけ書き換える。
-    if (this.lastLineageVersion !== this.trackers.lineage.version) {
-      this.lastLineageVersion = this.trackers.lineage.version;
+    // バージョンが変わった = 新規採取/起点変更、または M18 のサムネイル保存完了
+    // (非同期で遅れて届く) があったときだけ書き換える。
+    const lineageVersionKey = `${this.trackers.lineage.version}|${this.trackers.lineageThumbs.version}`;
+    if (this.lastLineageVersion !== lineageVersionKey) {
+      this.lastLineageVersion = lineageVersionKey;
       const entries = this.trackers.lineage.list();
       this.lineageList.innerHTML = '';
       if (entries.length === 0) {
@@ -528,6 +602,16 @@ export class Ui {
           for (const e of byGeneration.get(gen)!) {
             const node = document.createElement('div');
             node.className = e.id === activeId ? 'lineage-node active' : 'lineage-node';
+            // M18: サムネイルがあれば表示 (採種時に main.ts が撮影して保存する)。
+            // 無いノード (過去データ・撮影失敗) は文字表示のまま壊れない。
+            const thumbUrl = this.trackers.lineageThumbs.urlOf(e.id);
+            if (thumbUrl) {
+              const thumb = document.createElement('img');
+              thumb.className = 'lineage-thumb';
+              thumb.src = thumbUrl;
+              thumb.alt = e.typeLabel;
+              node.appendChild(thumb);
+            }
             const label = document.createElement('div');
             label.className = 'label';
             label.textContent = `${e.generation}代目 — ${e.typeLabel}`;

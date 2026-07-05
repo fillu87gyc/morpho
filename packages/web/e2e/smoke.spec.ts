@@ -283,6 +283,9 @@ test('M6: 起動時に3つのコロニーが配置され、ミニマップをク
   await expect(page.locator('#w-networks')).toHaveText('3');
 
   const beforeChecksum = await canvasChecksum(page);
+  // M18: ミニマップは「収集・記録」パネルの「マップ」タブに移設された
+  // (既定は「図鑑」タブ)。表示するにはタブを開く必要がある。
+  await page.click('#record-tab-map');
   const minimap = page.locator('#minimap');
   const box = await minimap.boundingBox();
   if (!box) throw new Error('minimap has no bounding box');

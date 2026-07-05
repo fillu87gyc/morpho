@@ -8,7 +8,7 @@ import { Timeline } from './timeline.js';
 import { Camera } from './camera.js';
 import { Minimap } from './minimap.js';
 import { Encyclopedia, TOTAL_TYPE_COUNT } from './encyclopedia.js';
-import { Achievements } from './achievements.js';
+import { Achievements, ACHIEVEMENT_DEFS } from './achievements.js';
 import { allChallenges, DailyChallengeTracker } from './challenges.js';
 import { Scoreboard } from './scoreboard.js';
 import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
@@ -23,12 +23,16 @@ import { DailyTracker } from './dailies.js';
 import { Identity } from './identity.js';
 import { starsOf, traitChipsFor, environmentTagsFor } from './trait-labels.js';
 import { CatalogueThumbs } from './catalogue-thumbs.js';
-import type { CatalogueContext } from './catalogue.js';
+import { LineageThumbs } from './lineage-thumbs.js';
+import { allCatalogueEntries, type CatalogueContext } from './catalogue.js';
 import { localTimeFor, nightFactorFor } from './daytime.js';
 import { ONBOARDING_STEPS, hasSeenOnboarding, markOnboardingSeen } from './onboarding.js';
 import { detectMutation, detectNewTraitChips, newTraitChipText } from './mutation-events.js';
 import type { EvolutionLog } from './game.js';
 import { buildChartLayout, drawChart, type ChartSeries } from './chart.js';
+import { EraHistory } from './era-history.js';
+import { Notes } from './notes.js';
+import { buildReport, eraHistoryLines } from './report.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -41,6 +45,7 @@ const lineage = new Lineage();
 const album = new Album();
 const ambient = new Ambient();
 const dayReport = new DayReport();
+const eraHistory = new EraHistory();
 // M17: 突然変異・形質獲得イベント。sim には手を入れず、日境界で前日と当日の
 // DayRecord.traits / traitChipsFor() を比較した web 側派生として「進化の記録」
 // に流し込む (game.ts の evoLog/eraLog とは別に main.ts 側で保持し、
@@ -68,6 +73,8 @@ const wallet = new Wallet();
 const dailies = new DailyTracker();
 const identity = new Identity();
 const catalogueThumbs = new CatalogueThumbs();
+const notes = new Notes();
+const lineageThumbs = new LineageThumbs();
 let undoUsedCount = 0;
 // M12: 「個体を追跡する」。ミニマップクリックで対象コロニーを選び、
 // トグルで追従の on/off を切り替える。手動ズーム/パンで解除する。
@@ -123,7 +130,7 @@ minimapCanvas.addEventListener('click', (e) => {
   camera.focusOn(worldPos);
 });
 
-const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album, catalogueThumbs }, {
+const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album, catalogueThumbs, notes, lineageThumbs }, {
   onSpeed: (s) => {
     if (s > 0) lastPositiveSpeed = s;
     game.setSpeed(s);
@@ -136,6 +143,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     dayReport.reset();
+    eraHistory.reset();
     localEvoLog = [];
     identity.advance();
     tracking = false;
@@ -157,6 +165,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     fitCanvas();
     ambient.setStage(id);
     dayReport.reset();
+    eraHistory.reset();
     localEvoLog = [];
     identity.advance();
     tracking = false;
@@ -174,7 +183,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
   onHarvestSeed: () => {
     const snap = game.snapshot();
     if (snap.day < HARVEST_MIN_DAY) return;
-    lineage.harvest({
+    const entry = lineage.harvest({
       genome: snap.genome,
       typeId: snap.typeInfo.id,
       typeLabel: snap.typeInfo.label,
@@ -184,6 +193,15 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
       stageId: snap.stage.id,
       stageName: snap.stage.name,
     });
+    // M18: 系統樹ノードのサムネイル。採種時点の姿を撮り IndexedDB へ保存する
+    // (renderThumbnail() は blob URL の Promise を返すため、生の Blob が
+    // 要る IndexedDB 保存には fetch() で取り出す — catalogue-thumbs と同じ経路)。
+    void renderer.renderThumbnail(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, 160)
+      .then((url) => {
+        if (!url) return null;
+        return fetch(url).then((r) => r.blob()).finally(() => URL.revokeObjectURL(url));
+      })
+      .then((blob) => { if (blob) void lineageThumbs.set(entry.id, blob); });
   },
   onScreenshot: () => {
     const snap = game.snapshot();
@@ -207,6 +225,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     dayReport.reset();
+    eraHistory.reset();
     localEvoLog = [];
     identity.advance();
     tracking = false;
@@ -317,6 +336,94 @@ chartOpenBtn.addEventListener('click', () => {
   renderChart();
 });
 chartCloseBtn.addEventListener('click', () => { chartModalEl.hidden = true; });
+
+// ── M18: 探索レポート ──────────────────────────────────
+const reportModalEl = document.getElementById('report-modal') as HTMLElement;
+const reportOpenBtn = document.getElementById('report-open') as HTMLButtonElement;
+const reportCloseBtn = document.getElementById('report-close') as HTMLButtonElement;
+const reportSaveBtn = document.getElementById('report-save') as HTMLButtonElement;
+const reportChartCanvasEl = document.getElementById('report-chart-canvas') as HTMLCanvasElement;
+const reportChartEmptyEl = document.getElementById('report-chart-empty') as HTMLElement;
+const reportEraHistoryEl = document.getElementById('report-era-history') as HTMLElement;
+
+function renderReport(): void {
+  const snap = game.snapshot();
+  const records = dayReport.list();
+  const report = buildReport({
+    records,
+    eraHistory: eraHistory.list(),
+    connectedColonies: snap.world.coloniesReached,
+    totalColonies: snap.world.coloniesTotal,
+    exploration: snap.traits.exploration,
+    discoveredSpecies: encyclopedia.list().length,
+    totalSpecies: allCatalogueEntries().length,
+    achievementsUnlocked: achievements.list().length,
+    totalAchievements: ACHIEVEMENT_DEFS.length,
+  });
+
+  document.getElementById('report-colonies')!.textContent = `${report.summary.connectedColonies}/${report.summary.totalColonies}`;
+  document.getElementById('report-exploration')!.textContent = `${report.summary.explorationPct}%`;
+  document.getElementById('report-species')!.textContent = `${report.summary.discoveredSpecies}/${report.summary.totalSpecies}`;
+  document.getElementById('report-achievements')!.textContent = `${report.summary.achievementsUnlocked}/${report.summary.totalAchievements}`;
+
+  reportEraHistoryEl.innerHTML = '';
+  const lines = eraHistoryLines(report.eraHistory);
+  if (lines.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'まだ記録がない…';
+    reportEraHistoryEl.appendChild(li);
+  } else {
+    for (const line of lines) {
+      const li = document.createElement('li');
+      li.textContent = line;
+      reportEraHistoryEl.appendChild(li);
+    }
+  }
+
+  if (records.length < 2) {
+    reportChartCanvasEl.hidden = true;
+    reportChartEmptyEl.hidden = false;
+    return;
+  }
+  reportChartCanvasEl.hidden = false;
+  reportChartEmptyEl.hidden = true;
+  const days = records.map((r) => r.day);
+  const series: ChartSeries[] = [
+    { label: '面積', color: '#8fd0ff', values: records.map((r) => r.areaM2), axis: 'right' },
+    { label: '質量', color: '#e8b84b', values: records.map((r) => r.massKg), axis: 'right' },
+  ];
+  const layout = buildChartLayout(days, series, reportChartCanvasEl.width, reportChartCanvasEl.height);
+  const ctx = reportChartCanvasEl.getContext('2d');
+  if (ctx) drawChart(ctx, layout);
+}
+
+reportOpenBtn.addEventListener('click', () => {
+  reportModalEl.hidden = false;
+  renderReport();
+});
+reportCloseBtn.addEventListener('click', () => { reportModalEl.hidden = true; });
+reportSaveBtn.addEventListener('click', () => {
+  // モーダルの card 部分を画像として合成し、既存のアルバム経路 (M7) へ保存する。
+  const modalCard = reportModalEl.querySelector('.card') as HTMLElement;
+  if (!modalCard) return;
+  const rect = modalCard.getBoundingClientRect();
+  const out = document.createElement('canvas');
+  out.width = Math.round(rect.width * 2);
+  out.height = Math.round(rect.height * 2);
+  const octx = out.getContext('2d');
+  if (!octx) return;
+  octx.scale(2, 2);
+  octx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--panel') || '#1a1a1a';
+  octx.fillRect(0, 0, rect.width, rect.height);
+  const chartRect = reportChartCanvasEl.getBoundingClientRect();
+  if (!reportChartCanvasEl.hidden) {
+    octx.drawImage(reportChartCanvasEl, chartRect.left - rect.left, chartRect.top - rect.top, chartRect.width, chartRect.height);
+  }
+  out.toBlob((blob) => {
+    if (blob) album.add(blob, { day: game.snapshot().day, stageName: `探索レポート・${game.snapshot().stage.name}` });
+  }, 'image/png');
+});
 
 // ── M11: 通貨HUD ──────────────────────────────────────
 const CURRENCY_ICON: Record<CurrencyKind, string> = { sizuku: '🪙', wakaba: '🍃', horoishi: '🍄' };
@@ -862,6 +969,7 @@ function frame() {
     if (snap.era.name !== lastEraName) {
       lastEraName = snap.era.name;
       wallet.earn('horoishi', 1, `時代が「${snap.era.name}」に進んだ`);
+      eraHistory.record(snap.era.name, snap.day);
     }
     // M15.5: 見守りモード中も日境界ごとに DayRecord を積む (デイループの
     // result 遷移でしか記録しないと、切替初日の結果パネルに前日比Δが出ない)。

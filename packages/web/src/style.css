@@ -173,6 +173,14 @@ body { overflow: hidden; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; font-size: 11px; color: var(--text-dim); }
 .chart-legend-item { display: flex; align-items: center; gap: 4px; }
 .chart-legend-item .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+/* M18: 探索レポート */
+.report-summary { display: grid; grid-template-columns: 1fr auto; row-gap: 4px; font-size: 12px; margin: 10px 0; }
+.report-summary dt { color: var(--text-dim); }
+.report-summary dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.report-subtitle { font-size: 12px; color: var(--text-dim); margin: 10px 0 4px; }
+.report-era-history { list-style: none; padding: 0; margin: 0 0 12px; font-size: 11px; color: var(--text-dim); max-height: 100px; overflow-y: auto; }
+.report-era-history li { padding: 2px 0; }
+.report-era-history li.empty { font-style: italic; }
 #dr-album {
   background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
   border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12px;
@@ -329,6 +337,41 @@ body { overflow: hidden; }
 .board li .meta { color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
 .board li.empty { display: block; color: var(--text-dim); font-style: italic; font-size: 11px; }
 
+/* M18: 「収集・記録」タブ付きパネル (図鑑/マップ/メモ) */
+.record-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.record-tab {
+  flex: 1; background: var(--panel); border: 1px solid var(--panel-edge);
+  color: var(--text-dim); border-radius: 8px; padding: 6px 4px; cursor: pointer;
+  font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+.record-tab[aria-selected="true"] { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.record-panel[hidden] { display: none; }
+.notes-input { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.note-text {
+  width: 100%; resize: vertical; min-height: 44px;
+  background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
+  border-radius: 8px; padding: 6px 8px; font-size: 12px; font-family: inherit;
+}
+.notes-actions { display: flex; gap: 8px; }
+.notes-actions button {
+  flex: 1; background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
+  border-radius: 8px; padding: 6px; cursor: pointer; font-size: 11px;
+}
+.notes-list { list-style: none; padding: 0; margin: 0; max-height: 220px; overflow-y: auto; }
+.notes-list li {
+  display: grid; grid-template-columns: 44px 1fr 18px; gap: 6px; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px dashed rgba(255,255,255,0.06); font-size: 11px;
+}
+.notes-list li:last-child { border-bottom: none; }
+.notes-list li.empty { display: block; color: var(--text-dim); font-style: italic; }
+.note-day { color: var(--accent); font-variant-numeric: tabular-nums; }
+.note-body { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.note-del {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0;
+}
+.note-del:hover { color: var(--danger); }
+
 /* M13: 図鑑グリッド (サムネイル + ★ + ロックスロット) */
 .ency {
   list-style: none; padding: 0; margin: 0;
@@ -378,6 +421,8 @@ body { overflow: hidden; }
   font-size: 11px;
 }
 .lineage-node.active { border-color: var(--accent); background: var(--accent-soft); }
+/* M18: 系統樹ノードのサムネイル (40px、無いノードは文字表示のまま) */
+.lineage-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; margin-bottom: 4px; display: block; }
 .lineage-node .label { color: var(--text); font-weight: 600; margin-bottom: 2px; }
 .lineage-node .meta { color: var(--text-dim); font-size: 10px; margin-bottom: 4px; }
 .lineage-start-btn {

@@ -60,3 +60,23 @@ test('1つの親から2匹の子を育てると系統樹が枝分かれして表
 
   expect(errors).toEqual([]);
 });
+
+test('M18: 採種すると系統樹ノードにサムネイルが付く (IndexedDB への非同期保存)', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.goto('/');
+  await waitForReady(page);
+
+  await setSpeedMax(page);
+  await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
+    .toBeGreaterThanOrEqual(5);
+  await page.click('#harvest-seed');
+
+  // renderThumbnail → toBlob → fetch → IndexedDB 保存は複数ホップの非同期
+  // 処理で、harvest() 自体 (同期) より確実に遅れて完了する。
+  await expect.poll(async () => page.locator('#lineage .lineage-thumb').count(), { timeout: 10_000 }).toBe(1);
+  const src = await page.locator('#lineage .lineage-thumb').first().getAttribute('src');
+  expect(src).toMatch(/^blob:/);
+
+  expect(errors).toEqual([]);
+});
