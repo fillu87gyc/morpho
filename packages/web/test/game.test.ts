@@ -81,7 +81,9 @@ describe('Game', () => {
     expect(['拡散期', '変形体期', '成熟期']).toContain(g.snapshot().era.name);
     expect(g.snapshot().era.progress).toBeGreaterThanOrEqual(0);
     expect(g.snapshot().era.progress).toBeLessThanOrEqual(1);
-  });
+  // M15.7: TICKS_PER_DAY*10 = 2400 tick の一括計算は CI の遅いランナーだと
+  // 既定の 5000ms を超えることがあるため明示的に延長する。
+  }, 20_000);
 
   it('food ツールを適用すると拠点総数が増え、イベントログに記録される', () => {
     const g = new Game(5);
@@ -200,7 +202,9 @@ describe('Game', () => {
     expect(evo.some((e) => e.text.includes('に入った'))).toBe(true);
     // 起動直後の胞子期そのものは「切り替わり」ではないので記録されない。
     expect(evo.some((e) => e.text === '胞子期に入った')).toBe(false);
-  });
+  // M15.7: TICKS_PER_DAY*10 = 2400 tick の一括計算は CI の遅いランナーだと
+  // 既定の 5000ms を超えることがあるため明示的に延長する。
+  }, 20_000);
 
   it('ステージを指定して生成でき、snapshot に反映される', () => {
     const g = new Game(9, 'desert');
