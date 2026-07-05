@@ -14,7 +14,7 @@ import { allCatalogueEntries } from './catalogue.js';
 import type { CatalogueThumbs } from './catalogue-thumbs.js';
 import { starsOf, typeDescriptionFor } from './trait-labels.js';
 import { estimateEraEta, type EraSample } from './era.js';
-import { formatMMSS } from './day-loop.js';
+import { formatMMSS, TICKS_PER_DAY } from './day-loop.js';
 import { filterByArea, type WorldEvent } from './world-events.js';
 import type { WorldView } from './camera.js';
 import { localTimeFor } from './daytime.js';
@@ -435,7 +435,10 @@ export class Ui {
           const li = document.createElement('li');
           const time = document.createElement('span');
           time.className = 'time';
-          const day = Math.floor(e.tick / 40);
+          // M15.7 で TICKS_PER_DAY は 40→240 に変わった。旧値 40 の
+          // ハードコードが残っていたため、「進化の記録」の Day 表示だけが
+          // ヘッダの DAY の6倍に膨らんでいた (実プレイ検証 第3回で発見)。
+          const day = Math.floor(e.tick / TICKS_PER_DAY);
           time.textContent = `Day ${day}`;
           const body = document.createElement('span');
           body.className = 'body';
