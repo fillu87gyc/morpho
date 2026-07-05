@@ -110,6 +110,15 @@ test.describe('縦画面レイアウト (M15)', () => {
     await waitForReady(page);
     await expectNoHorizontalOverflow(page);
 
+    // キャンバスが「表示サイズとして」十分な大きさを持つ。checksum≠0 (バッキング
+    // ストアに描画がある) だけでは、CSS 表示サイズが 0×0 に潰れてプレイヤーには
+    // 何も見えない崩れ (fitCanvas の測定前ゼロ化 × コンテンツ由来の行高) を
+    // 素通りさせてしまうため、boundingBox で実表示サイズを検査する。
+    const canvasBox = await page.locator('#canvas').boundingBox();
+    if (!canvasBox) throw new Error('canvas has no bounding box');
+    expect(canvasBox.width).toBeGreaterThan(200);
+    expect(canvasBox.height).toBeGreaterThan(200);
+
     // 下部ツールバーが常時見えている (縦画面レイアウト)。
     await expect(page.locator('#mobile-toolbar')).toBeVisible();
     await expect(page.locator('#mobile-toolbar button.tool[data-tool="food"]')).toBeVisible();

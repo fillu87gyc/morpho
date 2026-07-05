@@ -709,7 +709,13 @@ function fitCanvas(): void {
   canvas!.style.width = '0px';
   canvas!.style.height = '0px';
   const r = wrap.getBoundingClientRect();
-  const size = Math.floor(Math.min(r.width, r.height));
+  // モバイル縦 (≤900px) では .stage の行高がコンテンツ由来のため、canvas を
+  // ゼロ化すると wrap の高さも 0 になり size=0 で固定される (キャンバスが
+  // 永久に描画されない)。高さが測れないときは幅を一辺とする正方形とし、
+  // 下部ツールバーを除いたビューポート残り高さでクランプする。
+  const avail = window.innerHeight - r.top - 100;
+  const h = r.height > 0 ? r.height : Math.min(r.width, Math.max(240, avail));
+  const size = Math.floor(Math.min(r.width, h));
   canvas!.style.width = `${size}px`;
   canvas!.style.height = `${size}px`;
   renderer.resize();
