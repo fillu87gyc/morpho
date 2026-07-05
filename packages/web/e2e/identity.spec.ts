@@ -1,6 +1,6 @@
 // M12: 個体の同定 (名前・★・特性チップ) と追跡カメラの e2e。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -58,6 +58,54 @@ test('新しい皿へ を押すと個体番号が進む', async ({ page }) => {
   await expect(page.locator('#ind-name')).toHaveText('ねばりのこ #1');
   await page.click('#reset');
   await expect(page.locator('#ind-name')).toHaveText('ねばりのこ #2');
+
+  expect(errors).toEqual([]);
+});
+
+test('M17: ズームインして注視ON → 視野外の出来事が消え、OFFに戻すと再び見える', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.goto('/');
+  await waitForReady(page);
+  // sim イベント (太い幹が育った 等) の連続発生でログが埋まり、この後置く
+  // エサの出来事が30件の上限から押し出されてしまうのを避けるため一時停止する
+  // (e2e の短縮日長では特に流れが速い)。
+  await page.click('#speed-btn-pause');
+
+  const canvas = page.locator('#canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+
+  // ① ズームアウトした状態 (世界全体が見える) で1箇所にエサを置く。
+  await page.mouse.click(box.x + box.width * 0.15, box.y + box.height * 0.15);
+  const totalBefore = await page.locator('#log li', { hasText: '栄養を撒いた' }).count();
+  expect(totalBefore).toBeGreaterThan(0);
+
+  // ② 反対側の隅を中心に大きくズームインする — ①の座標は新しい視野の外に出る。
+  const farCorner = { x: box.x + box.width * 0.85, y: box.y + box.height * 0.85 };
+  await page.mouse.move(farCorner.x, farCorner.y);
+  await page.mouse.wheel(0, -3000);
+  await page.waitForTimeout(200);
+
+  // ③ ズームインした (今の視野内の) 位置にもう1箇所エサを置く。
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  const totalAfter = await page.locator('#log li', { hasText: '栄養を撒いた' }).count();
+  expect(totalAfter).toBeGreaterThan(totalBefore);
+
+  // ④ 「このエリアを注視中」をONにすると、視野外 (①) の出来事が消えて表示件数が減る。
+  await page.click('#log-area-toggle');
+  await expect(page.locator('#log-area-toggle')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#log-area-label')).toBeVisible();
+  await expect
+    .poll(async () => page.locator('#log li', { hasText: '栄養を撒いた' }).count())
+    .toBeLessThan(totalAfter);
+
+  // ⑤ OFFに戻すと全件が再び見える。
+  await page.click('#log-area-toggle');
+  await expect(page.locator('#log-area-toggle')).toHaveAttribute('aria-pressed', 'false');
+  await expect
+    .poll(async () => page.locator('#log li', { hasText: '栄養を撒いた' }).count())
+    .toBe(totalAfter);
 
   expect(errors).toEqual([]);
 });

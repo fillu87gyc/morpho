@@ -21,6 +21,15 @@ export interface DayLoopState {
   readonly targetTick: number; // observe が完了するべき tick (この日の終わり)
 }
 
+// M16: mm:ss 表示のフォーマット。デイループの残り時間表示 (main.ts) と
+// 時代の残り時間予測 (ui.ts / era.ts) の両方で使う共通の純粋関数。
+export function formatMMSS(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
 // tick から、その日の prepare フェーズを起点にステートマシンを作る。
 // (セッション途中からの再開や reset() 後の初期化に使う)。
 export function createDayLoop(startTick: number): DayLoopState {

@@ -69,6 +69,7 @@ body { overflow: hidden; }
 /* M11: 通貨HUD */
 .wallet-bar { display: flex; gap: 8px; }
 .wallet-chip {
+  position: relative;
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 10px;
   background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 999px;
@@ -77,6 +78,22 @@ body { overflow: hidden; }
 }
 .wallet-chip.flash { color: var(--accent); border-color: var(--accent-soft); }
 .wallet-ico { font-size: 13px; }
+/* M19: 通貨増減の「+n」フロート演出 (prefers-reduced-motion では main.ts 側で
+   そもそも生成しない)。 */
+.wallet-float {
+  position: absolute; top: -2px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  pointer-events: none;
+  animation: wallet-float-up 900ms ease-out forwards;
+}
+.wallet-float.up { color: var(--green); }
+.wallet-float.down { color: var(--danger); }
+@keyframes wallet-float-up {
+  0% { opacity: 0; transform: translate(-50%, 4px); }
+  15% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -18px); }
+}
 .time { display: flex; align-items: center; gap: 16px; }
 .time .day { font-size: 13px; color: var(--text-dim); }
 .time .day span { color: var(--text); font-weight: 600; margin-left: 4px; }
@@ -88,6 +105,8 @@ body { overflow: hidden; }
   width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
   background: conic-gradient(var(--accent) calc(var(--era-progress) * 360deg), var(--bar-empty) 0);
 }
+/* M16: 時代の残り時間予測。狭い画面では折り返してもよいよう nowrap は課さない。 */
+.era-eta { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 .time .controls { display: flex; gap: 4px; }
 .time .controls button {
   background: var(--panel);
@@ -98,8 +117,11 @@ body { overflow: hidden; }
   cursor: pointer;
 }
 .time .controls button.active { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
-.time .controls input[type="range"] { width: 110px; accent-color: var(--accent); flex-shrink: 0; }
-.time .controls .speed-n { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 28px; flex-shrink: 0; }
+/* M16: 4段速度ボタンの選択状態は aria-pressed で示す (旧 .active クラス相当)。 */
+.time .controls button.speed-btn[aria-pressed="true"] {
+  color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft);
+}
+.time .controls button.speed-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 /* M15.5: 「🔁 見守り/デイループ」トグルは他の速度ボタンと同じ 34px 固定幅を
    継承すると、デスクトップ1440pxでもラベルが縦書きに潰れてしまう。
    幅を内容に合わせ、常に横書き1行を保つ。 */
@@ -160,6 +182,22 @@ body { overflow: hidden; }
   margin-bottom: 8px; font-variant-numeric: tabular-nums;
 }
 .onboarding-card p { font-size: 13px; line-height: 1.6; color: var(--text); margin: 0 0 14px; }
+
+/* M17: 統計グラフ */
+.chart-card { width: min(520px, 92vw); }
+#chart-canvas { width: 100%; height: auto; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 8px; }
+.chart-empty { font-size: 12px; color: var(--text-dim); font-style: italic; text-align: center; padding: 40px 0; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; font-size: 11px; color: var(--text-dim); }
+.chart-legend-item { display: flex; align-items: center; gap: 4px; }
+.chart-legend-item .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+/* M18: 探索レポート */
+.report-summary { display: grid; grid-template-columns: 1fr auto; row-gap: 4px; font-size: 12px; margin: 10px 0; }
+.report-summary dt { color: var(--text-dim); }
+.report-summary dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.report-subtitle { font-size: 12px; color: var(--text-dim); margin: 10px 0 4px; }
+.report-era-history { list-style: none; padding: 0; margin: 0 0 12px; font-size: 11px; color: var(--text-dim); max-height: 100px; overflow-y: auto; }
+.report-era-history li { padding: 2px 0; }
+.report-era-history li.empty { font-style: italic; }
 #dr-album {
   background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
   border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12px;
@@ -174,6 +212,11 @@ body { overflow: hidden; }
 }
 
 .panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+/* M19: ドロワースライドイン用のラッパー。デスクトップでは display:contents で
+   レイアウトに関与させず (.panel の直接の flex 子であるかのように振る舞う)、
+   モバイルのドロワー内でだけ実体を持たせて transform アニメーションを効かせる
+   (900px 以下の上書きは下の @media 内)。 */
+.drawer-content { display: contents; }
 .panel::-webkit-scrollbar { width: 6px; }
 .panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
 
@@ -234,9 +277,22 @@ body { overflow: hidden; }
   cursor: pointer;
 }
 
-.log { list-style: none; padding: 0; margin: 0; font-size: 11px; color: var(--text-dim); }
-.log li { padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); }
+.log { list-style: none; padding: 0; margin: 0; font-size: 11px; color: var(--text-dim); max-height: 220px; overflow-y: auto; }
+.log li {
+  display: grid; grid-template-columns: 40px 1fr; gap: 8px; align-items: baseline;
+  padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04);
+}
 .log li:last-child { border-bottom: none; }
+.log li .time { color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums; }
+.log li .body { color: var(--text-dim); }
+/* M17: 「このエリアを注視中」トグル。h2 の右肩に小さく置く。 */
+.log-area-toggle {
+  float: right; width: 22px; height: 22px; line-height: 20px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--panel-edge);
+  background: var(--panel); color: var(--text-dim); cursor: pointer; font-size: 12px;
+}
+.log-area-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.log-area-label { margin: 0 0 6px; font-size: 10px; color: var(--accent); }
 
 .evo { list-style: none; padding: 0; margin: 0; font-size: 12px; max-height: 220px; overflow-y: auto; }
 .evo li {
@@ -263,6 +319,8 @@ body { overflow: hidden; }
 }
 .ind-type-lbl { color: var(--text-dim); }
 .ind-type-n { color: var(--accent); font-weight: 600; }
+/* M17: タイプ別特徴文 */
+.ind-type-desc { font-size: 11px; color: var(--text-dim); margin: -4px 0 8px; line-height: 1.5; }
 
 /* M12: 個体ビューの名前/★評価/追跡トグル/特性チップ */
 .ind-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -300,6 +358,41 @@ body { overflow: hidden; }
 .board li .label { color: var(--text); }
 .board li .meta { color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
 .board li.empty { display: block; color: var(--text-dim); font-style: italic; font-size: 11px; }
+
+/* M18: 「収集・記録」タブ付きパネル (図鑑/マップ/メモ) */
+.record-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.record-tab {
+  flex: 1; background: var(--panel); border: 1px solid var(--panel-edge);
+  color: var(--text-dim); border-radius: 8px; padding: 6px 4px; cursor: pointer;
+  font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+.record-tab[aria-selected="true"] { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.record-panel[hidden] { display: none; }
+.notes-input { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.note-text {
+  width: 100%; resize: vertical; min-height: 44px;
+  background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
+  border-radius: 8px; padding: 6px 8px; font-size: 12px; font-family: inherit;
+}
+.notes-actions { display: flex; gap: 8px; }
+.notes-actions button {
+  flex: 1; background: var(--panel); border: 1px solid var(--panel-edge); color: var(--text);
+  border-radius: 8px; padding: 6px; cursor: pointer; font-size: 11px;
+}
+.notes-list { list-style: none; padding: 0; margin: 0; max-height: 220px; overflow-y: auto; }
+.notes-list li {
+  display: grid; grid-template-columns: 44px 1fr 18px; gap: 6px; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px dashed rgba(255,255,255,0.06); font-size: 11px;
+}
+.notes-list li:last-child { border-bottom: none; }
+.notes-list li.empty { display: block; color: var(--text-dim); font-style: italic; }
+.note-day { color: var(--accent); font-variant-numeric: tabular-nums; }
+.note-body { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.note-del {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0;
+}
+.note-del:hover { color: var(--danger); }
 
 /* M13: 図鑑グリッド (サムネイル + ★ + ロックスロット) */
 .ency {
@@ -350,6 +443,8 @@ body { overflow: hidden; }
   font-size: 11px;
 }
 .lineage-node.active { border-color: var(--accent); background: var(--accent-soft); }
+/* M18: 系統樹ノードのサムネイル (40px、無いノードは文字表示のまま) */
+.lineage-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; margin-bottom: 4px; display: block; }
 .lineage-node .label { color: var(--text); font-weight: 600; margin-bottom: 2px; }
 .lineage-node .meta { color: var(--text-dim); font-size: 10px; margin-bottom: 4px; }
 .lineage-start-btn {
@@ -489,6 +584,26 @@ body { overflow: hidden; }
   border-radius: 999px;
   pointer-events: none;
 }
+/* M16: ズームスライダー UI。ホイール/ピンチと併用できるよう右下に控えめに置く。 */
+.zoom-controls {
+  position: absolute; bottom: 10px; right: 10px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; background: rgba(0,0,0,0.4);
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+}
+.zoom-btn {
+  width: 22px; height: 22px; line-height: 20px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--panel-edge);
+  background: var(--panel); color: var(--text); cursor: pointer;
+  font-size: 14px;
+}
+.zoom-controls input[type="range"] { width: 70px; accent-color: var(--accent); }
+.zoom-hint { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+@media (max-width: 900px) {
+  .zoom-hint { display: none; }
+  .zoom-controls input[type="range"] { width: 44px; }
+}
 
 .palette { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
 .tool {
@@ -618,6 +733,28 @@ body { overflow: hidden; }
     display: flex;
   }
   .panel .card { flex: none; }
+
+  /* M19: ドロワーのスライドイン。.panel 自体は display 切替のまま (M15.5 の
+     containing-block 教訓)、内側の .drawer-content だけを transform で
+     動かす。left は左から、right は右からスライドインする。display:contents
+     では transform が効かないため、ここでだけ実体を持つボックスに戻す
+     (.panel と同じ column/gap を再現し、見た目のスタッキングを保つ)。 */
+  .drawer-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transform: translateX(-16px);
+    opacity: 0;
+    transition: transform 220ms ease-out, opacity 220ms ease-out;
+  }
+  .panel.right .drawer-content { transform: translateX(16px); }
+  body.drawer-open .drawer-content {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .drawer-content { transition: none; transform: none; opacity: 1; }
+  }
 
   /* 下部ツールバー: ツール一式を常時表示 (M9 の prepare 中は「観察をはじめる」
      大ボタンをその直上に固定する)。 */

@@ -1,6 +1,6 @@
 // M13: 系統樹の分岐 (1つの親から複数回採種し、任意の祖先から再開する) の e2e。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -24,12 +24,10 @@ async function waitForReady(page: Page): Promise<void> {
   await expect.poll(async () => canvasChecksum(page), { timeout: 15_000 }).not.toBe(0);
 }
 
-async function setSpeedSlider(page: Page, value: number): Promise<void> {
-  await page.locator('#speed-slider').evaluate((el, v) => {
-    const input = el as HTMLInputElement;
-    input.value = String(v);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }, value);
+// M16: 4段速度ボタン (旧スライダーの置き換え)。既存 e2e は「×24 にする」
+// 用途でしか使っていなかったため、専用ヘルパーへ簡略化する。
+async function setSpeedMax(page: Page): Promise<void> {
+  await page.click('#speed-btn-24');
 }
 
 test('1つの親から2匹の子を育てると系統樹が枝分かれして表示される', async ({ page }) => {
@@ -46,7 +44,7 @@ test('1つの親から2匹の子を育てると系統樹が枝分かれして表
   await page.goto('/');
   await waitForReady(page);
 
-  await setSpeedSlider(page, 24);
+  await setSpeedMax(page);
   await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
     .toBeGreaterThanOrEqual(5);
   await page.click('#harvest-seed'); // 1代目を採取 → 2代目としてプレイ中
@@ -67,6 +65,26 @@ test('1つの親から2匹の子を育てると系統樹が枝分かれして表
 
   // 1代目の下に2代目が2つ (枝分かれ) 並ぶ
   await expect(page.locator('.lineage-node', { hasText: '2代目' })).toHaveCount(2);
+
+  expect(errors).toEqual([]);
+});
+
+test('M18: 採種すると系統樹ノードにサムネイルが付く (IndexedDB への非同期保存)', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.goto('/');
+  await waitForReady(page);
+
+  await setSpeedMax(page);
+  await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
+    .toBeGreaterThanOrEqual(5);
+  await page.click('#harvest-seed');
+
+  // renderThumbnail → toBlob → fetch → IndexedDB 保存は複数ホップの非同期
+  // 処理で、harvest() 自体 (同期) より確実に遅れて完了する。
+  await expect.poll(async () => page.locator('#lineage .lineage-thumb').count(), { timeout: 10_000 }).toBe(1);
+  const src = await page.locator('#lineage .lineage-thumb').first().getAttribute('src');
+  expect(src).toMatch(/^blob:/);
 
   expect(errors).toEqual([]);
 });

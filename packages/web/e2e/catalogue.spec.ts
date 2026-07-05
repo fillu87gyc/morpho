@@ -1,6 +1,6 @@
 // M13: 図鑑グリッド (37枠、M14で大陸ステージが加わり32→37) と実績バッジグリッドの e2e。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -24,12 +24,10 @@ async function waitForReady(page: Page): Promise<void> {
   await expect.poll(async () => canvasChecksum(page), { timeout: 15_000 }).not.toBe(0);
 }
 
-async function setSpeedSlider(page: Page, value: number): Promise<void> {
-  await page.locator('#speed-slider').evaluate((el, v) => {
-    const input = el as HTMLInputElement;
-    input.value = String(v);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }, value);
+// M16: 4段速度ボタン (旧スライダーの置き換え)。既存 e2e は「×24 にする」
+// 用途でしか使っていなかったため、専用ヘルパーへ簡略化する。
+async function setSpeedMax(page: Page): Promise<void> {
+  await page.click('#speed-btn-24');
 }
 
 test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見してサムネイルとカウントが更新される', async ({ page }) => {
@@ -46,7 +44,7 @@ test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見�
   await expect(page.locator('.ency-slot')).toHaveCount(37);
   await expect(page.locator('.ency-slot.discovered')).toHaveCount(0);
 
-  await setSpeedSlider(page, 24);
+  await setSpeedMax(page);
   await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
     .toBeGreaterThanOrEqual(3);
 
@@ -86,7 +84,7 @@ test('実績はバッジグリッドで12個表示され、達成すると解除
   for (let i = 0; i < 6; i++) {
     await page.mouse.click(box.x + box.width * (0.2 + i * 0.1), box.y + box.height * 0.5);
   }
-  await setSpeedSlider(page, 24);
+  await setSpeedMax(page);
   await expect.poll(async () => page.locator('.ach-badge.unlocked').count(), { timeout: 20_000 }).toBeGreaterThan(0);
 
   expect(errors).toEqual([]);

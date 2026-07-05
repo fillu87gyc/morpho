@@ -1,7 +1,7 @@
 // M14: 大陸ステージの e2e。拠点が20を超えて生成され、専用クエストが
 // 表示され、通常どおり進行することを確認する。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -25,12 +25,10 @@ async function waitForReady(page: Page): Promise<void> {
   await expect.poll(async () => canvasChecksum(page), { timeout: 15_000 }).not.toBe(0);
 }
 
-async function setSpeedSlider(page: Page, value: number): Promise<void> {
-  await page.locator('#speed-slider').evaluate((el, v) => {
-    const input = el as HTMLInputElement;
-    input.value = String(v);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }, value);
+// M16: 4段速度ボタン (旧スライダーの置き換え)。既存 e2e は「×24 にする」
+// 用途でしか使っていなかったため、専用ヘルパーへ簡略化する。
+async function setSpeedMax(page: Page): Promise<void> {
+  await page.click('#speed-btn-24');
 }
 
 test('大陸ステージへ切り替えると拠点が20を超え、専用クエストが表示されて進行する', async ({ page }) => {
@@ -54,7 +52,24 @@ test('大陸ステージへ切り替えると拠点が20を超え、専用クエ
   // 大陸専用クエストのカードが見える。
   await expect(page.locator('#q-continent-item')).toBeVisible();
 
-  await setSpeedSlider(page, 24);
+  // M16: ミニマップに地形 (水域) が焼かれている。青系ピクセルの存在を
+  // getImageData で数える (bakeTerrain はステージ切替のフレームで走る)。
+  await page.waitForTimeout(300);
+  const waterPixelCount = await page.evaluate(() => {
+    const canvas = document.getElementById('minimap') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]!, g = data[i + 1]!, b = data[i + 2]!;
+      // MINIMAP_WATER (rgba(52,100,156,...)) 系統の青みが強いピクセル。
+      if (b > 120 && b > r + 40 && b > g + 20) count++;
+    }
+    return count;
+  });
+  expect(waterPixelCount).toBeGreaterThan(0);
+
+  await setSpeedMax(page);
   await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
     .toBeGreaterThanOrEqual(2);
 

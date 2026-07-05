@@ -39,13 +39,18 @@
             <div class="era-wrap" title="時代の達成条件への進捗">
               <span id="era-ring" class="era-ring"></span>
               <span class="era" id="era">胞子期</span>
+              <span class="era-eta" id="era-eta">次の時代まで —</span>
             </div>
             <div class="era stage-name" id="stage-name">皿</div>
-            <div class="controls">
-              <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
-              <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
-              <span class="speed-n">×<span id="speed-n">1</span></span>
-              <button id="fast-forward" class="pause-toggle" title="早送り (描画を10fpsに間引いて浮いた分をtickに回す)">⏩</button>
+            <!-- M18: 探索レポート。総質量/面積の推移・時代の年表・数値サマリを見る。 -->
+            <button id="report-open" class="pause-toggle" title="探索レポートを見る">📈</button>
+            <!-- M16: モックアップの ⏸ ▶ ▶▶ ▶▶▶ 4段ボタン。旧スライダー+⏩は廃止。
+                 ▶▶▶ は ×24 に加えて早送りフラグ (描画10fps化) も ON にする。 -->
+            <div class="controls speed-controls" role="group" aria-label="再生速度">
+              <button id="speed-btn-pause" class="pause-toggle speed-btn" title="一時停止" aria-pressed="false">⏸</button>
+              <button id="speed-btn-1" class="pause-toggle speed-btn" title="×1" aria-pressed="true">▶</button>
+              <button id="speed-btn-8" class="pause-toggle speed-btn" title="×8" aria-pressed="false">▶▶</button>
+              <button id="speed-btn-24" class="pause-toggle speed-btn" title="×24 (早送り)" aria-pressed="false">▶▶▶</button>
               <button id="day-loop-mode-toggle" class="pause-toggle" title="デイループ (仕込む→委ねる→受け取る) / 見守り (連続再生) を切り替える">🔁 見守り</button>
             </div>
           </div>
@@ -65,6 +70,11 @@
 
       <main class="stage">
         <aside class="panel left">
+          <!-- M19: ドロワーのスライドイン。オーバーレイ本体 (.panel) は
+               M15.5 の教訓どおり display:none/flex のまま (position:fixed の
+               containing block を transform で変えないため)、内側の
+               .drawer-content だけを transform でスライドさせる。 -->
+          <div class="drawer-content">
           <section class="card">
             <h2>メインクエスト</h2>
             <div class="quest-item">
@@ -103,18 +113,6 @@
           </section>
 
           <section class="card">
-            <h2>ワールドビュー</h2>
-            <canvas id="minimap" class="minimap" width="140" height="140" title="クリックでそのコロニーへズーム"></canvas>
-            <dl class="kv">
-              <dt>統合ネットワーク数</dt><dd><span id="w-networks">0</span>/<span id="w-colonies">0</span></dd>
-            </dl>
-            <div class="quest-item">
-              <div class="quest-head"><span class="quest-title">離れたコロニーをひとつに</span><span class="num" id="q-unite-n">0%</span></div>
-              <div class="progress"><div id="q-unite-bar" class="bar"></div></div>
-            </div>
-          </section>
-
-          <section class="card">
             <h2>環境バランス</h2>
             <div class="trait">
               <span class="ico-lbl"><i class="dot dot-light"></i>光</span>
@@ -150,10 +148,13 @@
               <span id="ind-stars" class="ind-stars" title="個性の総合評価">★★★☆☆</span>
               <span id="local-time" class="local-time" title="ローカルタイム (1日=24時間換算)">00:00:00</span>
               <button id="track-toggle" class="track-toggle" title="この個体を追跡する (カメラが重心へついてくる)">🎯 追跡</button>
+              <button id="chart-open" class="track-toggle" title="日ごとの推移をグラフで見る">📊</button>
             </div>
             <div id="ind-chips" class="chip-row"></div>
             <div id="ind-env-chips" class="chip-row env-chips"></div>
             <div class="ind-type"><span class="ind-type-lbl">タイプ</span><span id="ind-type-n" class="ind-type-n">—</span></div>
+            <!-- M17: タイプ別特徴文。1文の定型文で個体の傾向を説明する。 -->
+            <p id="ind-type-desc" class="ind-type-desc"></p>
             <div class="trait">
               <span class="lbl">健康度</span>
               <div class="progress"><div id="t-health" class="bar"></div></div>
@@ -194,14 +195,23 @@
               <p class="empty">まだ種を採取していない…</p>
             </div>
           </section>
+          </div>
         </aside>
 
         <div class="canvas-wrap">
           <canvas id="canvas" width="640" height="640"></canvas>
           <div id="hint" class="hint">クリックで配置 / ホイールでズーム / 右ドラッグで移動</div>
+          <!-- M16: ズームスライダー UI。ホイール/ピンチと双方向にバインドする。 -->
+          <div class="zoom-controls">
+            <button id="zoom-out" class="zoom-btn" title="ズームアウト">−</button>
+            <input id="zoom-slider" type="range" min="1" max="8" step="0.1" value="1" title="ズーム" />
+            <button id="zoom-in" class="zoom-btn" title="ズームイン">+</button>
+            <span class="zoom-hint">ピンチでズーム</span>
+          </div>
         </div>
 
         <aside class="panel right">
+          <div class="drawer-content">
           <section class="card">
             <h2>環境を整える</h2>
             <div class="palette">
@@ -271,15 +281,53 @@
           </section>
 
           <section class="card">
-            <h2>最近の出来事</h2>
+            <h2>最近の出来事
+              <!-- M17: 座標を持つ出来事だけを、現在の視野 (camera) と交差する
+                   ものに絞る。座標なしの出来事 (道具の設置以外) は常に通す。 -->
+              <button id="log-area-toggle" class="log-area-toggle" title="今見えている範囲の出来事だけに絞る" aria-pressed="false">👁</button>
+            </h2>
+            <p id="log-area-label" class="log-area-label" hidden>このエリアを注視中</p>
             <ul id="log" class="log"></ul>
           </section>
 
-          <section class="card">
-            <h2>図鑑 <span id="ency-progress" class="badge">0/32</span></h2>
-            <ul id="ency" class="ency">
-              <li class="empty">まだ何も発見していない…</li>
-            </ul>
+          <!-- M18: 「収集・記録」タブ付きパネル。図鑑/マップ/メモを1カードに
+               統合する (モックアップ①)。既存の図鑑・ミニマップの DOM/ID は
+               そのまま移設し、catalogue.ts / minimap.ts / main.ts の描画・
+               更新ロジックは無改修 (ui.ts の配置だけを変える)。 -->
+          <section class="card record-hub">
+            <h2>収集・記録</h2>
+            <div class="record-tabs" role="tablist">
+              <button class="record-tab" id="record-tab-ency" data-tab="ency" role="tab" aria-selected="true">図鑑 <span id="ency-progress" class="badge">0/32</span></button>
+              <button class="record-tab" id="record-tab-map" data-tab="map" role="tab" aria-selected="false">マップ</button>
+              <button class="record-tab" id="record-tab-notes" data-tab="notes" role="tab" aria-selected="false">メモ</button>
+            </div>
+            <div class="record-panel" data-panel="ency">
+              <ul id="ency" class="ency">
+                <li class="empty">まだ何も発見していない…</li>
+              </ul>
+            </div>
+            <div class="record-panel" data-panel="map" hidden>
+              <canvas id="minimap" class="minimap" width="140" height="140" title="クリックでそのコロニーへズーム"></canvas>
+              <dl class="kv">
+                <dt>統合ネットワーク数</dt><dd><span id="w-networks">0</span>/<span id="w-colonies">0</span></dd>
+              </dl>
+              <div class="quest-item">
+                <div class="quest-head"><span class="quest-title">離れたコロニーをひとつに</span><span class="num" id="q-unite-n">0%</span></div>
+                <div class="progress"><div id="q-unite-bar" class="bar"></div></div>
+              </div>
+            </div>
+            <div class="record-panel" data-panel="notes" hidden>
+              <div class="notes-input">
+                <textarea id="note-text" class="note-text" rows="2" placeholder="今日の気づきを書き留める…"></textarea>
+                <div class="notes-actions">
+                  <button id="note-paste-summary" title="当日の成長サマリを挿入する">今日の成長を貼る</button>
+                  <button id="note-add" class="harvest-btn">追加</button>
+                </div>
+              </div>
+              <ul id="notes-list" class="notes-list">
+                <li class="empty">まだメモがない…</li>
+              </ul>
+            </div>
           </section>
 
           <section class="card">
@@ -309,6 +357,7 @@
             <button id="reset-view">全体を見る</button>
             <button id="toggle-ambient" title="環境音 + アンビエントBGMを再生する (WebAudioで生成)">🔈 環境音</button>
           </section>
+          </div>
         </aside>
       </main>
 
@@ -369,6 +418,67 @@
           <div class="dr-actions">
             <button id="onboarding-skip" title="オンボーディングをスキップする">スキップ</button>
             <button id="onboarding-next" class="harvest-btn">次へ ▶</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- M19: オンボーディング直後の初回だけ出す「デイループ / 見守り」の
+           2択。既存ユーザー (morpho.dayLoopMode.v1 が既に設定済み) には
+           出さず、現在の選択を維持する。 -->
+      <div id="day-loop-choice" class="modal-overlay onboarding-overlay" hidden>
+        <div class="modal card onboarding-card">
+          <h2>どちらで育てますか?</h2>
+          <p>「デイループ」は1日ずつ仕込んで委ねる遊び方、「見守り」は連続再生であなたのペースで眺める遊び方です。後からいつでもヘッダのボタンで切り替えられます。</p>
+          <div class="dr-actions">
+            <button id="day-loop-choice-watch" title="見守り (連続再生) で始める">見守りで眺める</button>
+            <button id="day-loop-choice-loop" class="harvest-btn" title="デイループ (1日ずつ) で始める">デイループで遊ぶ</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- M17: 統計グラフ。個体ビューの 📊 から開く。直近60日 (dayReport) の
+           3軸スコア + 質量 (右軸) を canvas 折れ線チャートで見せる。 -->
+      <div id="chart-modal" class="modal-overlay" hidden>
+        <div class="modal card chart-card">
+          <h2>成長の推移</h2>
+          <canvas id="chart-canvas" width="480" height="260"></canvas>
+          <p id="chart-empty" class="chart-empty" hidden>まだ記録が足りません</p>
+          <div class="chart-legend">
+            <span class="chart-legend-item"><i class="dot" style="background:#8fd0ff"></i>探索性</span>
+            <span class="chart-legend-item"><i class="dot" style="background:#ffd27a"></i>効率性</span>
+            <span class="chart-legend-item"><i class="dot" style="background:#9dffa0"></i>安定性</span>
+            <span class="chart-legend-item"><i class="dot" style="background:#e8b84b"></i>質量 (右軸)</span>
+          </div>
+          <div class="dr-actions">
+            <button id="chart-close" class="harvest-btn">閉じる</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- M18: 探索レポート。総質量・総面積の推移 (chart.ts 再利用) + 時代の
+           年表 + 数値サマリ + 「画像で保存」(canvas 合成 → アルバム)。 -->
+      <div id="report-modal" class="modal-overlay" hidden>
+        <div class="modal card chart-card">
+          <h2>探索レポート</h2>
+          <canvas id="report-chart-canvas" width="480" height="200"></canvas>
+          <p id="report-chart-empty" class="chart-empty" hidden>まだ記録が足りません</p>
+          <div class="chart-legend">
+            <span class="chart-legend-item"><i class="dot" style="background:#8fd0ff"></i>面積 (右軸)</span>
+            <span class="chart-legend-item"><i class="dot" style="background:#e8b84b"></i>質量 (右軸)</span>
+          </div>
+          <dl class="kv report-summary">
+            <dt>拠点接続</dt><dd id="report-colonies">0/0</dd>
+            <dt>探索率</dt><dd id="report-exploration">0%</dd>
+            <dt>発見種数</dt><dd id="report-species">0/0</dd>
+            <dt>実績</dt><dd id="report-achievements">0/0</dd>
+          </dl>
+          <h3 class="report-subtitle">時代の年表</h3>
+          <ul id="report-era-history" class="report-era-history">
+            <li class="empty">まだ記録がない…</li>
+          </ul>
+          <div class="dr-actions">
+            <button id="report-save" title="今のレポートをPNGとしてアルバムへ保存する">画像で保存</button>
+            <button id="report-close" class="harvest-btn">閉じる</button>
           </div>
         </div>
       </div>

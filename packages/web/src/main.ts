@@ -8,7 +8,7 @@ import { Timeline } from './timeline.js';
 import { Camera } from './camera.js';
 import { Minimap } from './minimap.js';
 import { Encyclopedia, TOTAL_TYPE_COUNT } from './encyclopedia.js';
-import { Achievements } from './achievements.js';
+import { Achievements, ACHIEVEMENT_DEFS } from './achievements.js';
 import { allChallenges, DailyChallengeTracker } from './challenges.js';
 import { Scoreboard } from './scoreboard.js';
 import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
@@ -17,15 +17,22 @@ import { PerfHud, debugModeEnabled } from './perf-hud.js';
 import { Album } from './album.js';
 import { Ambient } from './ambient.js';
 import { DayReport } from './day-report.js';
-import { createDayLoop, beginObserve, completeDay, advanceToNextDay, TICKS_PER_DAY } from './day-loop.js';
+import { createDayLoop, beginObserve, completeDay, advanceToNextDay, TICKS_PER_DAY, formatMMSS } from './day-loop.js';
 import { Wallet, type CurrencyKind } from './wallet.js';
 import { DailyTracker } from './dailies.js';
 import { Identity } from './identity.js';
 import { starsOf, traitChipsFor, environmentTagsFor } from './trait-labels.js';
 import { CatalogueThumbs } from './catalogue-thumbs.js';
-import type { CatalogueContext } from './catalogue.js';
+import { LineageThumbs } from './lineage-thumbs.js';
+import { allCatalogueEntries, type CatalogueContext } from './catalogue.js';
 import { localTimeFor, nightFactorFor } from './daytime.js';
 import { ONBOARDING_STEPS, hasSeenOnboarding, markOnboardingSeen } from './onboarding.js';
+import { detectMutation, detectNewTraitChips, newTraitChipText } from './mutation-events.js';
+import type { EvolutionLog } from './game.js';
+import { buildChartLayout, drawChart, type ChartSeries } from './chart.js';
+import { EraHistory } from './era-history.js';
+import { Notes } from './notes.js';
+import { buildReport, eraHistoryLines } from './report.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -38,10 +45,36 @@ const lineage = new Lineage();
 const album = new Album();
 const ambient = new Ambient();
 const dayReport = new DayReport();
+const eraHistory = new EraHistory();
+// M17: 突然変異・形質獲得イベント。sim には手を入れず、日境界で前日と当日の
+// DayRecord.traits / traitChipsFor() を比較した web 側派生として「進化の記録」
+// に流し込む (game.ts の evoLog/eraLog とは別に main.ts 側で保持し、
+// ui.render() で合流させる)。
+const MAX_LOCAL_EVO = 30;
+let localEvoLog: EvolutionLog[] = [];
+function pushLocalEvo(tick: number, text: string): void {
+  localEvoLog.unshift({ tick, text });
+  if (localEvoLog.length > MAX_LOCAL_EVO) localEvoLog.pop();
+}
+// 日境界で dayReport.record() の直後に呼ぶ。前日の記録がなければ何もしない
+// (初日は比較対象がない)。
+function checkMutationEvents(day: number): void {
+  const prev = dayReport.of(day - 1);
+  const cur = dayReport.of(day);
+  if (!prev || !cur) return;
+  const snap = game.snapshot();
+  const mutationText = detectMutation(prev.traits, cur.traits);
+  if (mutationText) pushLocalEvo(snap.state.tick, mutationText);
+  const newChips = detectNewTraitChips(snap.genome, prev.traits, cur.traits, snap.typeInfo.label);
+  const chipText = newTraitChipText(newChips);
+  if (chipText) pushLocalEvo(snap.state.tick, chipText);
+}
 const wallet = new Wallet();
 const dailies = new DailyTracker();
 const identity = new Identity();
 const catalogueThumbs = new CatalogueThumbs();
+const notes = new Notes();
+const lineageThumbs = new LineageThumbs();
 let undoUsedCount = 0;
 // M12: 「個体を追跡する」。ミニマップクリックで対象コロニーを選び、
 // トグルで追従の on/off を切り替える。手動ズーム/パンで解除する。
@@ -51,6 +84,7 @@ let tracking = false;
 // 系統に採取済みの種があれば、初回起動から継承した個体で始める
 // (M5: セッションをまたいで系統樹を続けられる)。
 const game = new GameProxy(lineage.current()?.genome);
+
 const renderer = new CanvasRenderer(canvas, {
   worldSize: game.worldSize,
   fieldSize: game.fieldSize,
@@ -82,7 +116,7 @@ minimapCanvas.addEventListener('click', (e) => {
   camera.focusOn(worldPos);
 });
 
-const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album, catalogueThumbs }, {
+const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, lineage, album, catalogueThumbs, notes, lineageThumbs }, {
   onSpeed: (s) => {
     if (s > 0) lastPositiveSpeed = s;
     game.setSpeed(s);
@@ -95,6 +129,8 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     dayReport.reset();
+    eraHistory.reset();
+    localEvoLog = [];
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
@@ -115,6 +151,8 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     fitCanvas();
     ambient.setStage(id);
     dayReport.reset();
+    eraHistory.reset();
+    localEvoLog = [];
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
@@ -131,7 +169,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
   onHarvestSeed: () => {
     const snap = game.snapshot();
     if (snap.day < HARVEST_MIN_DAY) return;
-    lineage.harvest({
+    const entry = lineage.harvest({
       genome: snap.genome,
       typeId: snap.typeInfo.id,
       typeLabel: snap.typeInfo.label,
@@ -141,6 +179,15 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
       stageId: snap.stage.id,
       stageName: snap.stage.name,
     });
+    // M18: 系統樹ノードのサムネイル。採種時点の姿を撮り IndexedDB へ保存する
+    // (renderThumbnail() は blob URL の Promise を返すため、生の Blob が
+    // 要る IndexedDB 保存には fetch() で取り出す — catalogue-thumbs と同じ経路)。
+    void renderer.renderThumbnail(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, 160)
+      .then((url) => {
+        if (!url) return null;
+        return fetch(url).then((r) => r.blob()).finally(() => URL.revokeObjectURL(url));
+      })
+      .then((blob) => { if (blob) void lineageThumbs.set(entry.id, blob); });
   },
   onScreenshot: () => {
     const snap = game.snapshot();
@@ -164,6 +211,8 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     camera.reset();
     fitCanvas();
     dayReport.reset();
+    eraHistory.reset();
+    localEvoLog = [];
     identity.advance();
     tracking = false;
     trackedColonyIndex = null;
@@ -220,6 +269,7 @@ function renderOnboardingStep(): void {
 function closeOnboarding(): void {
   onboardingEl.hidden = true;
   markOnboardingSeen();
+  maybeShowDayLoopChoice();
 }
 
 onboardingNextBtn.addEventListener('click', () => {
@@ -236,6 +286,131 @@ if (!hasSeenOnboarding()) {
   onboardingEl.hidden = false;
   renderOnboardingStep();
 }
+
+// ── M17: 統計グラフ ────────────────────────────────────
+// dayReport (直近60日) の3軸スコア + 質量 (右軸) を canvas 折れ線チャートで見せる。
+// buildChartLayout は chart.ts の純粋関数、描画はここで一度だけ (モーダルを
+// 開いたとき / 開いている間に新しい日が記録されたときだけ) 行えば十分。
+const chartModalEl = document.getElementById('chart-modal') as HTMLElement;
+const chartCanvasEl = document.getElementById('chart-canvas') as HTMLCanvasElement;
+const chartEmptyEl = document.getElementById('chart-empty') as HTMLElement;
+const chartOpenBtn = document.getElementById('chart-open') as HTMLButtonElement;
+const chartCloseBtn = document.getElementById('chart-close') as HTMLButtonElement;
+
+function renderChart(): void {
+  const records = dayReport.list();
+  if (records.length < 2) {
+    chartCanvasEl.hidden = true;
+    chartEmptyEl.hidden = false;
+    return;
+  }
+  chartCanvasEl.hidden = false;
+  chartEmptyEl.hidden = true;
+  const days = records.map((r) => r.day);
+  const series: ChartSeries[] = [
+    { label: '探索性', color: '#8fd0ff', values: records.map((r) => r.traits.exploration), axis: 'left' },
+    { label: '効率性', color: '#ffd27a', values: records.map((r) => r.traits.efficiency), axis: 'left' },
+    { label: '安定性', color: '#9dffa0', values: records.map((r) => r.traits.stability), axis: 'left' },
+    { label: '質量', color: '#e8b84b', values: records.map((r) => r.massKg), axis: 'right' },
+  ];
+  const layout = buildChartLayout(days, series, chartCanvasEl.width, chartCanvasEl.height);
+  const ctx = chartCanvasEl.getContext('2d');
+  if (ctx) drawChart(ctx, layout);
+}
+
+chartOpenBtn.addEventListener('click', () => {
+  chartModalEl.hidden = false;
+  renderChart();
+});
+chartCloseBtn.addEventListener('click', () => { chartModalEl.hidden = true; });
+
+// ── M18: 探索レポート ──────────────────────────────────
+const reportModalEl = document.getElementById('report-modal') as HTMLElement;
+const reportOpenBtn = document.getElementById('report-open') as HTMLButtonElement;
+const reportCloseBtn = document.getElementById('report-close') as HTMLButtonElement;
+const reportSaveBtn = document.getElementById('report-save') as HTMLButtonElement;
+const reportChartCanvasEl = document.getElementById('report-chart-canvas') as HTMLCanvasElement;
+const reportChartEmptyEl = document.getElementById('report-chart-empty') as HTMLElement;
+const reportEraHistoryEl = document.getElementById('report-era-history') as HTMLElement;
+
+function renderReport(): void {
+  const snap = game.snapshot();
+  const records = dayReport.list();
+  const report = buildReport({
+    records,
+    eraHistory: eraHistory.list(),
+    connectedColonies: snap.world.coloniesReached,
+    totalColonies: snap.world.coloniesTotal,
+    exploration: snap.traits.exploration,
+    discoveredSpecies: encyclopedia.list().length,
+    totalSpecies: allCatalogueEntries().length,
+    achievementsUnlocked: achievements.list().length,
+    totalAchievements: ACHIEVEMENT_DEFS.length,
+  });
+
+  document.getElementById('report-colonies')!.textContent = `${report.summary.connectedColonies}/${report.summary.totalColonies}`;
+  document.getElementById('report-exploration')!.textContent = `${report.summary.explorationPct}%`;
+  document.getElementById('report-species')!.textContent = `${report.summary.discoveredSpecies}/${report.summary.totalSpecies}`;
+  document.getElementById('report-achievements')!.textContent = `${report.summary.achievementsUnlocked}/${report.summary.totalAchievements}`;
+
+  reportEraHistoryEl.innerHTML = '';
+  const lines = eraHistoryLines(report.eraHistory);
+  if (lines.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'まだ記録がない…';
+    reportEraHistoryEl.appendChild(li);
+  } else {
+    for (const line of lines) {
+      const li = document.createElement('li');
+      li.textContent = line;
+      reportEraHistoryEl.appendChild(li);
+    }
+  }
+
+  if (records.length < 2) {
+    reportChartCanvasEl.hidden = true;
+    reportChartEmptyEl.hidden = false;
+    return;
+  }
+  reportChartCanvasEl.hidden = false;
+  reportChartEmptyEl.hidden = true;
+  const days = records.map((r) => r.day);
+  const series: ChartSeries[] = [
+    { label: '面積', color: '#8fd0ff', values: records.map((r) => r.areaM2), axis: 'right' },
+    { label: '質量', color: '#e8b84b', values: records.map((r) => r.massKg), axis: 'right' },
+  ];
+  const layout = buildChartLayout(days, series, reportChartCanvasEl.width, reportChartCanvasEl.height);
+  const ctx = reportChartCanvasEl.getContext('2d');
+  if (ctx) drawChart(ctx, layout);
+}
+
+reportOpenBtn.addEventListener('click', () => {
+  reportModalEl.hidden = false;
+  renderReport();
+});
+reportCloseBtn.addEventListener('click', () => { reportModalEl.hidden = true; });
+reportSaveBtn.addEventListener('click', () => {
+  // モーダルの card 部分を画像として合成し、既存のアルバム経路 (M7) へ保存する。
+  const modalCard = reportModalEl.querySelector('.card') as HTMLElement;
+  if (!modalCard) return;
+  const rect = modalCard.getBoundingClientRect();
+  const out = document.createElement('canvas');
+  out.width = Math.round(rect.width * 2);
+  out.height = Math.round(rect.height * 2);
+  const octx = out.getContext('2d');
+  if (!octx) return;
+  octx.scale(2, 2);
+  octx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--panel') || '#1a1a1a';
+  octx.fillRect(0, 0, rect.width, rect.height);
+  const chartRect = reportChartCanvasEl.getBoundingClientRect();
+  if (!reportChartCanvasEl.hidden) {
+    octx.drawImage(reportChartCanvasEl, chartRect.left - rect.left, chartRect.top - rect.top, chartRect.width, chartRect.height);
+  }
+  out.toBlob((blob) => {
+    if (blob) album.add(blob, { day: game.snapshot().day, stageName: `探索レポート・${game.snapshot().stage.name}` });
+  }, 'image/png');
+});
 
 // ── M11: 通貨HUD ──────────────────────────────────────
 const CURRENCY_ICON: Record<CurrencyKind, string> = { sizuku: '🪙', wakaba: '🍃', horoishi: '🍄' };
@@ -263,6 +438,18 @@ for (const btn of toolButtons) {
   btn.appendChild(badge);
 }
 
+// M19: 通貨増減の「+n」フロート演出。M11 の簡易フラッシュに追加する形で、
+// 残高チップから差分が浮いて消える。prefers-reduced-motion では出さない。
+const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function spawnCurrencyFloat(currency: CurrencyKind, delta: number): void {
+  if (delta === 0 || prefersReducedMotion()) return;
+  const el = document.createElement('span');
+  el.className = `wallet-float ${delta > 0 ? 'up' : 'down'}`;
+  el.textContent = `${delta > 0 ? '+' : ''}${delta.toLocaleString('ja-JP')}`;
+  chipEl[currency].appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
 function updateWalletUi(): void {
   const b = wallet.all();
   for (const currency of Object.keys(curEl) as CurrencyKind[]) {
@@ -271,6 +458,7 @@ function updateWalletUi(): void {
     if (lastShownBalance[currency] !== undefined) {
       chipEl[currency].classList.add('flash');
       setTimeout(() => chipEl[currency].classList.remove('flash'), 400);
+      spawnCurrencyFloat(currency, v - lastShownBalance[currency]!);
     }
     lastShownBalance[currency] = v;
     curEl[currency].textContent = v.toLocaleString('ja-JP');
@@ -393,9 +581,9 @@ const drThumb = document.getElementById('dr-thumb') as HTMLImageElement;
 const drNextBtn = document.getElementById('dr-next') as HTMLButtonElement;
 const drAlbumBtn = document.getElementById('dr-album') as HTMLButtonElement;
 const drEvents = document.getElementById('dr-events') as HTMLElement;
-const speedSliderEl = document.getElementById('speed-slider') as HTMLInputElement;
-const pauseToggleEl = document.getElementById('pause-toggle') as HTMLButtonElement;
-const fastForwardEl = document.getElementById('fast-forward') as HTMLButtonElement;
+// M16: ⏸ ▶ ▶▶ ▶▶▶ の4段ボタン (旧スライダー+⏩トグルの置き換え)。
+const speedBtnEls = ['speed-btn-pause', 'speed-btn-1', 'speed-btn-8', 'speed-btn-24']
+  .map((id) => document.getElementById(id) as HTMLButtonElement);
 
 type TraitAxis = 'exploration' | 'efficiency' | 'stability';
 const DR_AXES: { axis: TraitAxis; valId: string; deltaId: string }[] = [
@@ -404,20 +592,11 @@ const DR_AXES: { axis: TraitAxis; valId: string; deltaId: string }[] = [
   { axis: 'stability', valId: 'dr-stability-n', deltaId: 'dr-stability-delta' },
 ];
 
-function formatMMSS(totalSeconds: number): string {
-  const s = Math.max(0, Math.round(totalSeconds));
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-}
-
 // prepare フェーズ中は「仕込む」以外の操作 (速度変更/一時停止/早送り) を
 // 無効化する。observe 中は通常通り操作でき、その速さがそのまま
 // 「1日を消化する速さ」になる。
 function setPlaybackControlsEnabled(enabled: boolean): void {
-  speedSliderEl.disabled = !enabled;
-  pauseToggleEl.disabled = !enabled;
-  fastForwardEl.disabled = !enabled;
+  for (const btn of speedBtnEls) btn.disabled = !enabled;
 }
 
 function enterPrepare(startTick: number): void {
@@ -438,6 +617,29 @@ function applyDayLoopModeUI(): void {
 }
 applyDayLoopModeUI();
 if (dayLoopMode) enterPrepare(0);
+
+// M19: オンボーディング直後の初回のみ「デイループ / 見守り」の2択を出す。
+// 既存ユーザー (キーが既に設定済み = 過去にこの選択かトグル操作をしたことが
+// ある) には出さず、現在の選択をそのまま維持する。
+const dayLoopChoiceEl = document.getElementById('day-loop-choice') as HTMLElement;
+const dayLoopChoiceWatchBtn = document.getElementById('day-loop-choice-watch') as HTMLButtonElement;
+const dayLoopChoiceLoopBtn = document.getElementById('day-loop-choice-loop') as HTMLButtonElement;
+function hasChosenDayLoopMode(): boolean {
+  try { return localStorage.getItem(DAY_LOOP_MODE_KEY) !== null; } catch { return true; }
+}
+function applyDayLoopChoice(loop: boolean): void {
+  dayLoopChoiceEl.hidden = true;
+  dayLoopMode = loop;
+  saveDayLoopMode(loop);
+  applyDayLoopModeUI();
+  if (loop) enterPrepare(game.ready ? game.snapshot().state.tick : 0);
+}
+function maybeShowDayLoopChoice(): void {
+  if (hasChosenDayLoopMode()) return;
+  dayLoopChoiceEl.hidden = false;
+}
+dayLoopChoiceWatchBtn.addEventListener('click', () => applyDayLoopChoice(false));
+dayLoopChoiceLoopBtn.addEventListener('click', () => applyDayLoopChoice(true));
 
 dayLoopModeBtn.addEventListener('click', () => {
   dayLoopMode = !dayLoopMode;
@@ -477,6 +679,7 @@ drAlbumBtn.addEventListener('click', () => {
 function showDayResult(day: number): void {
   const snap = game.snapshot();
   dayReport.record({ day, traits: snap.traits, massKg: snap.world.massKg, areaM2: snap.world.areaM2 });
+  checkMutationEvents(day);
   const delta = dayReport.delta(day);
 
   drDay.textContent = String(day);
@@ -503,10 +706,18 @@ function showDayResult(day: number): void {
     drEvents.appendChild(li);
   }
 
-  if (dayResultThumb) { URL.revokeObjectURL(dayResultThumb); dayResultThumb = null; }
+  // M19 (P8): renderThumbnail() は非同期 (toBlob) なので、モーダルが開く
+  // 前回の revoke で drThumb.src が「死んだ blob URL」を指したままの一瞬が
+  // 壊れ画像アイコンとして見えていた。src を先に外して背景色 (.dr-thumb の
+  // placeholder) に戻し、新しい URL が届いてから src を張って古い URL を
+  // revoke する (順序を入れ替えて「無参照の一瞬」を作らない)。
+  drThumb.removeAttribute('src');
+  const previousThumb = dayResultThumb;
+  dayResultThumb = null;
   void renderer.renderThumbnail(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, 200).then((url) => {
     dayResultThumb = url;
     drThumb.src = url;
+    if (previousThumb) URL.revokeObjectURL(previousThumb);
   });
 
   // M11: 日次結果の成長量に応じて 🪙 を付与する (基本給 + 前日比が伸びたボーナス)。
@@ -681,6 +892,26 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 canvas.addEventListener('dblclick', () => camera.reset());
 
+// M16: ズームスライダー ⇄ Camera.zoom の双方向バインド。
+const zoomSliderEl = document.getElementById('zoom-slider') as HTMLInputElement;
+const zoomInBtn = document.getElementById('zoom-in') as HTMLButtonElement;
+const zoomOutBtn = document.getElementById('zoom-out') as HTMLButtonElement;
+let zoomSliderDragging = false;
+zoomSliderEl.addEventListener('pointerdown', () => { zoomSliderDragging = true; });
+zoomSliderEl.addEventListener('pointerup', () => { zoomSliderDragging = false; });
+zoomSliderEl.addEventListener('input', () => {
+  camera.setZoomCentered(viewportSize(), Number(zoomSliderEl.value));
+  tracking = false;
+});
+function stepZoom(delta: number): void {
+  const next = Math.max(1, Math.min(8, camera.zoom + delta));
+  camera.setZoomCentered(viewportSize(), next);
+  zoomSliderEl.value = next.toFixed(1);
+  tracking = false;
+}
+zoomInBtn.addEventListener('click', () => stepZoom(0.5));
+zoomOutBtn.addEventListener('click', () => stepZoom(-0.5));
+
 function applyAt(x: number, y: number): void {
   // M11: 残高不足のツールは適用しない (グレーアウト表示と対になる)。
   if (!wallet.canAfford(game.tool)) return;
@@ -769,12 +1000,14 @@ function frame() {
     if (snap.era.name !== lastEraName) {
       lastEraName = snap.era.name;
       wallet.earn('horoishi', 1, `時代が「${snap.era.name}」に進んだ`);
+      eraHistory.record(snap.era.name, snap.day);
     }
     // M15.5: 見守りモード中も日境界ごとに DayRecord を積む (デイループの
     // result 遷移でしか記録しないと、切替初日の結果パネルに前日比Δが出ない)。
     if (snap.day > lastWatchedDay) {
       if (!dayLoopMode && lastWatchedDay >= 0) {
         dayReport.record({ day: lastWatchedDay, traits: snap.traits, massKg: snap.world.massKg, areaM2: snap.world.areaM2 });
+        checkMutationEvents(lastWatchedDay);
       }
       lastWatchedDay = snap.day;
     }
@@ -784,14 +1017,24 @@ function frame() {
       if (marker) camera.panToward(marker.centroid, 0.08);
     }
     renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx, nightFactorFor(snap.state.tick));
+    // M16: ステージが変わった (リセット/切替) ときだけ再焼き (bakeTerrain 内部でも
+    // 同一 stageId ならスキップするが、呼び出し自体を間引く必要はない — 判定は軽い)。
+    minimap.bakeTerrain(snap.stage.id, game.env);
     minimap.draw(snap.colonyMarkers, camera.view());
     localTimeEl.textContent = localTimeFor(snap.state.tick);
     renderIdentity();
+    // M16: ホイール/ピンチ/追従で camera.zoom が変わったら、ドラッグ中でない
+    // 限りスライダー表示もそれに追従させる (双方向バインド)。
+    if (!zoomSliderDragging && Math.abs(Number(zoomSliderEl.value) - camera.zoom) > 0.05) {
+      zoomSliderEl.value = camera.zoom.toFixed(1);
+    }
 
     // M9: 観察中の残り時間 = (targetTick - tick) / 実効tick毎秒。
+    // M15.7: effectiveSpeed の単位を「倍率」から実測 ticks/秒 (絶対値) へ
+    // 変更したので、ここでの換算 (旧: ×16ms 基準) は不要になった。
     if (dayLoopMode && dayLoop.phase === 'observe') {
       const perf = game.perf();
-      const ticksPerSecond = perf.effectiveSpeed * (1000 / 16);
+      const ticksPerSecond = perf.effectiveSpeed;
       const remainingTicks = dayLoop.targetTick - snap.state.tick;
       dayLoopRemainingN.textContent = ticksPerSecond > 0 ? formatMMSS(remainingTicks / ticksPerSecond) : '--:--';
     }
@@ -850,7 +1093,7 @@ function frame() {
     // M11: 実績解除は希少通貨 🍄 の報酬源。
     for (const id of newlyUnlocked) wallet.earn('horoishi', 1, `実績「${id}」解除`);
 
-    ui.render();
+    ui.render(camera.view(), localEvoLog);
     timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, snap.stage.id, snap.landmarks, 96));
     renderTimeline();
 

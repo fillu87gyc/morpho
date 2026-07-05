@@ -1,6 +1,6 @@
 // M11: 通貨HUDとゆるいデイリーの e2e。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];

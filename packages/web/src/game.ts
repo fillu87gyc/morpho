@@ -21,6 +21,7 @@ import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 import { TICKS_PER_DAY } from './day-loop.js';
 import { UndoStack } from './undo.js';
 import { eraFor, type EraStatus } from './era.js';
+import { WorldEventLog, type WorldEvent } from './world-events.js';
 
 export type { StageId } from './stages.js';
 
@@ -167,7 +168,11 @@ export class Game {
   // 頻発する他のイベント (太い幹が育った 等) と同じ回転バッファを共有すると
   // すぐ流れて消えてしまう。専用の別枠に保持し、evolution() で合流させる。
   private eraLog: EvolutionLog[] = [];
-  private recentEvents: string[] = [];
+  // M17: 「最近の出来事」。旧 recentEvents (string[]) を構造化し、時刻表示
+  // (WorldEvent.tick から daytime.ts で導出) と「このエリアを注視中」
+  // (WorldEvent.x/y と camera 視野の交差、main.ts/ui.ts 側の責務) を
+  // 成立させる。保持数は 6 → 30 (注視フィルタで絞ると表示が痩せるため)。
+  private worldEventLog = new WorldEventLog(30);
   // 太い管に「初めて」育った瞬間を1度だけ拾うための既知集合。
   private thickenedSeen = new Set<number>();
   // ループ生成は同じノード対が短時間で何度も emit されがちなので de-dup。
@@ -225,14 +230,14 @@ export class Game {
 
     this.evoLog = [];
     this.eraLog = [];
-    this.recentEvents = [];
+    this.worldEventLog.reset();
     this.thickenedSeen.clear();
     this.lastLoopAtTick = -999;
     this.lastObstacleAvoidedAtTick = -999;
     this.lastSporeFormedAtTick = -999;
     this.coloniesTotal = this.foodPoints.length;
     this.lastEra = '胞子期'; // 起動直後の初期時代 (eraFor() の既定と一致させる)
-    this.pushEvent(`新しい${this.stage.name}が用意された`);
+    this.pushEvent(`新しい${this.stage.name}が用意された`, 'stage-reset');
   }
 
   setTool(t: Tool): void { this.tool = t; }
@@ -273,44 +278,48 @@ export class Game {
     }
   }
 
-  // EventBus に溜まった sim イベントを「進化の記録」用のログに翻訳して落とす。
-  // 高頻度イベント (NewBranch / DeadEdge / EdgeThickened) は集計に回し、
-  // 節目だけ人間が読めるテキストにする。
+  // EventBus に溜まった sim イベントを「最近の出来事」(worldEventLog) に
+  // 翻訳して落とす。高頻度イベント (NewBranch / DeadEdge) は個別表示しない。
+  // M17: 以前はここから「進化の記録」(evoLog) に積んでいたが、モックアップ②の
+  // 「進化の記録」は突然変異/形質獲得のような節目 (day-report.ts 由来、web側)
+  // 専用にし、こちらの粒度が細かい出来事は時刻表示・エリアフィルタが効く
+  // 「最近の出来事」側へ一本化した。
   private drainBus(): void {
     const events = this.bus.drain();
+    const day = Math.floor(this.state.tick / TICKS_PER_DAY);
     for (const e of events) {
-      const text = this.eventToText(e);
-      if (!text) continue;
-      this.pushEvo(e.tick, text);
+      const r = this.eventToWorldEvent(e);
+      if (!r) continue;
+      this.worldEventLog.push({ day, tick: e.tick, kind: r.kind, text: r.text, x: r.pos?.x, y: r.pos?.y });
     }
   }
 
-  private eventToText(e: SimEvent): string | null {
+  private eventToWorldEvent(e: SimEvent): { kind: string; text: string; pos?: Vec2 } | null {
     switch (e.type) {
       case 'ReachedFood':
-        return '食料に到達';
+        return { kind: 'reached-food', text: '栄養を発見', pos: e.pos };
       case 'LoopCreated': {
         if (e.tick - this.lastLoopAtTick < 8) return null;
         this.lastLoopAtTick = e.tick;
-        return 'ネットワークが接続';
+        return { kind: 'loop-created', text: 'ネットワークが接続' };
       }
       case 'EdgeThickened': {
         if (e.radius < 1.6) return null;
         if (this.thickenedSeen.has(e.edgeId)) return null;
         this.thickenedSeen.add(e.edgeId);
-        return '太い幹が育った';
+        return { kind: 'edge-thickened', text: '太い幹が育った' };
       }
       case 'Stagnated':
-        return '成長が停滞';
+        return { kind: 'stagnated', text: '成長が停滞' };
       case 'ObstacleAvoided': {
         if (e.tick - this.lastObstacleAvoidedAtTick < 8) return null;
         this.lastObstacleAvoidedAtTick = e.tick;
-        return '障害物を迂回';
+        return { kind: 'obstacle-avoided', text: '障害物を迂回', pos: e.pos };
       }
       case 'SporeFormed': {
         if (e.tick - this.lastSporeFormedAtTick < 8) return null;
         this.lastSporeFormedAtTick = e.tick;
-        return '胞子を生成';
+        return { kind: 'spore-formed', text: '胞子を生成', pos: e.pos };
       }
       // NewBranch / DeadEdge は数が多すぎるので個別表示しない
       default:
@@ -325,7 +334,7 @@ export class Game {
   undoStroke(): void {
     if (!this.undo.canUndo) return;
     this.undo.undo();
-    this.pushEvent('やり直した');
+    this.pushEvent('やり直した', 'undo');
   }
 
   // pos はワールド座標 (0..worldSize)。画面→ワールド変換はカメラ (main 側) の責務。
@@ -340,49 +349,49 @@ export class Game {
         this.undo.recordBefore(this.env.nutrients, fx, fy, r * 2 + 1);
         this.env.placeFood(pos, r, 0.7);
         this.coloniesTotal += 1;
-        this.pushEvent('栄養を撒いた');
+        this.pushEvent('栄養を撒いた', 'tool-food', pos);
         break;
       case 'light':
         this.undo.recordBefore(this.env.brightness, fx, fy, r * 2 + 1);
         this.env.placeLight(pos, r, 0.45);
-        this.pushEvent('光をあてた');
+        this.pushEvent('光をあてた', 'tool-light', pos);
         break;
       case 'water':
         this.undo.recordBefore(this.env.moisture, fx, fy, r * 2 + 1);
         this.env.placeWater(pos, r, 0.4);
-        this.pushEvent('水を引いた');
+        this.pushEvent('水を引いた', 'tool-water', pos);
         break;
       case 'drain':
         this.undo.recordBefore(this.env.moisture, fx, fy, r * 2 + 1);
         this.env.placeDrain(pos, r, 0.35);
-        this.pushEvent('水を止めた');
+        this.pushEvent('水を止めた', 'tool-drain', pos);
         break;
       case 'stone': {
         const sr = Math.max(2, r * 0.5);
         this.undo.recordBefore(this.env.obstacle, fx, fy, sr + 1);
         this.env.placeStone(pos, sr);
-        this.pushEvent('障害物を置いた');
+        this.pushEvent('障害物を置いた', 'tool-stone', pos);
         break;
       }
       case 'heat':
         this.undo.recordBefore(this.env.temperature, fx, fy, r * 2 + 1);
         this.env.placeHeat(pos, r, 0.12);
-        this.pushEvent('温度を上げた');
+        this.pushEvent('温度を上げた', 'tool-heat', pos);
         break;
       case 'cool':
         this.undo.recordBefore(this.env.temperature, fx, fy, r * 2 + 1);
         this.env.placeHeat(pos, r, -0.12);
-        this.pushEvent('温度を下げた');
+        this.pushEvent('温度を下げた', 'tool-cool', pos);
         break;
       case 'toxin':
         this.undo.recordBefore(this.env.toxin, fx, fy, r * 2 + 1);
         this.env.placeToxin(pos, r, 0.35);
-        this.pushEvent('毒素をまいた');
+        this.pushEvent('毒素をまいた', 'tool-toxin', pos);
         break;
       case 'erase':
         this.eraseFields(fx, fy, r * s);
         this.erase(pos, r);
-        this.pushEvent('土地をならした');
+        this.pushEvent('土地をならした', 'tool-erase', pos);
         break;
     }
   }
@@ -452,16 +461,15 @@ export class Game {
     return { ...this.snapshotFast(), ...this.snapshotDerived() };
   }
 
-  events(): string[] { return this.recentEvents; }
+  events(): readonly WorldEvent[] { return this.worldEventLog.all(); }
   // 時代の節目 (eraLog, 最大3件) を頻発イベント (evoLog) より優先して先頭に出す。
   evolution(): EvolutionLog[] {
     return [...this.eraLog, ...this.evoLog].sort((a, b) => b.tick - a.tick);
   }
 
-  pushEvent(msg: string): void {
+  pushEvent(msg: string, kind: string, pos?: Vec2): void {
     const day = Math.floor(this.state.tick / TICKS_PER_DAY);
-    this.recentEvents.unshift(`Day ${day} — ${msg}`);
-    if (this.recentEvents.length > 6) this.recentEvents.pop();
+    this.worldEventLog.push({ day, tick: this.state.tick, kind, text: msg, x: pos?.x, y: pos?.y });
   }
 
   private pushEvo(tick: number, text: string): void {

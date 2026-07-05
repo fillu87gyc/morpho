@@ -2,7 +2,7 @@
 // - 値が変わったところだけ書き換える (textContent が等しければスキップ)。
 // - 数値はモックアップに合わせて千桁区切り。
 
-import type { Tool, StageId } from './game.js';
+import type { Tool, StageId, EvolutionLog } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
 import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
@@ -12,7 +12,14 @@ import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 import type { Album } from './album.js';
 import { allCatalogueEntries } from './catalogue.js';
 import type { CatalogueThumbs } from './catalogue-thumbs.js';
-import { starsOf } from './trait-labels.js';
+import { starsOf, typeDescriptionFor } from './trait-labels.js';
+import { estimateEraEta, type EraSample } from './era.js';
+import { formatMMSS } from './day-loop.js';
+import { filterByArea, type WorldEvent } from './world-events.js';
+import type { WorldView } from './camera.js';
+import { localTimeFor } from './daytime.js';
+import { Notes, summaryText } from './notes.js';
+import type { LineageThumbs } from './lineage-thumbs.js';
 
 type El = HTMLElement;
 
@@ -89,9 +96,15 @@ export class Ui {
   private tVitalityN = el('t-vitality-n');
   private tAdaptN = el('t-adapt-n');
   private indTypeN = el('ind-type-n');
+  private indTypeDesc = el('ind-type-desc');
   // 図鑑
   private ency = el('ency');
   private encyProgress = el('ency-progress');
+  // M18: 収集・記録タブ (図鑑/マップ/メモ)
+  private recordTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.record-tab'));
+  private recordPanels = Array.from(document.querySelectorAll<HTMLElement>('.record-panel'));
+  private noteText = el('note-text') as HTMLTextAreaElement;
+  private notesList = el('notes-list');
   // アチーブメント
   private ach = el('ach');
   private achProgress = el('ach-progress');
@@ -109,19 +122,33 @@ export class Ui {
   // logs
   private log = el('log');
   private evo = el('evo');
+  // M17: 「このエリアを注視中」。camera の視野内 (WorldEvent.x/y と交差) だけに
+  // 絞るトグル。座標を持たない出来事は絞り込みの対象外 (常に通す)。
+  private logAreaToggle = el('log-area-toggle') as HTMLButtonElement;
+  private logAreaLabel = el('log-area-label');
+  private areaWatch = false;
   // brush
   private brushN = el('brush-n');
 
   private lastEvoLen = -1;
-  private lastEventLen = -1;
+  private lastEventFilterKey = '';
   private lastEncyVersion = -1;
   private lastAchVersion = -1;
   private lastBoardVersion = -1;
-  private lastLineageVersion = -1;
+  private lastLineageVersion = '';
   private lastAlbumVersion = -1;
+  private lastNotesVersion = -1;
   private lastChalKey = '';
   private lastHarvestable = false;
   private lastStageId: StageId | null = null;
+  // M16: 時代の残り時間予測。progress を実時間軸でサンプリングして
+  // estimateEraEta() に渡す。時代名が変わったら履歴をリセットする。
+  private lastEraNameForEta: string | null = null;
+  private eraSamples: EraSample[] = [];
+  private lastEraSampleAtMs = 0;
+  private readonly ERA_SAMPLE_INTERVAL_MS = 2500;
+  private readonly ERA_SAMPLE_MAX = 20;
+  private eraEtaEl = el('era-eta');
 
   constructor(
     private game: GameProxy,
@@ -133,6 +160,8 @@ export class Ui {
       lineage: Lineage;
       album: Album;
       catalogueThumbs: CatalogueThumbs;
+      notes: Notes;
+      lineageThumbs: LineageThumbs;
     },
     private hooks: {
       onSpeed: (s: number) => void;
@@ -152,26 +181,42 @@ export class Ui {
     this.harvestBtn.addEventListener('click', () => this.hooks.onHarvestSeed());
     this.screenshotBtn.addEventListener('click', () => this.hooks.onScreenshot());
     (el('toggle-ambient') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleAmbient());
-    (el('fast-forward') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleFastForward());
-    // 再生速度: スライダーで連続的に選べる。一時停止ボタンは直前の速度を
-    // 覚えておいて、押し直したときに同じ速度へ戻す。
-    const pauseBtn = el('pause-toggle') as HTMLButtonElement;
-    const speedSlider = el('speed-slider') as HTMLInputElement;
-    const speedN = el('speed-n');
-    let lastSpeed = Number(speedSlider.value) || 1;
-    let paused = false;
-    speedSlider.addEventListener('input', () => {
-      const v = Number(speedSlider.value);
-      lastSpeed = v;
-      setText(speedN, String(v));
-      if (!paused) this.hooks.onSpeed(v);
+    // M16: ⏸ ▶ ▶▶ ▶▶▶ の4段ボタン。旧スライダー+⏩トグルは廃止したが、
+    // 内部 API (onSpeed/onToggleFastForward) はそのまま使う。▶▶▶ だけが
+    // 早送りフラグ (描画10fps化してtickに全振り) も同時にONにする。
+    // 選択は localStorage に永続化し、次回起動時にも同じプリセットで始まる。
+    const SPEED_PRESET_KEY = 'morpho.speedPreset.v1';
+    type SpeedPreset = 'pause' | '1' | '8' | '24';
+    const presets: { id: SpeedPreset; btn: HTMLButtonElement; speed: number; fastForward: boolean }[] = [
+      { id: 'pause', btn: el('speed-btn-pause') as HTMLButtonElement, speed: 0, fastForward: false },
+      { id: '1', btn: el('speed-btn-1') as HTMLButtonElement, speed: 1, fastForward: false },
+      { id: '8', btn: el('speed-btn-8') as HTMLButtonElement, speed: 8, fastForward: false },
+      { id: '24', btn: el('speed-btn-24') as HTMLButtonElement, speed: 24, fastForward: true },
+    ];
+    const applyPreset = (id: SpeedPreset, persist: boolean): void => {
+      const preset = presets.find((p) => p.id === id) ?? presets[1]!;
+      for (const p of presets) p.btn.setAttribute('aria-pressed', String(p.id === preset.id));
+      this.hooks.onSpeed(preset.speed);
+      if (this.game.fastForward !== preset.fastForward) this.hooks.onToggleFastForward();
+      if (persist) {
+        try { localStorage.setItem(SPEED_PRESET_KEY, preset.id); } catch { /* private mode 等は諦める */ }
+      }
+    };
+    for (const p of presets) p.btn.addEventListener('click', () => applyPreset(p.id, true));
+    this.logAreaToggle.addEventListener('click', () => {
+      this.areaWatch = !this.areaWatch;
+      this.logAreaToggle.setAttribute('aria-pressed', String(this.areaWatch));
+      this.logAreaLabel.hidden = !this.areaWatch;
+      // render() の filterKey に areaWatch の状態が織り込まれるため、次の
+      // render() 呼び出しで自動的に再描画される (ここで明示的にキャッシュを
+      // 破棄する必要はない)。
     });
-    pauseBtn.addEventListener('click', () => {
-      paused = !paused;
-      pauseBtn.textContent = paused ? '▶' : '⏸';
-      pauseBtn.classList.toggle('active', paused);
-      this.hooks.onSpeed(paused ? 0 : lastSpeed);
-    });
+    let initialPreset: SpeedPreset = '1';
+    try {
+      const saved = localStorage.getItem(SPEED_PRESET_KEY);
+      if (saved === 'pause' || saved === '1' || saved === '8' || saved === '24') initialPreset = saved;
+    } catch { /* private mode 等は既定の '1' のまま */ }
+    if (initialPreset !== '1') applyPreset(initialPreset, false);
     document.querySelectorAll<HTMLButtonElement>('button.tool').forEach((b) => {
       b.addEventListener('click', () => {
         document.querySelectorAll<HTMLButtonElement>('button.tool').forEach((x) => x.classList.remove('active'));
@@ -196,14 +241,47 @@ export class Ui {
 
     // M15: モバイル下部ツールバーの複製ボタンも含めて全件に active を付ける。
     document.querySelectorAll<HTMLButtonElement>('button.tool[data-tool="food"]').forEach((b) => b.classList.add('active'));
+
+    // M18: 「収集・記録」タブ (図鑑/マップ/メモ)。選択は localStorage に永続化する。
+    const RECORD_TAB_KEY = 'morpho.recordTab.v1';
+    const selectRecordTab = (tab: string, persist: boolean): void => {
+      for (const btn of this.recordTabs) btn.setAttribute('aria-selected', String(btn.dataset.tab === tab));
+      for (const panel of this.recordPanels) panel.hidden = panel.dataset.panel !== tab;
+      if (persist) {
+        try { localStorage.setItem(RECORD_TAB_KEY, tab); } catch { /* private mode 等は諦める */ }
+      }
+    };
+    for (const btn of this.recordTabs) {
+      btn.addEventListener('click', () => selectRecordTab(btn.dataset.tab ?? 'ency', true));
+    }
+    let initialTab = 'ency';
+    try {
+      const saved = localStorage.getItem(RECORD_TAB_KEY);
+      if (saved && this.recordTabs.some((b) => b.dataset.tab === saved)) initialTab = saved;
+    } catch { /* private mode 等は既定の 'ency' のまま */ }
+    if (initialTab !== 'ency') selectRecordTab(initialTab, false);
+
+    // M18: メモ。「今日の成長を貼る」は現在のスナップショットから定型文を作る。
+    (el('note-add') as HTMLButtonElement).addEventListener('click', () => {
+      this.trackers.notes.add(this.game.snapshot().day, this.noteText.value);
+      this.noteText.value = '';
+    });
+    (el('note-paste-summary') as HTMLButtonElement).addEventListener('click', () => {
+      const snap = this.game.snapshot();
+      const text = summaryText(snap.day, snap.traits.exploration, snap.traits.efficiency, snap.traits.stability, snap.world.massKg);
+      this.noteText.value = this.noteText.value ? `${this.noteText.value}\n${text}` : text;
+    });
   }
 
-  render(): void {
+  // M17: extraEvo は main.ts 側で検出した突然変異・形質獲得イベント
+  // (mutation-events.ts、web 側派生で sim 無改修) を「進化の記録」に合流させる。
+  render(view?: WorldView, extraEvo: EvolutionLog[] = []): void {
     const s = this.game.snapshot();
     setText(this.day, String(s.day));
     setText(this.era, s.era.name);
     this.eraRing.style.setProperty('--era-progress', String(s.era.progress));
     this.eraRing.title = `次の時代まで ${pct(s.era.progress)}`;
+    this.renderEraEta(s.era.name, s.era.progress);
     setText(this.stageName, s.stage.name);
     this.stageName.title = s.stage.description;
     if (this.lastStageId !== s.stage.id) {
@@ -305,6 +383,7 @@ export class Ui {
 
     // 個体ビュー (6軸 + タイプ)
     setText(this.indTypeN, s.typeInfo.label);
+    setText(this.indTypeDesc, typeDescriptionFor(s.typeInfo.id));
     setBar(this.tHealth, s.individuality.health);
     setBar(this.tVitality, s.individuality.vitality);
     setBar(this.tExp, s.individuality.exploration);
@@ -318,19 +397,32 @@ export class Ui {
     setText(this.tStbN, pct(s.individuality.stability));
     setText(this.tAdaptN, pct(s.individuality.adaptability));
 
-    // ログ (差分が出たときだけ書き換える)
-    const events = this.game.events();
-    if (this.lastEventLen !== events.length) {
+    // ログ (差分が出たときだけ書き換える)。M17: WorldEvent.id は単調増加なので
+    // 「最新の id + 注視フィルタの状態」をキーに判定する (length だけだと、
+    // 上限到達後は push しても length が変わらず更新を見逃す)。
+    const allEvents = this.game.events();
+    const latestId = allEvents[0]?.id ?? -1;
+    const filterKey = this.areaWatch && view ? `${view.worldLeft.toFixed(1)}_${view.worldTop.toFixed(1)}_${view.worldSpan.toFixed(1)}` : '';
+    const eventsKey = `${latestId}|${filterKey}`;
+    if (this.lastEventFilterKey !== eventsKey) {
+      const shown: readonly WorldEvent[] = this.areaWatch && view ? filterByArea(allEvents, view) : allEvents;
       this.log.innerHTML = '';
-      for (const e of events) {
+      for (const e of shown) {
         const li = document.createElement('li');
-        li.textContent = e;
+        const time = document.createElement('span');
+        time.className = 'time';
+        time.textContent = localTimeFor(e.tick).slice(0, 5);
+        const body = document.createElement('span');
+        body.className = 'body';
+        body.textContent = e.text;
+        li.appendChild(time);
+        li.appendChild(body);
         this.log.appendChild(li);
       }
-      this.lastEventLen = events.length;
+      this.lastEventFilterKey = eventsKey;
     }
 
-    const evo = this.game.evolution();
+    const evo = [...this.game.evolution(), ...extraEvo].sort((a, b) => b.tick - a.tick);
     if (this.lastEvoLen !== evo.length) {
       this.evo.innerHTML = '';
       if (evo.length === 0) {
@@ -401,6 +493,38 @@ export class Ui {
       }
     }
 
+    // M18: メモ (バージョンが変わった = 追加/削除があったときだけ書き換える)
+    if (this.lastNotesVersion !== this.trackers.notes.version) {
+      this.lastNotesVersion = this.trackers.notes.version;
+      const notes = this.trackers.notes.list();
+      this.notesList.innerHTML = '';
+      if (notes.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'まだメモがない…';
+        this.notesList.appendChild(li);
+      } else {
+        for (const note of notes) {
+          const li = document.createElement('li');
+          const day = document.createElement('span');
+          day.className = 'note-day';
+          day.textContent = `Day ${note.day}`;
+          const body = document.createElement('span');
+          body.className = 'note-body';
+          body.textContent = note.text;
+          const del = document.createElement('button');
+          del.className = 'note-del';
+          del.textContent = '×';
+          del.title = 'このメモを削除';
+          del.addEventListener('click', () => this.trackers.notes.remove(note.id));
+          li.appendChild(day);
+          li.appendChild(body);
+          li.appendChild(del);
+          this.notesList.appendChild(li);
+        }
+      }
+    }
+
     // アチーブメント (バージョンが変わった = 新規解除があったときだけ書き換える)
     if (this.lastAchVersion !== this.trackers.achievements.version) {
       this.lastAchVersion = this.trackers.achievements.version;
@@ -453,9 +577,11 @@ export class Ui {
     }
 
     // M13: 系統樹を分岐ツリーへ (世代ごとの行に並べる simple tree)。
-    // バージョンが変わった = 新規採取/起点変更があったときだけ書き換える。
-    if (this.lastLineageVersion !== this.trackers.lineage.version) {
-      this.lastLineageVersion = this.trackers.lineage.version;
+    // バージョンが変わった = 新規採取/起点変更、または M18 のサムネイル保存完了
+    // (非同期で遅れて届く) があったときだけ書き換える。
+    const lineageVersionKey = `${this.trackers.lineage.version}|${this.trackers.lineageThumbs.version}`;
+    if (this.lastLineageVersion !== lineageVersionKey) {
+      this.lastLineageVersion = lineageVersionKey;
       const entries = this.trackers.lineage.list();
       this.lineageList.innerHTML = '';
       if (entries.length === 0) {
@@ -476,6 +602,16 @@ export class Ui {
           for (const e of byGeneration.get(gen)!) {
             const node = document.createElement('div');
             node.className = e.id === activeId ? 'lineage-node active' : 'lineage-node';
+            // M18: サムネイルがあれば表示 (採種時に main.ts が撮影して保存する)。
+            // 無いノード (過去データ・撮影失敗) は文字表示のまま壊れない。
+            const thumbUrl = this.trackers.lineageThumbs.urlOf(e.id);
+            if (thumbUrl) {
+              const thumb = document.createElement('img');
+              thumb.className = 'lineage-thumb';
+              thumb.src = thumbUrl;
+              thumb.alt = e.typeLabel;
+              node.appendChild(thumb);
+            }
             const label = document.createElement('div');
             label.className = 'label';
             label.textContent = `${e.generation}代目 — ${e.typeLabel}`;
@@ -535,5 +671,24 @@ export class Ui {
         }
       }
     }
+  }
+
+  // M16: 時代の残り時間予測。2.5秒に1点、progress を実時間軸でサンプリング
+  // する (毎フレームは不要 — sim tick の粒度からしても過剰)。時代名が変わった
+  // ら履歴をリセットし、切替直後の古い速度で誤った ETA を出さないようにする。
+  private renderEraEta(eraName: string, progress: number): void {
+    if (this.lastEraNameForEta !== eraName) {
+      this.lastEraNameForEta = eraName;
+      this.eraSamples = [];
+      this.lastEraSampleAtMs = 0;
+    }
+    const now = performance.now();
+    if (now - this.lastEraSampleAtMs >= this.ERA_SAMPLE_INTERVAL_MS) {
+      this.lastEraSampleAtMs = now;
+      this.eraSamples.push({ atMs: now, progress });
+      if (this.eraSamples.length > this.ERA_SAMPLE_MAX) this.eraSamples.shift();
+    }
+    const etaMs = estimateEraEta(this.eraSamples);
+    setText(this.eraEtaEl, etaMs === null ? '次の時代まで —' : `次の時代まで あと ${formatMMSS(etaMs / 1000)}`);
   }
 }

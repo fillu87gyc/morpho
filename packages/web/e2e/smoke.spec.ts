@@ -4,7 +4,7 @@
 // `pnpm run build` 済みの dist を `vite preview` で配信して検証する
 // (playwright.config.ts の webServer)。
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures.js';
 
 function collectConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -36,14 +36,14 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
 }
 
-// type=range は Playwright の locator.fill() が使えない ("cannot be filled")
-// ので、DOM 上で value を設定して input イベントを発火させる。
-async function setSpeedSlider(page: Page, value: number): Promise<void> {
-  await page.locator('#speed-slider').evaluate((el, v) => {
-    const input = el as HTMLInputElement;
-    input.value = String(v);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }, value);
+// M16: 4段速度ボタン (旧スライダーの置き換え)。「進行を確認しやすいよう
+// 速度を上げる」用途でしか使っていなかったテストは ×24 ボタンへ寄せる。
+async function setSpeedMax(page: Page): Promise<void> {
+  await page.click('#speed-btn-24');
+}
+
+async function pause(page: Page): Promise<void> {
+  await page.click('#speed-btn-pause');
 }
 
 async function canvasChecksum(page: Page): Promise<number> {
@@ -170,7 +170,11 @@ test('エサツールを配置すると出来事ログに記録され、拠点�
   await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.3);
 
   await expect(page.locator('#w-ct')).toHaveText(String(before + 1));
-  await expect(page.locator('#log li').first()).toContainText('栄養を撒いた');
+  // M17: 最近の出来事は道具の設置と sim イベント (太い幹が育った 等) を
+  // 時刻付きで1本のログに統合したため、見守り中に他のイベントが同時多発する
+  // と「栄養を撒いた」が必ずしも先頭 (最新) とは限らない。ログ内のどこかに
+  // 現れることだけを確認する。
+  await expect(page.locator('#log')).toContainText('栄養を撒いた');
   expect(errors).toEqual([]);
 });
 
@@ -209,11 +213,11 @@ test('一時停止すると DAY が止まり、再生すると再び進む', asy
   await waitForReady(page);
 
   // 進行を確認しやすいよう速度を上げてから停止する。
-  await setSpeedSlider(page, 20);
+  await setSpeedMax(page);
   await expect.poll(async () => Number(await dayText(page)), { timeout: 15_000 }).toBeGreaterThan(0);
 
-  await page.click('#pause-toggle');
-  await expect(page.locator('#pause-toggle')).toHaveClass(/active/);
+  await pause(page);
+  await expect(page.locator('#speed-btn-pause')).toHaveAttribute('aria-pressed', 'true');
   // クリックで送られる setSpeed(0) は sim-worker への非同期メッセージなので、
   // クリック直後はまだ飛行中の tick が1つ残っている可能性がある。それが
   // 着地するのを待ってから基準値を採る (でないと稀に古い進行中の DAY を
@@ -223,8 +227,8 @@ test('一時停止すると DAY が止まり、再生すると再び進む', asy
   await page.waitForTimeout(1500);
   expect(await dayText(page)).toBe(pausedDay);
 
-  await page.click('#pause-toggle');
-  await expect(page.locator('#pause-toggle')).not.toHaveClass(/active/);
+  await setSpeedMax(page);
+  await expect(page.locator('#speed-btn-pause')).toHaveAttribute('aria-pressed', 'false');
   await expect.poll(async () => Number(await dayText(page)), { timeout: 15_000 })
     .toBeGreaterThan(Number(pausedDay));
 
@@ -241,14 +245,14 @@ test('新しい皿へでリセットすると DAY が0、拠点総数が6に戻�
   await page.goto('/');
   await waitForReady(page);
 
-  await setSpeedSlider(page, 20);
+  await setSpeedMax(page);
   await expect.poll(async () => Number(await dayText(page)), { timeout: 15_000 }).toBeGreaterThan(0);
 
   // 一時停止してからリセットする — 動かしたままだと reset() 後も
   // sim-worker が高速に tick を進め続け、アサーションが読む前に
   // DAY が 0 を通り過ぎてしまう競合が起きる。
-  await page.click('#pause-toggle');
-  await expect(page.locator('#pause-toggle')).toHaveClass(/active/);
+  await pause(page);
+  await expect(page.locator('#speed-btn-pause')).toHaveAttribute('aria-pressed', 'true');
 
   await page.click('#reset');
   await expect(page.locator('#day')).toHaveText('0');
@@ -268,11 +272,11 @@ test('ステージを切り替えると DAY が0に戻り、ステージ名表�
   await page.goto('/');
   await waitForReady(page);
 
-  await setSpeedSlider(page, 20);
+  await setSpeedMax(page);
   await expect.poll(async () => Number(await dayText(page)), { timeout: 15_000 }).toBeGreaterThan(0);
 
-  await page.click('#pause-toggle');
-  await expect(page.locator('#pause-toggle')).toHaveClass(/active/);
+  await pause(page);
+  await expect(page.locator('#speed-btn-pause')).toHaveAttribute('aria-pressed', 'true');
 
   await page.selectOption('#stage-select', 'desert');
   await expect(page.locator('#day')).toHaveText('0');
@@ -323,6 +327,9 @@ test('M6: 起動時に3つのコロニーが配置され、ミニマップをク
   await expect(page.locator('#w-networks')).toHaveText('3');
 
   const beforeChecksum = await canvasChecksum(page);
+  // M18: ミニマップは「収集・記録」パネルの「マップ」タブに移設された
+  // (既定は「図鑑」タブ)。表示するにはタブを開く必要がある。
+  await page.click('#record-tab-map');
   const minimap = page.locator('#minimap');
   const box = await minimap.boundingBox();
   if (!box) throw new Error('minimap has no bounding box');
@@ -389,7 +396,7 @@ test('M8 P3: Day 1 で成長タイムラインに非同期エンコードされ�
   await page.goto('/');
   await waitForReady(page);
 
-  await setSpeedSlider(page, 24);
+  await setSpeedMax(page);
   await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThanOrEqual(1);
 
   const thumb = page.locator('#timeline .timeline-entry img').first();
@@ -400,7 +407,7 @@ test('M8 P3: Day 1 で成長タイムラインに非同期エンコードされ�
   expect(errors).toEqual([]);
 });
 
-test('M8 P4: 早送りモードをONにするとDAYが進み続け、OFFに戻せる', async ({ page }) => {
+test('M8 P4/M16: ▶▶▶ (×24) は早送りモードも同時にONにし、▶▶ (×8) に戻すとOFFになる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => {
     localStorage.setItem('morpho.onboarded.v1', '1');
@@ -410,15 +417,17 @@ test('M8 P4: 早送りモードをONにするとDAYが進み続け、OFFに戻�
   await page.goto('/');
   await waitForReady(page);
 
-  await setSpeedSlider(page, 24);
-  await expect(page.locator('#fast-forward')).not.toHaveClass(/active/);
-  await page.click('#fast-forward');
-  await expect(page.locator('#fast-forward')).toHaveClass(/active/);
+  // ▶▶▶ は「×24 + 早送りON」を同時に選ぶプリセット (M16 で4段ボタン化)。
+  await setSpeedMax(page);
+  await expect(page.locator('#speed-btn-24')).toHaveAttribute('aria-pressed', 'true');
 
   await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThan(0);
 
-  await page.click('#fast-forward');
-  await expect(page.locator('#fast-forward')).not.toHaveClass(/active/);
+  // ▶▶ (×8) に切り替えると早送りOFFへ戻る (プリセットが排他選択なので
+  // #speed-btn-24 が非選択になったことで確認する)。
+  await page.click('#speed-btn-8');
+  await expect(page.locator('#speed-btn-24')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#speed-btn-8')).toHaveAttribute('aria-pressed', 'true');
 
   // OFFに戻した後も通常通り進み続ける (Workerのループ間隔が壊れていない)。
   const dayAfterToggleOff = Number(await dayText(page));
@@ -440,7 +449,7 @@ test('Day 5 以降に種を採取すると系統樹に記録され、世代が�
   await expect(page.locator('#harvest-seed')).toBeDisabled();
   await expect(page.locator('#lineage-gen')).toHaveText('現在 1代目');
 
-  await setSpeedSlider(page, 24);
+  await setSpeedMax(page);
   await expect.poll(async () => Number(await dayText(page)), { timeout: 20_000 }).toBeGreaterThanOrEqual(5);
 
   await expect(page.locator('#harvest-seed')).toBeEnabled();
