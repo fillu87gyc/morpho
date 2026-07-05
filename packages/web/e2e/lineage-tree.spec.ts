@@ -33,6 +33,10 @@ async function setSpeedSlider(page: Page, value: number): Promise<void> {
 }
 
 test('1つの親から2匹の子を育てると系統樹が枝分かれして表示される', async ({ page }) => {
+  // M16.5: Day>=5 の待ちを3回繰り返す構成上、並列実行時の CPU 競合に
+  // 弱い (このサンドボックスでも 2 worker 並列だと 20〜26s かかることがある)。
+  // 既定の 30s では機能自体は正しいのにタイムアウトしうるため緩める。
+  test.setTimeout(60_000);
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => {
     localStorage.setItem('morpho.onboarded.v1', '1');
