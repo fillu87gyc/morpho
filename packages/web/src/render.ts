@@ -51,15 +51,25 @@ const RADIUS_BUCKET_MAX = 3.2; // これを超える radius は最後のバケ�
 const TONE_STEPS = 8;
 const WIDTH_QUANT = 0.25; // px
 
-// 配色: morphosmoke.png の暗い森のトーンに揃える。
-const BG_INNER:    [number, number, number] = [14, 20, 17];
-const BG_OUTER:    [number, number, number] = [6, 8, 10];
-const FOOD_GLOW:   [number, number, number] = [120, 210, 110]; // 仄か緑の発光
-const PLASMA_LOW:  [number, number, number] = [120, 95, 30];   // 縁の暗い金
-const PLASMA_MID:  [number, number, number] = [225, 185, 70];  // 中間の山吹
-const PLASMA_HI:   [number, number, number] = [255, 230, 140]; // 中心の明るい黄
-const TUBE_LIGHT:  [number, number, number] = [255, 220, 150]; // 細い枝 (クリーム)
-const TUBE_DARK:   [number, number, number] = [200, 120, 50];  // 太い幹 (オレンジ)
+// M16.5 (ビジュアルパス): モックアップ (docs/art-direction.md) の「苔むした
+// 岩肌に金色に光る粘菌ネットワーク」に寄せる。実プレイ検証 (2026-07-05) で
+// 判明した最大の問題は個々の質感以前の「全体が黒潰れして地形が見えない」
+// ことだったため、まず露出 (基調色の明度) を底上げし、その上でテクスチャと
+// 発光を足す。旧来の「近黒背景 + 淡い差分オーバーレイ」方式をやめ、常時
+// 不透明な地形ベース色を敷いてからその上に食料/障害物/水/毒素/膜を重ねる。
+const BG_INNER:    [number, number, number] = [46, 58, 42];
+const BG_OUTER:    [number, number, number] = [20, 26, 22];
+const FOOD_GLOW:   [number, number, number] = [140, 225, 120]; // 仄か緑の発光
+// プラズマ膜: モックアップの金色 (#E8B84B系统) に寄せる。縁は控えめな金、
+// 中心に近づくほど明るい黄金へ。
+const PLASMA_LOW:  [number, number, number] = [150, 110, 40];  // 縁の抑えた金
+const PLASMA_MID:  [number, number, number] = [232, 184, 75];  // #E8B84B 系の山吹金
+const PLASMA_HI:   [number, number, number] = [255, 236, 160]; // 中心の明るい黄金
+// M16.5: 成長前線 (膜の縁) を一段明るく光らせるリムカラー。
+const PLASMA_RIM:  [number, number, number] = [255, 220, 120];
+const TUBE_LIGHT:  [number, number, number] = [255, 224, 140]; // 細い枝 (金色に光る脈)
+const TUBE_DARK:   [number, number, number] = [230, 165, 60];  // 太い幹 (濃い金)
+const TUBE_GLOW:   [number, number, number] = [255, 200, 90];  // 脈の下に敷くぼかしグロー
 const SOURCE_DOT:  [number, number, number] = [170, 220, 255];
 const SINK_DOT:    [number, number, number] = [170, 255, 170];
 // M10: 毒素は HUD の環境バランス (dot-toxin) と同系統の紫。常時薄く見せる
@@ -71,23 +81,49 @@ const HEAT_COLD: [number, number, number] = [110, 140, 235];
 
 // ステージごとの背景トーンと障害物 (石) の色味。「洞窟の岩」「砂漠の岩」
 // 「都市跡の風化した石材」を見分けられるよう、ステージごとに変える。
+// M16.5: フィールド外郭 (キャンバスの縁、地形テクスチャがまだ描かれて
+// いない部分) がそこだけ黒く沈まないよう、地形ベース色と近いトーンまで
+// 明るくした。
 const STAGE_BG: Record<StageId, { inner: [number, number, number]; outer: [number, number, number] }> = {
-  petri:     { inner: [14, 20, 17], outer: [6, 8, 10] },
-  cave:      { inner: [11, 15, 22], outer: [3, 4, 7] },
-  desert:    { inner: [30, 23, 15], outer: [13, 10, 7] },
-  ruins:     { inner: [25, 21, 17], outer: [10, 8, 7] },
-  wetland:   { inner: [10, 21, 18], outer: [4, 9, 8] },
-  continent: { inner: [12, 18, 20], outer: [5, 8, 10] },
+  petri:     { inner: [46, 58, 42], outer: [20, 26, 22] },
+  cave:      { inner: [34, 42, 54], outer: [14, 17, 24] },
+  desert:    { inner: [64, 50, 32], outer: [28, 22, 15] },
+  ruins:     { inner: [56, 48, 38], outer: [24, 20, 16] },
+  wetland:   { inner: [36, 54, 44], outer: [15, 24, 20] },
+  continent: { inner: [40, 52, 46], outer: [17, 23, 21] },
 };
 
 const STAGE_ROCK_COLOR: Record<StageId, [number, number, number]> = {
-  petri:     [70, 65, 75],
-  cave:      [58, 64, 78],
-  desert:    [124, 98, 66],
-  ruins:     [156, 132, 98], // 風化した石材 (暖かいベージュ)
-  wetland:   [72, 78, 68],
-  continent: [90, 88, 80],
+  petri:     [104, 98, 108],
+  cave:      [86, 94, 112],
+  desert:    [156, 124, 84],
+  ruins:     [180, 156, 118], // 風化した石材 (暖かいベージュ)
+  wetland:   [100, 106, 92],
+  continent: [122, 118, 106],
 };
+
+// M16.5: 地形ベース色 (影/日向の2トーン)。env.brightness (元は粘菌の光走性用
+// フィールドだが、「日が当たっている場所ほど明るく暖かい地面に見える」という
+// 演出上の意味づけとしてそのまま流用する) で shadow⇄sunlit を補間する。
+// 「苔むした岩肌」(petri/wetland は苔の緑、desert/ruins は乾いた土/石、
+// cave は冷たい岩、continent は混合)。
+const TERRAIN_TONE: Record<StageId, { shadow: [number, number, number]; sunlit: [number, number, number] }> = {
+  petri:     { shadow: [40, 54, 34], sunlit: [110, 132, 66] },
+  cave:      { shadow: [30, 38, 50], sunlit: [76, 92, 108] },
+  desert:    { shadow: [60, 48, 32], sunlit: [178, 148, 92] },
+  ruins:     { shadow: [54, 48, 40], sunlit: [166, 146, 112] },
+  wetland:   { shadow: [28, 46, 38], sunlit: [90, 126, 82] },
+  continent: { shadow: [34, 48, 42], sunlit: [98, 118, 74] },
+};
+
+// M16.5: セル座標から決定的な疑似乱数 [0,1) を作る、依存ライブラリなしの
+// ハッシュノイズ (GLSL の定番手法)。苔の粒感・岩のまだら模様のような
+// 「常に一定だが単調でない」テクスチャを、新しい sim フィールドを増やさずに
+// 描画側だけで作るために使う。
+function hashNoise(x: number, y: number): number {
+  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return n - Math.floor(n);
+}
 
 // M14: 大陸ステージの水域 (通行不能な水面)。obstacle の石色より青く、
 // 常時見える (石とは塗り分ける)。
@@ -283,32 +319,39 @@ export class CanvasRenderer {
     const stageChanged = this.prevStageId !== null && this.prevStageId !== stageId;
     const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged;
     const rockColor = STAGE_ROCK_COLOR[stageId];
+    const terrainTone = TERRAIN_TONE[stageId];
 
     const dirty = this.tracker.update(
       [bioData, nutData, moiData, briData, obData, tempData, toxData, waterData],
       full,
-      (i) => {
+      (i, x, y) => {
         const di = i * 4;
-        let r = 0, g = 0, b = 0, a = 0;
 
-        // 地形の質感 (常時, 控えめ): ヒート表示 OFF でもバイオームの違いが
-        // 見えるように、baseline (湿度 0.3 / 明るさ 0.2) からの差分だけを
-        // 弱く乗せる。強い版はヒート表示 ON のときの下のブロックが担う。
+        // M16.5: 地形ベース色 (常時不透明)。旧実装は「近黒背景 + 淡い差分」
+        // だったため全体が黒潰れしていた。brightness [0,1] で shadow⇄sunlit
+        // を補間し、moisture で緑/砂へ寄せ、ハッシュノイズで苔・岩のまだら
+        // 粒感を足す (新しい sim フィールドは増やさず、既存の brightness/
+        // moisture を「見た目の日当たり/湿り気」として転用する)。
         const moiBase = moiData[i] ?? 0;
         const briBase = briData[i] ?? 0;
+        const briT = Math.max(0, Math.min(1, briBase));
+        let r = terrainTone.shadow[0] * (1 - briT) + terrainTone.sunlit[0] * briT;
+        let g = terrainTone.shadow[1] * (1 - briT) + terrainTone.sunlit[1] * briT;
+        let b = terrainTone.shadow[2] * (1 - briT) + terrainTone.sunlit[2] * briT;
         const moiDelta = moiBase - 0.3;
         if (moiDelta > 0.06) {
-          // 湿った土地 — 仄かに青緑
+          // 湿った土地 — 苔むした岩らしい深い緑青
           const k = Math.min(1, (moiDelta - 0.06) * 2.4);
-          [r, g, b] = blend(r, g, b, 70, 110, 140, k * 0.16);
-          a = Math.max(a, k * 0.16);
+          [r, g, b] = blend(r, g, b, 55, 95, 90, k * 0.5);
         } else if (moiDelta < -0.04) {
-          // 乾いた土地 (砂地) — 仄かに山吹の砂色。明るさが高いほど強調。
-          const k = Math.min(1, (-moiDelta) * 2.4 + Math.max(0, briBase - 0.2) * 0.8);
-          const fa = Math.min(0.20, k * 0.18);
-          [r, g, b] = blend(r, g, b, 190, 165, 115, fa);
-          a = Math.max(a, fa);
+          // 乾いた土地 (砂地) — 明るい砂色。明るさが高いほど強調。
+          const k = Math.min(1, (-moiDelta) * 2.4 + Math.max(0, briT - 0.2) * 0.8);
+          [r, g, b] = blend(r, g, b, 196, 168, 118, Math.min(0.55, k * 0.5));
         }
+        // 苔・岩のまだら粒感 (セル座標からの決定的ノイズ、±9%程度の明度ジッタ)。
+        const grain = 1 + (hashNoise(x, y) - 0.5) * 0.18;
+        r *= grain; g *= grain; b *= grain;
+        let a = 1;
 
         // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)
         const nut = nutData[i] ?? 0;
@@ -384,7 +427,16 @@ export class CanvasRenderer {
             pg = PLASMA_MID[1] * (1 - t) + PLASMA_HI[1] * t;
             pb = PLASMA_MID[2] * (1 - t) + PLASMA_HI[2] * t;
           }
-          const pa = Math.min(0.92, 0.12 + k * 0.78);
+          // M16.5: 成長前線 (膜の縁、v が低い帯域) をひときわ明るいリム色で
+          // 光らせる。中心に近づく (v が上がる) と通常の膜色へ収束する
+          // 山型のカーブ (v=0.09 付近をピークに、0.025〜0.22 の帯域だけ効く)。
+          const rim = Math.max(0, 1 - Math.abs(v - 0.09) / 0.13);
+          if (rim > 0) {
+            pr = pr * (1 - rim) + PLASMA_RIM[0] * rim;
+            pg = pg * (1 - rim) + PLASMA_RIM[1] * rim;
+            pb = pb * (1 - rim) + PLASMA_RIM[2] * rim;
+          }
+          const pa = Math.min(0.94, 0.3 + k * 0.64);
           [r, g, b] = blend(r, g, b, pr, pg, pb, pa);
           a = Math.max(a, pa);
         }
@@ -468,6 +520,21 @@ export class CanvasRenderer {
         group.path.moveTo(offX + a.pos.x * scale, offY + a.pos.y * scale);
         group.path.lineTo(offX + b.pos.x * scale, offY + b.pos.y * scale);
       }
+      // M16.5: 2パス描画で「金色に光る脈」にする。1パス目はぼかしグロー
+      // (globalCompositeOperation: 'lighter' + shadowBlur で安価に柔らかい
+      // 光暈を作る)、2パス目が従来通りの芯 (crisp なストローク)。
+      // バケツ (太さ昇順) ごとに glow→core を行うことで、太い幹が細い枝の
+      // 上に重なる既存の描画順は変えない。
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.shadowColor = `rgba(${TUBE_GLOW[0]}, ${TUBE_GLOW[1]}, ${TUBE_GLOW[2]}, 0.9)`;
+      ctx.shadowBlur = 5;
+      for (const group of styleGroups.values()) {
+        ctx.strokeStyle = `rgba(${TUBE_GLOW[0]}, ${TUBE_GLOW[1]}, ${TUBE_GLOW[2]}, 0.35)`;
+        ctx.lineWidth = group.lineWidth;
+        ctx.stroke(group.path);
+      }
+      ctx.restore();
       for (const group of styleGroups.values()) {
         ctx.strokeStyle = group.color;
         ctx.lineWidth = group.lineWidth;
