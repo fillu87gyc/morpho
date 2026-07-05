@@ -17,7 +17,7 @@ import { PerfHud, debugModeEnabled } from './perf-hud.js';
 import { Album } from './album.js';
 import { Ambient } from './ambient.js';
 import { DayReport } from './day-report.js';
-import { createDayLoop, beginObserve, completeDay, advanceToNextDay, TICKS_PER_DAY } from './day-loop.js';
+import { createDayLoop, beginObserve, completeDay, advanceToNextDay, TICKS_PER_DAY, formatMMSS } from './day-loop.js';
 import { Wallet, type CurrencyKind } from './wallet.js';
 import { DailyTracker } from './dailies.js';
 import { Identity } from './identity.js';
@@ -408,9 +408,9 @@ const drThumb = document.getElementById('dr-thumb') as HTMLImageElement;
 const drNextBtn = document.getElementById('dr-next') as HTMLButtonElement;
 const drAlbumBtn = document.getElementById('dr-album') as HTMLButtonElement;
 const drEvents = document.getElementById('dr-events') as HTMLElement;
-const speedSliderEl = document.getElementById('speed-slider') as HTMLInputElement;
-const pauseToggleEl = document.getElementById('pause-toggle') as HTMLButtonElement;
-const fastForwardEl = document.getElementById('fast-forward') as HTMLButtonElement;
+// M16: ⏸ ▶ ▶▶ ▶▶▶ の4段ボタン (旧スライダー+⏩トグルの置き換え)。
+const speedBtnEls = ['speed-btn-pause', 'speed-btn-1', 'speed-btn-8', 'speed-btn-24']
+  .map((id) => document.getElementById(id) as HTMLButtonElement);
 
 type TraitAxis = 'exploration' | 'efficiency' | 'stability';
 const DR_AXES: { axis: TraitAxis; valId: string; deltaId: string }[] = [
@@ -419,20 +419,11 @@ const DR_AXES: { axis: TraitAxis; valId: string; deltaId: string }[] = [
   { axis: 'stability', valId: 'dr-stability-n', deltaId: 'dr-stability-delta' },
 ];
 
-function formatMMSS(totalSeconds: number): string {
-  const s = Math.max(0, Math.round(totalSeconds));
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-}
-
 // prepare フェーズ中は「仕込む」以外の操作 (速度変更/一時停止/早送り) を
 // 無効化する。observe 中は通常通り操作でき、その速さがそのまま
 // 「1日を消化する速さ」になる。
 function setPlaybackControlsEnabled(enabled: boolean): void {
-  speedSliderEl.disabled = !enabled;
-  pauseToggleEl.disabled = !enabled;
-  fastForwardEl.disabled = !enabled;
+  for (const btn of speedBtnEls) btn.disabled = !enabled;
 }
 
 function enterPrepare(startTick: number): void {
@@ -696,6 +687,26 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 canvas.addEventListener('dblclick', () => camera.reset());
 
+// M16: ズームスライダー ⇄ Camera.zoom の双方向バインド。
+const zoomSliderEl = document.getElementById('zoom-slider') as HTMLInputElement;
+const zoomInBtn = document.getElementById('zoom-in') as HTMLButtonElement;
+const zoomOutBtn = document.getElementById('zoom-out') as HTMLButtonElement;
+let zoomSliderDragging = false;
+zoomSliderEl.addEventListener('pointerdown', () => { zoomSliderDragging = true; });
+zoomSliderEl.addEventListener('pointerup', () => { zoomSliderDragging = false; });
+zoomSliderEl.addEventListener('input', () => {
+  camera.setZoomCentered(viewportSize(), Number(zoomSliderEl.value));
+  tracking = false;
+});
+function stepZoom(delta: number): void {
+  const next = Math.max(1, Math.min(8, camera.zoom + delta));
+  camera.setZoomCentered(viewportSize(), next);
+  zoomSliderEl.value = next.toFixed(1);
+  tracking = false;
+}
+zoomInBtn.addEventListener('click', () => stepZoom(0.5));
+zoomOutBtn.addEventListener('click', () => stepZoom(-0.5));
+
 function applyAt(x: number, y: number): void {
   // M11: 残高不足のツールは適用しない (グレーアウト表示と対になる)。
   if (!wallet.canAfford(game.tool)) return;
@@ -799,9 +810,17 @@ function frame() {
       if (marker) camera.panToward(marker.centroid, 0.08);
     }
     renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx, nightFactorFor(snap.state.tick));
+    // M16: ステージが変わった (リセット/切替) ときだけ再焼き (bakeTerrain 内部でも
+    // 同一 stageId ならスキップするが、呼び出し自体を間引く必要はない — 判定は軽い)。
+    minimap.bakeTerrain(snap.stage.id, game.env);
     minimap.draw(snap.colonyMarkers, camera.view());
     localTimeEl.textContent = localTimeFor(snap.state.tick);
     renderIdentity();
+    // M16: ホイール/ピンチ/追従で camera.zoom が変わったら、ドラッグ中でない
+    // 限りスライダー表示もそれに追従させる (双方向バインド)。
+    if (!zoomSliderDragging && Math.abs(Number(zoomSliderEl.value) - camera.zoom) > 0.05) {
+      zoomSliderEl.value = camera.zoom.toFixed(1);
+    }
 
     // M9: 観察中の残り時間 = (targetTick - tick) / 実効tick毎秒。
     // M15.7: effectiveSpeed の単位を「倍率」から実測 ticks/秒 (絶対値) へ

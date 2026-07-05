@@ -32,6 +32,14 @@ export class Camera {
     return { worldLeft: this.cx - span / 2, worldTop: this.cy - span / 2, worldSpan: span };
   }
 
+  // M16: ズームスライダー UI 用。カーソル位置に関係なく画面中央を基準に
+  // 目標ズーム値へ直接設定する (ホイール/ピンチの zoomAt はカーソル中心の
+  // 相対倍率だが、スライダーは絶対値を扱うため別の入口を用意する)。
+  setZoomCentered(canvasSize: number, targetZoom: number): void {
+    const factor = clamp(targetZoom, MIN_ZOOM, MAX_ZOOM) / this.zoom;
+    this.zoomAt(canvasSize, canvasSize / 2, canvasSize / 2, factor);
+  }
+
   // canvasSize: 正方形ビューポートの CSS px 辺長。sx, sy はその内側の px 座標。
   screenToWorld(canvasSize: number, sx: number, sy: number): { x: number; y: number } {
     const v = this.view();

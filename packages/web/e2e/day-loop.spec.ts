@@ -39,9 +39,9 @@ test('デイループ: 1日を仕込む→委ねる→結果を受け取る→�
   await expect(page.locator('#day-loop-mode-toggle')).toHaveClass(/active/);
   await expect(page.locator('#day-loop-bar')).toBeVisible();
 
-  // prepare: 「観察をはじめる」だけが見え、速度スライダーは無効。
+  // prepare: 「観察をはじめる」だけが見え、速度ボタンは無効。
   await expect(page.locator('#begin-observe')).toBeVisible();
-  await expect(page.locator('#speed-slider')).toBeDisabled();
+  await expect(page.locator('#speed-btn-1')).toBeDisabled();
 
   // setSpeed(0) は sim-worker への非同期メッセージなので、クリック直後は
   // まだ飛行中の tick が着地しきっていない可能性がある (smoke.spec.ts の
@@ -81,11 +81,12 @@ test('M15.5: 見守りで数日過ごしてからデイループへ切り替え�
 
   // 見守り (連続) のまま、速度を上げて数日分自然に経過させる
   // (main.ts の frame() が snap.day の増分ごとに DayRecord を積むはず)。
-  await page.locator('#speed-slider').evaluate((el) => {
-    const input = el as HTMLInputElement;
-    input.value = '24';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
+  // M16: ▶▶▶ (×24) は早送りフラグも同時にONにし、frame() の「重い処理」
+  // (DayRecord 記録を含む) の呼び出し頻度が 60fps→10fps に落ちる。e2e の
+  // 短縮日長 (500ms/日) と組み合わさると1フレームの間に複数日が経過して
+  // しまい、日ごとの記録が間引かれる。本テストは「数日分を1日ずつ記録する」
+  // 粒度が主眼なので、早送りを伴わない ▶▶ (×8) を使う。
+  await page.click('#speed-btn-8');
   await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
     .toBeGreaterThanOrEqual(2);
 
@@ -116,7 +117,7 @@ test('デイループ: 見守り (連続) に戻すと自動で進み続ける',
   await page.click('#day-loop-mode-toggle');
   await expect(page.locator('#day-loop-mode-toggle')).not.toHaveClass(/active/);
   await expect(page.locator('#day-loop-bar')).toBeHidden();
-  await expect(page.locator('#speed-slider')).toBeEnabled();
+  await expect(page.locator('#speed-btn-1')).toBeEnabled();
 
   await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 15_000 })
     .toBeGreaterThan(0);

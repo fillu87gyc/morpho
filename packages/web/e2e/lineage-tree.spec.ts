@@ -24,12 +24,10 @@ async function waitForReady(page: Page): Promise<void> {
   await expect.poll(async () => canvasChecksum(page), { timeout: 15_000 }).not.toBe(0);
 }
 
-async function setSpeedSlider(page: Page, value: number): Promise<void> {
-  await page.locator('#speed-slider').evaluate((el, v) => {
-    const input = el as HTMLInputElement;
-    input.value = String(v);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }, value);
+// M16: 4段速度ボタン (旧スライダーの置き換え)。既存 e2e は「×24 にする」
+// 用途でしか使っていなかったため、専用ヘルパーへ簡略化する。
+async function setSpeedMax(page: Page): Promise<void> {
+  await page.click('#speed-btn-24');
 }
 
 test('1つの親から2匹の子を育てると系統樹が枝分かれして表示される', async ({ page }) => {
@@ -38,7 +36,7 @@ test('1つの親から2匹の子を育てると系統樹が枝分かれして表
   await page.goto('/');
   await waitForReady(page);
 
-  await setSpeedSlider(page, 24);
+  await setSpeedMax(page);
   await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
     .toBeGreaterThanOrEqual(5);
   await page.click('#harvest-seed'); // 1代目を採取 → 2代目としてプレイ中

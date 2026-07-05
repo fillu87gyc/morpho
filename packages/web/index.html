@@ -39,13 +39,16 @@
             <div class="era-wrap" title="時代の達成条件への進捗">
               <span id="era-ring" class="era-ring"></span>
               <span class="era" id="era">胞子期</span>
+              <span class="era-eta" id="era-eta">次の時代まで —</span>
             </div>
             <div class="era stage-name" id="stage-name">皿</div>
-            <div class="controls">
-              <button id="pause-toggle" class="pause-toggle" title="一時停止 / 再生">⏸</button>
-              <input id="speed-slider" type="range" min="1" max="24" step="1" value="1" title="再生速度" />
-              <span class="speed-n">×<span id="speed-n">1</span></span>
-              <button id="fast-forward" class="pause-toggle" title="早送り (描画を10fpsに間引いて浮いた分をtickに回す)">⏩</button>
+            <!-- M16: モックアップの ⏸ ▶ ▶▶ ▶▶▶ 4段ボタン。旧スライダー+⏩は廃止。
+                 ▶▶▶ は ×24 に加えて早送りフラグ (描画10fps化) も ON にする。 -->
+            <div class="controls speed-controls" role="group" aria-label="再生速度">
+              <button id="speed-btn-pause" class="pause-toggle speed-btn" title="一時停止" aria-pressed="false">⏸</button>
+              <button id="speed-btn-1" class="pause-toggle speed-btn" title="×1" aria-pressed="true">▶</button>
+              <button id="speed-btn-8" class="pause-toggle speed-btn" title="×8" aria-pressed="false">▶▶</button>
+              <button id="speed-btn-24" class="pause-toggle speed-btn" title="×24 (早送り)" aria-pressed="false">▶▶▶</button>
               <button id="day-loop-mode-toggle" class="pause-toggle" title="デイループ (仕込む→委ねる→受け取る) / 見守り (連続再生) を切り替える">🔁 見守り</button>
             </div>
           </div>
@@ -199,6 +202,13 @@
         <div class="canvas-wrap">
           <canvas id="canvas" width="640" height="640"></canvas>
           <div id="hint" class="hint">クリックで配置 / ホイールでズーム / 右ドラッグで移動</div>
+          <!-- M16: ズームスライダー UI。ホイール/ピンチと双方向にバインドする。 -->
+          <div class="zoom-controls">
+            <button id="zoom-out" class="zoom-btn" title="ズームアウト">−</button>
+            <input id="zoom-slider" type="range" min="1" max="8" step="0.1" value="1" title="ズーム" />
+            <button id="zoom-in" class="zoom-btn" title="ズームイン">+</button>
+            <span class="zoom-hint">ピンチでズーム</span>
+          </div>
         </div>
 
         <aside class="panel right">

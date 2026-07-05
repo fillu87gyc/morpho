@@ -88,6 +88,8 @@ body { overflow: hidden; }
   width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
   background: conic-gradient(var(--accent) calc(var(--era-progress) * 360deg), var(--bar-empty) 0);
 }
+/* M16: 時代の残り時間予測。狭い画面では折り返してもよいよう nowrap は課さない。 */
+.era-eta { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 .time .controls { display: flex; gap: 4px; }
 .time .controls button {
   background: var(--panel);
@@ -98,8 +100,11 @@ body { overflow: hidden; }
   cursor: pointer;
 }
 .time .controls button.active { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
-.time .controls input[type="range"] { width: 110px; accent-color: var(--accent); flex-shrink: 0; }
-.time .controls .speed-n { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 28px; flex-shrink: 0; }
+/* M16: 4段速度ボタンの選択状態は aria-pressed で示す (旧 .active クラス相当)。 */
+.time .controls button.speed-btn[aria-pressed="true"] {
+  color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft);
+}
+.time .controls button.speed-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 /* M15.5: 「🔁 見守り/デイループ」トグルは他の速度ボタンと同じ 34px 固定幅を
    継承すると、デスクトップ1440pxでもラベルが縦書きに潰れてしまう。
    幅を内容に合わせ、常に横書き1行を保つ。 */
@@ -488,6 +493,26 @@ body { overflow: hidden; }
   border: 1px solid var(--panel-edge);
   border-radius: 999px;
   pointer-events: none;
+}
+/* M16: ズームスライダー UI。ホイール/ピンチと併用できるよう右下に控えめに置く。 */
+.zoom-controls {
+  position: absolute; bottom: 10px; right: 10px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; background: rgba(0,0,0,0.4);
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+}
+.zoom-btn {
+  width: 22px; height: 22px; line-height: 20px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--panel-edge);
+  background: var(--panel); color: var(--text); cursor: pointer;
+  font-size: 14px;
+}
+.zoom-controls input[type="range"] { width: 70px; accent-color: var(--accent); }
+.zoom-hint { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+@media (max-width: 900px) {
+  .zoom-hint { display: none; }
+  .zoom-controls input[type="range"] { width: 44px; }
 }
 
 .palette { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }

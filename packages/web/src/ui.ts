@@ -13,6 +13,8 @@ import type { Album } from './album.js';
 import { allCatalogueEntries } from './catalogue.js';
 import type { CatalogueThumbs } from './catalogue-thumbs.js';
 import { starsOf } from './trait-labels.js';
+import { estimateEraEta, type EraSample } from './era.js';
+import { formatMMSS } from './day-loop.js';
 
 type El = HTMLElement;
 
@@ -122,6 +124,14 @@ export class Ui {
   private lastChalKey = '';
   private lastHarvestable = false;
   private lastStageId: StageId | null = null;
+  // M16: 時代の残り時間予測。progress を実時間軸でサンプリングして
+  // estimateEraEta() に渡す。時代名が変わったら履歴をリセットする。
+  private lastEraNameForEta: string | null = null;
+  private eraSamples: EraSample[] = [];
+  private lastEraSampleAtMs = 0;
+  private readonly ERA_SAMPLE_INTERVAL_MS = 2500;
+  private readonly ERA_SAMPLE_MAX = 20;
+  private eraEtaEl = el('era-eta');
 
   constructor(
     private game: GameProxy,
@@ -152,26 +162,34 @@ export class Ui {
     this.harvestBtn.addEventListener('click', () => this.hooks.onHarvestSeed());
     this.screenshotBtn.addEventListener('click', () => this.hooks.onScreenshot());
     (el('toggle-ambient') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleAmbient());
-    (el('fast-forward') as HTMLButtonElement).addEventListener('click', () => this.hooks.onToggleFastForward());
-    // 再生速度: スライダーで連続的に選べる。一時停止ボタンは直前の速度を
-    // 覚えておいて、押し直したときに同じ速度へ戻す。
-    const pauseBtn = el('pause-toggle') as HTMLButtonElement;
-    const speedSlider = el('speed-slider') as HTMLInputElement;
-    const speedN = el('speed-n');
-    let lastSpeed = Number(speedSlider.value) || 1;
-    let paused = false;
-    speedSlider.addEventListener('input', () => {
-      const v = Number(speedSlider.value);
-      lastSpeed = v;
-      setText(speedN, String(v));
-      if (!paused) this.hooks.onSpeed(v);
-    });
-    pauseBtn.addEventListener('click', () => {
-      paused = !paused;
-      pauseBtn.textContent = paused ? '▶' : '⏸';
-      pauseBtn.classList.toggle('active', paused);
-      this.hooks.onSpeed(paused ? 0 : lastSpeed);
-    });
+    // M16: ⏸ ▶ ▶▶ ▶▶▶ の4段ボタン。旧スライダー+⏩トグルは廃止したが、
+    // 内部 API (onSpeed/onToggleFastForward) はそのまま使う。▶▶▶ だけが
+    // 早送りフラグ (描画10fps化してtickに全振り) も同時にONにする。
+    // 選択は localStorage に永続化し、次回起動時にも同じプリセットで始まる。
+    const SPEED_PRESET_KEY = 'morpho.speedPreset.v1';
+    type SpeedPreset = 'pause' | '1' | '8' | '24';
+    const presets: { id: SpeedPreset; btn: HTMLButtonElement; speed: number; fastForward: boolean }[] = [
+      { id: 'pause', btn: el('speed-btn-pause') as HTMLButtonElement, speed: 0, fastForward: false },
+      { id: '1', btn: el('speed-btn-1') as HTMLButtonElement, speed: 1, fastForward: false },
+      { id: '8', btn: el('speed-btn-8') as HTMLButtonElement, speed: 8, fastForward: false },
+      { id: '24', btn: el('speed-btn-24') as HTMLButtonElement, speed: 24, fastForward: true },
+    ];
+    const applyPreset = (id: SpeedPreset, persist: boolean): void => {
+      const preset = presets.find((p) => p.id === id) ?? presets[1]!;
+      for (const p of presets) p.btn.setAttribute('aria-pressed', String(p.id === preset.id));
+      this.hooks.onSpeed(preset.speed);
+      if (this.game.fastForward !== preset.fastForward) this.hooks.onToggleFastForward();
+      if (persist) {
+        try { localStorage.setItem(SPEED_PRESET_KEY, preset.id); } catch { /* private mode 等は諦める */ }
+      }
+    };
+    for (const p of presets) p.btn.addEventListener('click', () => applyPreset(p.id, true));
+    let initialPreset: SpeedPreset = '1';
+    try {
+      const saved = localStorage.getItem(SPEED_PRESET_KEY);
+      if (saved === 'pause' || saved === '1' || saved === '8' || saved === '24') initialPreset = saved;
+    } catch { /* private mode 等は既定の '1' のまま */ }
+    if (initialPreset !== '1') applyPreset(initialPreset, false);
     document.querySelectorAll<HTMLButtonElement>('button.tool').forEach((b) => {
       b.addEventListener('click', () => {
         document.querySelectorAll<HTMLButtonElement>('button.tool').forEach((x) => x.classList.remove('active'));
@@ -204,6 +222,7 @@ export class Ui {
     setText(this.era, s.era.name);
     this.eraRing.style.setProperty('--era-progress', String(s.era.progress));
     this.eraRing.title = `次の時代まで ${pct(s.era.progress)}`;
+    this.renderEraEta(s.era.name, s.era.progress);
     setText(this.stageName, s.stage.name);
     this.stageName.title = s.stage.description;
     if (this.lastStageId !== s.stage.id) {
@@ -535,5 +554,24 @@ export class Ui {
         }
       }
     }
+  }
+
+  // M16: 時代の残り時間予測。2.5秒に1点、progress を実時間軸でサンプリング
+  // する (毎フレームは不要 — sim tick の粒度からしても過剰)。時代名が変わった
+  // ら履歴をリセットし、切替直後の古い速度で誤った ETA を出さないようにする。
+  private renderEraEta(eraName: string, progress: number): void {
+    if (this.lastEraNameForEta !== eraName) {
+      this.lastEraNameForEta = eraName;
+      this.eraSamples = [];
+      this.lastEraSampleAtMs = 0;
+    }
+    const now = performance.now();
+    if (now - this.lastEraSampleAtMs >= this.ERA_SAMPLE_INTERVAL_MS) {
+      this.lastEraSampleAtMs = now;
+      this.eraSamples.push({ atMs: now, progress });
+      if (this.eraSamples.length > this.ERA_SAMPLE_MAX) this.eraSamples.shift();
+    }
+    const etaMs = estimateEraEta(this.eraSamples);
+    setText(this.eraEtaEl, etaMs === null ? '次の時代まで —' : `次の時代まで あと ${formatMMSS(etaMs / 1000)}`);
   }
 }

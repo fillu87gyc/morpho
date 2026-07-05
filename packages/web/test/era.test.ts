@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   eraFor, type EraInput,
   DIFFUSE_MIN_DAY, PLASMODIUM_MIN_DAY, MATURE_MIN_DAY, PLASMODIUM_MASS_KG_REQUIRED,
+  estimateEraEta, type EraSample,
 } from '../src/era.js';
 
 function input(overrides: Partial<EraInput> = {}): EraInput {
@@ -111,5 +112,46 @@ describe('eraFor', () => {
       names.push(e.name);
     }
     expect(names).toEqual(['胞子期', '拡散期', '変形体期', '成熟期']);
+  });
+});
+
+describe('estimateEraEta', () => {
+  function sample(atMs: number, progress: number): EraSample {
+    return { atMs, progress };
+  }
+
+  it('サンプルが1件以下なら null', () => {
+    expect(estimateEraEta([])).toBeNull();
+    expect(estimateEraEta([sample(0, 0.1)])).toBeNull();
+  });
+
+  it('一定速度で進む履歴から正しい ETA を推定する', () => {
+    // 1000ms あたり progress 0.1 ずつ進む → 残り 0.5 なら 5000ms
+    const samples = [sample(0, 0), sample(1000, 0.1), sample(2000, 0.2), sample(3000, 0.3), sample(4000, 0.4), sample(5000, 0.5)];
+    const eta = estimateEraEta(samples);
+    expect(eta).not.toBeNull();
+    expect(eta!).toBeCloseTo(5000, -2);
+  });
+
+  it('停滞 (progress が動かない) すると null を返す', () => {
+    const samples = [sample(0, 0.3), sample(1000, 0.3), sample(2000, 0.3), sample(3000, 0.3)];
+    expect(estimateEraEta(samples)).toBeNull();
+  });
+
+  it('progress が後退した (質量減少などで進捗が下がった) 場合、平均速度が負なら null', () => {
+    const samples = [sample(0, 0.5), sample(1000, 0.45), sample(2000, 0.4)];
+    expect(estimateEraEta(samples)).toBeNull();
+  });
+
+  it('残り進捗が0以下ならETAは0', () => {
+    const samples = [sample(0, 0.9), sample(1000, 1), sample(2000, 1)];
+    expect(estimateEraEta(samples)).toBe(0);
+  });
+
+  it('時刻が単調でない (dtMs<=0) サンプルは無視して計算する', () => {
+    const samples = [sample(0, 0), sample(1000, 0.1), sample(1000, 0.15), sample(2000, 0.2)];
+    const eta = estimateEraEta(samples);
+    expect(eta).not.toBeNull();
+    expect(eta!).toBeGreaterThan(0);
   });
 });

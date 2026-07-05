@@ -80,3 +80,42 @@ export function eraFor(input: EraInput): EraStatus {
   }
   return { name: '胞子期', progress: clamp01(input.massKg / 0.3) };
 }
+
+// M16: 時代の残り時間予測「次の時代まで あと mm:ss」。
+// EraStatus.progress を実時間軸でサンプリングした履歴から、進捗速度の
+// EWMA (指数移動平均) を取り、残り距離をその速度で割って ETA (ミリ秒) を
+// 推定する。sim の状態を一切見ない (main.ts が定期的にサンプルを積むだけ)
+// 純粋関数なので、時代切替の検知やサンプリング頻度は呼び出し側の責務。
+export interface EraSample {
+  atMs: number;
+  progress: number;
+}
+
+// 速度がこれ未満 (ほぼ停滞) なら ETA を出さず null (UI は「—」を表示する)。
+const MIN_PROGRESS_RATE_PER_MS = 1e-7; // 相当に遅くても 1 か月以内なら出す下限
+
+export function estimateEraEta(samples: readonly EraSample[]): number | null {
+  if (samples.length < 2) return null;
+  const first = samples[0]!;
+  const last = samples[samples.length - 1]!;
+  const dtMs = last.atMs - first.atMs;
+  if (dtMs <= 0) return null;
+
+  // EWMA: 直近のサンプル間隔ほど重みを大きくして進捗速度を推定する
+  // (単純な先頭-末尾の平均速度だと、加速/減速中の変化に追従が遅れるため)。
+  const ALPHA = 0.35;
+  let rate: number | null = null;
+  for (let i = 1; i < samples.length; i++) {
+    const prev = samples[i - 1]!;
+    const cur = samples[i]!;
+    const dt = cur.atMs - prev.atMs;
+    if (dt <= 0) continue;
+    const instRate = (cur.progress - prev.progress) / dt;
+    rate = rate === null ? instRate : rate * (1 - ALPHA) + instRate * ALPHA;
+  }
+  if (rate === null || rate < MIN_PROGRESS_RATE_PER_MS) return null;
+
+  const remaining = 1 - last.progress;
+  if (remaining <= 0) return 0;
+  return remaining / rate;
+}
