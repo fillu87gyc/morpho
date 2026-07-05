@@ -99,6 +99,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     tracking = false;
     trackedColonyIndex = null;
     lastEraName = '胞子期';
+    lastWatchedDay = -1;
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleHeat: () => {
@@ -118,6 +119,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     tracking = false;
     trackedColonyIndex = null;
     lastEraName = '胞子期';
+    lastWatchedDay = -1;
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleAmbient: () => {
@@ -166,6 +168,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     tracking = false;
     trackedColonyIndex = null;
     lastEraName = '胞子期';
+    lastWatchedDay = -1;
     if (dayLoopMode) enterPrepare(0);
   },
 });
@@ -174,6 +177,10 @@ let showHeat = false;
 // M14: 時代が切り替わった節目で 🍄 を1度だけ贈る。game.ts の reset() 既定
 // ('胞子期') と揃え、ステージ/系統樹からの再開時も明示的に揃え直す。
 let lastEraName = '胞子期';
+// M15.5: 見守りモードでは (デイループの result 遷移がないため) DayRecord が
+// 一切積まれず、デイループへ切り替えた初日の結果パネルに前日比Δが出ない
+// 問題があった。見守り中も日境界 (snap.day の増分) を検知して記録する。
+let lastWatchedDay = -1;
 
 // ── M10: 「やり直す」(Undo) ────────────────────────────
 const undoBtn = document.getElementById('undo-stroke') as HTMLButtonElement;
@@ -692,6 +699,15 @@ function applyAt(x: number, y: number): void {
 // ── レイアウト ────────────────────────────────────────
 function fitCanvas(): void {
   const wrap = canvas!.parentElement as HTMLElement;
+  // M15.5: <canvas> は CSS 幅が未指定だと HTML の width/height 属性 (intrinsic
+  // size) がそのまま replaced element としてのサイズになり、flex/grid の
+  // 自動最小サイズ計算に混ざる。measure → 設定 → 再measure が「前回設定した
+  // (大きすぎる) サイズ」を基準に収束してしまい、モバイル幅では二度と
+  // 縮まらない循環に陥っていた (390px 幅で document が 700px超に膨張する
+  // 実プレイ検証の崩れの根本原因)。計測前に一旦 0 にして自身の footprint を
+  // 消してから wrap の「本当に使える幅」を測る。
+  canvas!.style.width = '0px';
+  canvas!.style.height = '0px';
   const r = wrap.getBoundingClientRect();
   const size = Math.floor(Math.min(r.width, r.height));
   canvas!.style.width = `${size}px`;
@@ -747,6 +763,14 @@ function frame() {
     if (snap.era.name !== lastEraName) {
       lastEraName = snap.era.name;
       wallet.earn('horoishi', 1, `時代が「${snap.era.name}」に進んだ`);
+    }
+    // M15.5: 見守りモード中も日境界ごとに DayRecord を積む (デイループの
+    // result 遷移でしか記録しないと、切替初日の結果パネルに前日比Δが出ない)。
+    if (snap.day > lastWatchedDay) {
+      if (!dayLoopMode && lastWatchedDay >= 0) {
+        dayReport.record({ day: lastWatchedDay, traits: snap.traits, massKg: snap.world.massKg, areaM2: snap.world.areaM2 });
+      }
+      lastWatchedDay = snap.day;
     }
     // M12: 「個体を追跡する」— 選択コロニーの重心へ毎フレーム滑らかに寄せる。
     if (tracking && trackedColonyIndex !== null) {

@@ -29,6 +29,16 @@ async function waitForReady(page: Page): Promise<void> {
   await expect.poll(async () => canvasChecksum(page), { timeout: 15_000 }).not.toBe(0);
 }
 
+// M15.5: 390px 幅で document が 708px に膨張し、ヘッダ折り返しなし・
+// タイトル縦積み・キャンバス見切れが起きていた崩れを headless で検出する。
+async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+  const { scrollWidth, innerWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+}
+
 test('1本指タップでツールが配置される (タッチでもマウスクリックと同じ経路)', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
@@ -98,6 +108,7 @@ test.describe('縦画面レイアウト (M15)', () => {
     await expect(page.locator('#onboarding')).toBeHidden();
 
     await waitForReady(page);
+    await expectNoHorizontalOverflow(page);
 
     // 下部ツールバーが常時見えている (縦画面レイアウト)。
     await expect(page.locator('#mobile-toolbar')).toBeVisible();
@@ -106,6 +117,7 @@ test.describe('縦画面レイアウト (M15)', () => {
     // ② デイループへ切り替えて1日ぶん委ねる。
     await page.click('#day-loop-mode-toggle');
     await expect(page.locator('#day-loop-bar')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
     await page.click('#begin-observe');
     await expect(page.locator('#day-result-modal')).toBeVisible({ timeout: 20_000 });
     await page.click('#dr-next');
@@ -116,6 +128,7 @@ test.describe('縦画面レイアウト (M15)', () => {
     await page.click('#menu-toggle');
     await expect(page.locator('.panel.right')).toBeVisible();
     await expect(page.locator('#ency')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
 
     await page.click('#menu-toggle');
     await expect(page.locator('.panel.right')).toBeHidden();

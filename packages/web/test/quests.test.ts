@@ -17,15 +17,15 @@ describe('computeQuests', () => {
     expect(connect!.done).toBe(true);
   });
 
-  it('探索性が0.7に達すると explore-70 が完了する', () => {
-    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0.7) });
+  it('探索性が0.85に達すると explore-70 が完了する', () => {
+    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0.85) });
     const explore = quests.find((q) => q.id === 'explore-70')!;
     expect(explore.progress).toBe(1);
     expect(explore.done).toBe(true);
   });
 
-  it('探索性が0.35 (半分) なら進捗0.5', () => {
-    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0.35) });
+  it('探索性が0.425 (半分) なら進捗0.5', () => {
+    const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0.425) });
     const explore = quests.find((q) => q.id === 'explore-70')!;
     expect(explore.progress).toBeCloseTo(0.5, 5);
     expect(explore.done).toBe(false);
