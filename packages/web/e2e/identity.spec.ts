@@ -77,9 +77,14 @@ test('M17: ズームインして注視ON → 視野外の出来事が消え、OF
   if (!box) throw new Error('canvas has no bounding box');
 
   // ① ズームアウトした状態 (世界全体が見える) で1箇所にエサを置く。
+  // クリック → Worker 往復 → 次フレームの DOM 反映は非同期なので、直後の
+  // 同期カウントは遅い CI ランナーで 0 のまま読めてしまう (flake)。④⑤と
+  // 同じく poll で出現を待ってからカウントを取る。
   await page.mouse.click(box.x + box.width * 0.15, box.y + box.height * 0.15);
+  await expect
+    .poll(async () => page.locator('#log li', { hasText: '栄養を撒いた' }).count())
+    .toBeGreaterThan(0);
   const totalBefore = await page.locator('#log li', { hasText: '栄養を撒いた' }).count();
-  expect(totalBefore).toBeGreaterThan(0);
 
   // ② 反対側の隅を中心に大きくズームインする — ①の座標は新しい視野の外に出る。
   const farCorner = { x: box.x + box.width * 0.85, y: box.y + box.height * 0.85 };
@@ -87,10 +92,13 @@ test('M17: ズームインして注視ON → 視野外の出来事が消え、OF
   await page.mouse.wheel(0, -3000);
   await page.waitForTimeout(200);
 
-  // ③ ズームインした (今の視野内の) 位置にもう1箇所エサを置く。
+  // ③ ズームインした (今の視野内の) 位置にもう1箇所エサを置く。①と同じく
+  // 非同期反映を poll で待つ。
   await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await expect
+    .poll(async () => page.locator('#log li', { hasText: '栄養を撒いた' }).count())
+    .toBeGreaterThan(totalBefore);
   const totalAfter = await page.locator('#log li', { hasText: '栄養を撒いた' }).count();
-  expect(totalAfter).toBeGreaterThan(totalBefore);
 
   // ④ 「このエリアを注視中」をONにすると、視野外 (①) の出来事が消えて表示件数が減る。
   await page.click('#log-area-toggle');
