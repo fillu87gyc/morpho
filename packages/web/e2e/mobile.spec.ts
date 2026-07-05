@@ -41,7 +41,11 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 
 test('1本指タップでツールが配置される (タッチでもマウスクリックと同じ経路)', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -56,7 +60,11 @@ test('1本指タップでツールが配置される (タッチでもマウス�
 
 test('2本指ピンチでズームでき、ツールは誤配置されない', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -98,6 +106,10 @@ test.describe('縦画面レイアウト (M15)', () => {
 
   test('オンボーディングを完了 → デイループ1周 → ハンバーガーから図鑑を開く', async ({ page }) => {
     const errors = collectConsoleErrors(page);
+    // M15.7: オンボーディングは実際に表示させたいので morpho.onboarded.v1 は
+    // 立てないが、日長は既定の実時間 (2.4分/日) のままだとデイループ待ちが
+    // タイムアウトするので短縮する (他の spec と同じ 3840ms = 旧 tick レート相当)。
+    await page.addInitScript(() => localStorage.setItem('morpho.dayMs.v1', '3840'));
     await page.goto('/');
 
     // ① オンボーディング (コンセプトの3ステップ) を最後まで進める。

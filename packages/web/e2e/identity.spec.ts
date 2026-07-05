@@ -26,7 +26,11 @@ async function waitForReady(page: Page): Promise<void> {
 
 test('個体ビューに名前・★評価・特性チップが表示され、タップで改名できる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -43,7 +47,11 @@ test('個体ビューに名前・★評価・特性チップが表示され、�
 
 test('新しい皿へ を押すと個体番号が進む', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -56,7 +64,11 @@ test('新しい皿へ を押すと個体番号が進む', async ({ page }) => {
 
 test('個体を追跡するとカメラが動き、手動ズームで追従が解除される', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 

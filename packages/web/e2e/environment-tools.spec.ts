@@ -26,7 +26,11 @@ async function waitForReady(page: Page): Promise<void> {
 
 test('毒素をまくと環境バランスの毒素表示が上がり、消すツールで戻せる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -45,7 +49,11 @@ test('毒素をまくと環境バランスの毒素表示が上がり、消す�
 
 test('石を置き間違えても「やり直す」(Ctrl+Z) で取り消せる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -67,7 +75,11 @@ test('石を置き間違えても「やり直す」(Ctrl+Z) で取り消せる',
 
 test('温度ツール (加温/冷却) を使ってもクラッシュせず、ヒート表示で温度レイヤーが見える', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -88,7 +100,11 @@ test('温度ツール (加温/冷却) を使ってもクラッシュせず、ヒ
 
 test('水を止める (drain) ツールも適用できる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 

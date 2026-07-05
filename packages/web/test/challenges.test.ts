@@ -21,6 +21,25 @@ describe('allChallenges', () => {
   it('常に3種を返す', () => {
     expect(allChallenges().map((c) => c.kind)).toEqual(['fastest', 'cheapest', 'clean']);
   });
+
+  // M15.7: TICKS_PER_DAY が 40→240 になったことで、旧「Day 6 以内」(=240 tick)
+  // という絶対ラインは新しい day 定義では「Day 0 のうちに」に相当する
+  // (ROADMAP.md M15.7)。日数換算だけがずれて tick 換算の厳しさは変わらないことを固定する。
+  describe('fastest.isComplete', () => {
+    const fastest = allChallenges().find((c) => c.kind === 'fastest')!;
+
+    it('全接続かつ Day 0 なら達成', () => {
+      expect(fastest.isComplete({ connectProgress: 1, day: 0, networkLinks: 0, toxin: 0 })).toBe(true);
+    });
+
+    it('全接続でも Day 1 以降なら未達成', () => {
+      expect(fastest.isComplete({ connectProgress: 1, day: 1, networkLinks: 0, toxin: 0 })).toBe(false);
+    });
+
+    it('Day 0 でも全接続していなければ未達成', () => {
+      expect(fastest.isComplete({ connectProgress: 0.9, day: 0, networkLinks: 0, toxin: 0 })).toBe(false);
+    });
+  });
 });
 
 describe('dateKey', () => {

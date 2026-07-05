@@ -28,7 +28,11 @@ async function waitForReady(page: Page): Promise<void> {
 
 test('デイループ: 1日を仕込む→委ねる→結果を受け取る→つぎの日へ、が1周する', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -75,7 +79,11 @@ test('デイループ: 1日を仕込む→委ねる→結果を受け取る→�
 
 test('M15.5: 見守りで数日過ごしてからデイループへ切り替えると、初日の結果パネルから前日比Δが出る', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -106,7 +114,11 @@ test('M15.5: 見守りで数日過ごしてからデイループへ切り替え�
 
 test('デイループ: 見守り (連続) に戻すと自動で進み続ける', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 

@@ -34,7 +34,11 @@ async function setSpeedSlider(page: Page, value: number): Promise<void> {
 
 test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見してサムネイルとカウントが更新される', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
@@ -63,7 +67,11 @@ test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見�
 
 test('実績はバッジグリッドで12個表示され、達成すると解除アイコンに変わる', async ({ page }) => {
   const errors = collectConsoleErrors(page);
-  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
   await page.goto('/');
   await waitForReady(page);
 
