@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Camera } from '../src/camera.js';
+import { Camera, fitBBoxSpan, bboxCenter, approachSpan, type BBox } from '../src/camera.js';
 
 describe('Camera', () => {
   it('初期状態はズーム1倍でワールド全体を映す', () => {
@@ -107,5 +107,41 @@ describe('Camera', () => {
     cam.reset();
     expect(cam.zoom).toBe(1);
     expect(cam.view()).toEqual({ worldLeft: 0, worldTop: 0, worldSpan: 100 });
+  });
+});
+
+// M26: 俯瞰カメラの自動上昇の下敷き (bbox フィットの純粋関数群)。
+describe('fitBBoxSpan / bboxCenter / approachSpan', () => {
+  function bbox(minX: number, minY: number, maxX: number, maxY: number): BBox {
+    return { minX, minY, maxX, maxY };
+  }
+
+  it('正方形の bbox は padding 倍の span になる', () => {
+    expect(fitBBoxSpan(bbox(0, 0, 10, 10), 1.3, 0)).toBeCloseTo(13);
+  });
+
+  it('横長/縦長の bbox は長い辺に合わせる (正方形ビューポートなので)', () => {
+    expect(fitBBoxSpan(bbox(0, 0, 20, 5), 1.0, 0)).toBeCloseTo(20);
+    expect(fitBBoxSpan(bbox(0, 0, 5, 20), 1.0, 0)).toBeCloseTo(20);
+  });
+
+  it('bbox が退化 (点) していても minSpan を下回らない', () => {
+    expect(fitBBoxSpan(bbox(5, 5, 5, 5), 1.3, 10)).toBe(10);
+  });
+
+  it('bboxCenter は中心点を返す', () => {
+    expect(bboxCenter(bbox(0, 0, 10, 20))).toEqual({ x: 5, y: 10 });
+    expect(bboxCenter(bbox(-10, -10, 10, 10))).toEqual({ x: 0, y: 0 });
+  });
+
+  it('approachSpan は目標へ徐々に近づき、繰り返すとほぼ一致する', () => {
+    let span = 10;
+    for (let i = 0; i < 50; i++) span = approachSpan(span, 100, 0.2);
+    expect(span).toBeCloseTo(100, 0);
+  });
+
+  it('approachSpan は t=0 のとき変化しない、t=1 のとき即座に到達する', () => {
+    expect(approachSpan(10, 50, 0)).toBe(10);
+    expect(approachSpan(10, 50, 1)).toBe(50);
   });
 });

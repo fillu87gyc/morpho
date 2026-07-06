@@ -99,3 +99,33 @@ export class Camera {
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
+
+// M26: 「俯瞰カメラの自動上昇」の下敷きになる純粋関数。
+//
+// 既存ステージ (worldSize=100 固定) では Camera.zoom は worldSize との比で
+// [1,8] にクランプされており、UI のズームスライダーもこの範囲に直結して
+// いる。半無限ワールド (M25 の ChunkedGridEnvironment、worldSize=100,000 相当)
+// では bbox がワールド全体よりずっと小さい間はこの比だけでは意味のある
+// ズーム値にならないため、「ワールド単位の絶対 span」で bbox フィットを
+// 計算する形で先に切り出す。実際に Camera へ組み込む (zoom 概念そのものを
+// span 基準に置き換えるか、専用モードを足すか) のは、無限世界ステージが
+// 配線されてから判断する (ROADMAP.md M26 参照)。
+export interface BBox { minX: number; minY: number; maxX: number; maxY: number; }
+
+// bbox (+ padding 分の余白) がちょうど収まる正方形ビューポートの一辺の
+// 長さ (ワールド単位)。bbox が退化 (点・線) していても minSpan を下回らない。
+export function fitBBoxSpan(bbox: BBox, padding = 1.3, minSpan = 10): number {
+  const w = Math.max(0, bbox.maxX - bbox.minX) * padding;
+  const h = Math.max(0, bbox.maxY - bbox.minY) * padding;
+  return Math.max(minSpan, w, h);
+}
+
+export function bboxCenter(bbox: BBox): { x: number; y: number } {
+  return { x: (bbox.minX + bbox.maxX) / 2, y: (bbox.minY + bbox.maxY) / 2 };
+}
+
+// 現在の span から目標 span へ、t (0..1、大きいほど速く) だけ指数的に近づける
+// (カメラの急なジャンプを避ける減衰追従。panToward と同じ考え方)。
+export function approachSpan(currentSpan: number, targetSpan: number, t: number): number {
+  return currentSpan + (targetSpan - currentSpan) * t;
+}
