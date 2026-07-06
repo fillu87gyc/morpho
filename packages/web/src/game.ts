@@ -22,6 +22,7 @@ import { TICKS_PER_DAY } from './day-loop.js';
 import { UndoStack } from './undo.js';
 import { eraFor, type EraStatus } from './era.js';
 import { WorldEventLog, type WorldEvent } from './world-events.js';
+import { computeRegenAmount, REGEN_RADIUS_FRACTION } from './nutrient-regen.js';
 
 export type { StageId } from './stages.js';
 
@@ -258,8 +259,24 @@ export class Game {
       // 含む) が要るため、growthStep と同じ 12 tick に 1 回のペースに間引く
       // (毎tickだと M8 で間引いた分の計算コストが復活してしまう)。
       if (this.state.tick % 12 === 0) this.checkEraTransition();
+      // M27: 日の変わり目に一度だけ、元の食料点へ薄く栄養を再生する
+      // (Day 24 前後での完全停滞を「拡がる→痩せる→また拡がる」に変える)。
+      if (this.state.tick % TICKS_PER_DAY === 0) this.regenerateNutrients();
     }
     this.drainBus();
+  }
+
+  // M27: 栄養の再生サイクル。量は computeRegenAmount() (day の周期 + 局所湿度)
+  // で決まる、season のボトムでは 0 になりうる薄い量。sim 側は無改修
+  // (Environment.placeFood を呼ぶだけ)。
+  private regenerateNutrients(): void {
+    const day = Math.floor(this.state.tick / TICKS_PER_DAY);
+    for (const f of this.foodPoints) {
+      const moisture = this.env.sampleGrowthContext(f.pos).moisture;
+      const amount = computeRegenAmount(day, f.amount, moisture) * this.stage.foodAmountMultiplier;
+      if (amount <= 0) continue;
+      this.env.placeFood(f.pos, f.radius * REGEN_RADIUS_FRACTION, amount);
+    }
   }
 
   // 「時代」(胞子期 → 拡散期 → 変形体期 → 成熟期) が切り替わった節目を進化の記録に残す。

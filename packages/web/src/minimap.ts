@@ -11,6 +11,7 @@ import type { ColonyMarker } from './colony-networks.js';
 import type { WorldView } from './camera.js';
 import type { GridEnvironment } from '@morpho/sim';
 import type { StageId } from './stages.js';
+import { extractCoastline } from './coastline.js';
 
 // 同一ネットワークに統合されたコロニーは同じ色になる。
 const NETWORK_COLORS = ['#8fd0ff', '#ffd27a', '#9dffa0', '#ff9dc7', '#c9a2ff', '#ffffff'];
@@ -58,18 +59,31 @@ export class Minimap {
     tctx.fillRect(0, 0, w, h);
 
     const obData = env.obstacle.data;
-    const waterData = env.water.data;
     tctx.fillStyle = MINIMAP_ROCK;
     for (let i = 0; i < obData.length; i++) {
       if ((obData[i] ?? 0) <= 0.5) continue;
       const x = i % fieldSize, y = Math.floor(i / fieldSize);
       tctx.fillRect(x * cellW, y * cellH, cellW + 0.5, cellH + 0.5);
     }
-    tctx.fillStyle = MINIMAP_WATER;
-    for (let i = 0; i < waterData.length; i++) {
-      if ((waterData[i] ?? 0) <= 0.5) continue;
-      const x = i % fieldSize, y = Math.floor(i / fieldSize);
-      tctx.fillRect(x * cellW, y * cellH, cellW + 0.5, cellH + 0.5);
+
+    // M22: 水域も render.ts と同じ湖岸線データ (marching squares) から描き、
+    // 「丸ベタ」をやめて輪郭のある水域にする。
+    const { loops } = extractCoastline(env.water.data, fieldSize, this.worldSize);
+    if (loops.length > 0) {
+      const sx = w / this.worldSize, sy = h / this.worldSize;
+      tctx.fillStyle = MINIMAP_WATER;
+      for (const loop of loops) {
+        if (loop.length < 3) continue;
+        tctx.beginPath();
+        const p0 = loop[0]!;
+        tctx.moveTo(p0.x * sx, p0.y * sy);
+        for (let i = 1; i < loop.length; i++) {
+          const p = loop[i]!;
+          tctx.lineTo(p.x * sx, p.y * sy);
+        }
+        tctx.closePath();
+        tctx.fill();
+      }
     }
   }
 

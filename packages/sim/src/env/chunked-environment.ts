@@ -1,0 +1,229 @@
+// M25: チャンク化された Environment 実装。
+//
+// 既存の `GridEnvironment` (environment.ts) は一切変更しない。growth.ts /
+// step.ts は `Environment` インターフェース (`sampleGrowthContext` +
+// `worldSize`) だけに依存しているため、このクラスを新しい `Environment`
+// 実装として追加するだけで、既存コードに触れずに「半無限ワールド」を
+// 成立させられる (ROADMAP.md M25 の方針)。
+//
+// 地形はチャンク単位で決定的に遅延生成する。`worldSize` は実質的な
+// 上限として非常に大きな値を渡す想定 (growth.ts の worldMargin 境界判定に
+// 実用上ひっかからないようにする — 「本当に無限」ではなく「十分大きい」)。
+
+import type { Vec2 } from '../types.js';
+import type { Environment, GrowthContext } from './environment.js';
+import { ChunkedFieldGrid, type ChunkGenerator } from '../field/chunk-grid.js';
+import { createRNG } from '../rng.js';
+
+export interface ChunkedGridEnvironmentInit {
+  /** 実質的に「無限」とみなせる大きさ (growth.ts の worldMargin 判定用)。 */
+  worldSize: number;
+  /** 1チャンクの一辺のセル数。 */
+  chunkCells?: number;
+  /** 1セルが表すワールド単位。 */
+  cellWorldSize?: number;
+  worldSeed: number;
+  baseMoisture?: number;
+  baseBrightness?: number;
+  baseTemperature?: number;
+  /** チャンクの地形 (nutrients/moisture/brightness/obstacle) を決定的に
+   * 生成する。省略時は「何もない (obstacle=0, 各フィールドは base 値)」
+   * チャンクになる。 */
+  generateTerrain?: (coord: { cx: number; cy: number }, rng: ReturnType<typeof createRNG>, worldSeed: number) => {
+    obstaclePatches?: { x: number; y: number; radius: number }[];
+    foodPatches?: { x: number; y: number; radius: number; amount: number }[];
+  };
+}
+
+// 中心差分で勾配を取る (grid.ts の gradientField と同じ考え方)。
+const GRADIENT_STEP_CELLS = 1.0;
+
+export class ChunkedGridEnvironment implements Environment {
+  worldSize: number;
+  readonly chunkCells: number;
+  readonly cellWorldSize: number;
+  readonly worldSeed: number;
+  baseMoisture: number;
+  baseBrightness: number;
+  baseTemperature: number;
+
+  nutrients: ChunkedFieldGrid;
+  moisture: ChunkedFieldGrid;
+  brightness: ChunkedFieldGrid;
+  obstacle: ChunkedFieldGrid;
+  temperature: ChunkedFieldGrid;
+  toxin: ChunkedFieldGrid;
+  water: ChunkedFieldGrid;
+
+  constructor(init: ChunkedGridEnvironmentInit) {
+    this.worldSize = init.worldSize;
+    this.chunkCells = init.chunkCells ?? 64;
+    this.cellWorldSize = init.cellWorldSize ?? 1;
+    this.worldSeed = init.worldSeed;
+    this.baseMoisture = init.baseMoisture ?? 0.3;
+    this.baseBrightness = init.baseBrightness ?? 0.2;
+    this.baseTemperature = init.baseTemperature ?? 0.5;
+
+    const fill = (value: number): ChunkGenerator => (_coord, data) => data.fill(value);
+
+    this.obstacle = new ChunkedFieldGrid({ chunkCells: this.chunkCells, cellWorldSize: this.cellWorldSize });
+    this.nutrients = new ChunkedFieldGrid({ chunkCells: this.chunkCells, cellWorldSize: this.cellWorldSize });
+    this.water = new ChunkedFieldGrid({ chunkCells: this.chunkCells, cellWorldSize: this.cellWorldSize });
+    this.moisture = new ChunkedFieldGrid({
+      chunkCells: this.chunkCells, cellWorldSize: this.cellWorldSize, generate: fill(this.baseMoisture),
+    });
+    this.brightness = new ChunkedFieldGrid({
+      chunkCells: this.chunkCells, cellWorldSize: this.cellWorldSize, generate: fill(this.baseBrightness),
+    });
+    this.temperature = new ChunkedFieldGrid({
+      chunkCells: this.chunkCells, cellWorldSize: this.cellWorldSize, generate: fill(this.baseTemperature),
+    });
+    this.toxin = new ChunkedFieldGrid({ chunkCells: this.chunkCells, cellWorldSize: this.cellWorldSize });
+
+    if (init.generateTerrain) {
+      const genTerrain = init.generateTerrain;
+      const worldSeed = this.worldSeed;
+      // obstacle/nutrients の生成はチャンク単位で決定的な RNG を1つ引き、
+      // 障害物と食料の両方をそこから配置する (同じチャンクなら常に同じ
+      // 内容になる = 決定的)。
+      this.obstacle = new ChunkedFieldGrid({
+        chunkCells: this.chunkCells,
+        cellWorldSize: this.cellWorldSize,
+        generate: (coord, data, cells) => {
+          const rng = createRNG(`${worldSeed}:${coord.cx}:${coord.cy}`);
+          const result = genTerrain(coord, rng, worldSeed);
+          for (const p of result.obstaclePatches ?? []) {
+            stampObstacleLocal(data, cells, p.x, p.y, p.radius, this.cellWorldSize);
+          }
+        },
+      });
+      this.nutrients = new ChunkedFieldGrid({
+        chunkCells: this.chunkCells,
+        cellWorldSize: this.cellWorldSize,
+        generate: (coord, data, cells) => {
+          // 障害物と同じ RNG 系列を再現するため、同じ seed から引き直す
+          // (obstacle 生成呼び出しの副作用と完全に独立させるため)。
+          const rng = createRNG(`${worldSeed}:${coord.cx}:${coord.cy}`);
+          const result = genTerrain(coord, rng, worldSeed);
+          for (const p of result.foodPatches ?? []) {
+            stampGaussianLocal(data, cells, p.x, p.y, p.radius, p.amount, this.cellWorldSize);
+          }
+        },
+      });
+    }
+  }
+
+  private gradientOf(field: ChunkedFieldGrid, pos: Vec2): Vec2 {
+    const h = GRADIENT_STEP_CELLS * this.cellWorldSize;
+    return {
+      x: (field.sample(pos.x + h, pos.y) - field.sample(pos.x - h, pos.y)) / (2 * h),
+      y: (field.sample(pos.x, pos.y + h) - field.sample(pos.x, pos.y - h)) / (2 * h),
+    };
+  }
+
+  sampleGrowthContext(pos: Vec2): GrowthContext {
+    const nutrients = this.nutrients.sample(pos.x, pos.y);
+    const moisture = this.moisture.sample(pos.x, pos.y);
+    const brightness = this.brightness.sample(pos.x, pos.y);
+    const obstacle = this.obstacle.sample(pos.x, pos.y);
+    const temperature = this.temperature.sample(pos.x, pos.y);
+    const toxin = this.toxin.sample(pos.x, pos.y);
+    const grad = this.gradientOf(this.nutrients, pos);
+    const m = Math.hypot(grad.x, grad.y);
+    const preferredDirection = m > 1e-6 ? { x: grad.x / m, y: grad.y / m } : { x: 0, y: 0 };
+    return { nutrients, moisture, brightness, obstacle, temperature, toxin, preferredDirection };
+  }
+
+  // GridEnvironment と同名の place* メソッド (プレイヤーツール/ステージ生成用)。
+  placeFood(pos: Vec2, radius = 6, amount = 1.0): void {
+    this.nutrients.stampGaussian(pos.x, pos.y, radius, amount);
+  }
+  placeLight(pos: Vec2, radius = 8, amount = 0.6): void {
+    this.brightness.stampGaussian(pos.x, pos.y, radius, amount);
+  }
+  placeWater(pos: Vec2, radius = 8, amount = 0.5): void {
+    this.moisture.stampGaussian(pos.x, pos.y, radius, amount);
+  }
+  placeDrain(pos: Vec2, radius = 8, amount = 0.4): void {
+    this.moisture.stampGaussian(pos.x, pos.y, radius, -amount);
+  }
+  placeStone(pos: Vec2, radius = 3): void {
+    this.obstacle.stampObstacle(pos.x, pos.y, radius);
+  }
+  placeHeat(pos: Vec2, radius = 8, delta = 0.3): void {
+    this.temperature.stampGaussian(pos.x, pos.y, radius, delta);
+  }
+  placeToxin(pos: Vec2, radius = 6, amount = 0.5): void {
+    this.toxin.stampGaussian(pos.x, pos.y, radius, amount);
+  }
+  placeWaterBody(pos: Vec2, radius = 6): void {
+    this.water.stampObstacle(pos.x, pos.y, radius);
+    this.obstacle.stampObstacle(pos.x, pos.y, radius);
+    this.moisture.stampGaussian(pos.x, pos.y, radius * 1.8, 0.3);
+  }
+
+  /** 生成済みチャンク数 (触れたことのある範囲の目安、描画/デバッグ用)。 */
+  generatedChunkCount(): number {
+    return this.obstacle.chunkCount();
+  }
+
+  // 自然減衰。GridEnvironment.decay() と同じ式だが、これまでに生成された
+  // チャンクだけを対象にする (未探索領域は生成すらされていないので対象外)。
+  decay(nutrientRate: number, moistureRelaxRate: number, tempRelaxRate = 0, toxinDecayRate = 0): void {
+    decayChunks(this.nutrients, (v) => Math.max(0, v * (1 - nutrientRate)));
+    decayChunks(this.moisture, (v) => v + (this.baseMoisture - v) * moistureRelaxRate);
+    if (tempRelaxRate > 0) {
+      decayChunks(this.temperature, (v) => v + (this.baseTemperature - v) * tempRelaxRate);
+    }
+    if (toxinDecayRate > 0) {
+      decayChunks(this.toxin, (v) => Math.max(0, v * (1 - toxinDecayRate)));
+    }
+  }
+}
+
+function decayChunks(field: ChunkedFieldGrid, fn: (v: number) => number): void {
+  for (const { cx, cy } of field.generatedChunks()) {
+    const data = field.ensureChunk(cx, cy);
+    for (let i = 0; i < data.length; i++) data[i] = fn(data[i] ?? 0);
+  }
+}
+
+// チャンク生成コールバック内でのみ使う、チャンクローカル座標系への
+// stampGaussian/stampObstacle (grid.ts の実装と同じ数式)。`localWorldX/Y`
+// はチャンク原点 (0,0) からのワールド単位オフセット (0..chunkCells*
+// cellWorldSize の範囲を想定)。呼び出し元が「このチャンクの外にはみ出す
+// 分」を切り捨てる (隣接チャンクへの越境は ChunkedFieldGrid.stampGaussian/
+// stampObstacle 側 (実行時の place* 経由) が担当し、生成時点ではチャンク内
+// で完結させる)。
+function stampGaussianLocal(data: Float32Array, cells: number, localWorldX: number, localWorldY: number, radiusWorld: number, amount: number, cellWorldSize: number): void {
+  const rCell = radiusWorld / cellWorldSize;
+  const ccx = localWorldX / cellWorldSize, ccy = localWorldY / cellWorldSize;
+  const r2 = rCell * rCell;
+  const x0 = Math.max(0, Math.floor(ccx - rCell * 2));
+  const x1 = Math.min(cells - 1, Math.ceil(ccx + rCell * 2));
+  const y0 = Math.max(0, Math.floor(ccy - rCell * 2));
+  const y1 = Math.min(cells - 1, Math.ceil(ccy + rCell * 2));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - ccx, dy = y - ccy;
+      const w = Math.exp(-(dx * dx + dy * dy) / (2 * r2));
+      const idx = y * cells + x;
+      data[idx] = (data[idx] ?? 0) + amount * w;
+    }
+  }
+}
+
+function stampObstacleLocal(data: Float32Array, cells: number, localWorldX: number, localWorldY: number, radiusWorld: number, cellWorldSize: number): void {
+  const rCell = radiusWorld / cellWorldSize;
+  const ccx = localWorldX / cellWorldSize, ccy = localWorldY / cellWorldSize;
+  const x0 = Math.max(0, Math.floor(ccx - rCell));
+  const x1 = Math.min(cells - 1, Math.ceil(ccx + rCell));
+  const y0 = Math.max(0, Math.floor(ccy - rCell));
+  const y1 = Math.min(cells - 1, Math.ceil(ccy + rCell));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - ccx, dy = y - ccy;
+      if (dx * dx + dy * dy <= rCell * rCell) data[y * cells + x] = 1.0;
+    }
+  }
+}

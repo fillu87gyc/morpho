@@ -19,17 +19,34 @@ import type {
   BiomassField,
   Vec2,
   NodeId,
+  EdgeId,
   SimNode,
   SimEdge,
 } from '@morpho/sim';
 import type { WorldView } from './camera.js';
 import type { StageId } from './stages.js';
 import { MultiLayerDirtyTracker } from './field-diff.js';
+import { assets, SPRITE_FAMILIES, type TileTextureName } from './assets.js';
+import { extractTerrainBlobs, SMALL_BLOB_MAX_CELLS } from './terrain-blobs.js';
+import { extractCoastline } from './coastline.js';
+import { traceChains, smoothChain, computeDegree, type Chain } from './vein-curves.js';
+import { scatterDecorations, type DecorPlacement } from './ecology-scatter.js';
 
 export interface RenderOptions {
   worldSize: number;
   fieldSize: number;
   showHeat: boolean;
+}
+
+// M23: Catmull-Rom で滑らかにしたチェーンを、描画時にバケツ分けして
+// 保持するための部分線分。ワールド座標のまま持つ (画面座標変換は描画時)。
+interface SmoothedSegment {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  radius: number;
+  edgeId: EdgeId;
 }
 
 // paintFieldLayer が焼くレイヤ数: biomass / nutrients / moisture / brightness /
@@ -109,6 +126,56 @@ const WATER_BODY_DEEP:   [number, number, number] = [30, 70, 120];
 const WATER_BODY_SHALLOW: [number, number, number] = [70, 130, 175];
 const WATER_EDGE_COLOR:  [number, number, number] = [150, 205, 220]; // 縁の明るいライン
 
+// M21: ステージごとの地面タイルテクスチャ (アセット未ロード時は使われず、
+// 従来の STAGE_BG 単色+粒ノイズにフォールバックする)。湿地/大陸は苔の
+// テクスチャを流用する (専用タイルは発注ブリーフに無いため)。
+const TILE_TEXTURE_BY_STAGE: Record<StageId, TileTextureName> = {
+  petri: 'moss-ground',
+  cave: 'cave-floor',
+  desert: 'sand-dry',
+  ruins: 'stone-ruins',
+  wetland: 'moss-ground',
+  continent: 'moss-ground',
+};
+// タイル画像1枚がワールド座標で何単位分を表すか。値が大きいほど1枚が
+// 大きく引き伸ばされて見える (荒くなる) が継ぎ目は目立ちにくくなる。
+const TILE_WORLD_SIZE = 9;
+
+// M21: 木漏れ日のまだら。以前は「中央がやや明るいラジアルグラデーション
+// 1枚」だった光の表現を、ワールド座標に固定されたまばらな明るい斑点へ
+// 置き換える (ズームしても斑点の実寸が保たれ、フラットな印象にならない)。
+const DAPPLE_CELL_WORLD = 7;
+const DAPPLE_THRESHOLD = 0.62;
+const DAPPLE_MAX_ALPHA = 0.34;
+
+// M21: 岩スプライトの見かけの大きさ (obstacle 連結成分の概算半径に対する倍率)。
+const ROCK_SPRITE_SCALE = 2.4;
+
+// M23: 大規模ネットワーク時の性能ガード (GLOW_MAX_EDGES と同じ考え方)。
+// ハブ/成長前線の演出はノード数に比例するコストなので上限を設ける。
+const HUB_STAR_MAX = 150;
+const GROWTH_FRONT_MAX = 150;
+const FAN_HALF_ANGLE = Math.PI / 5;
+// ハブ/成長前線は「追加の演出」なので、曲線描画本体 (GLOW_MAX_EDGES) より
+// 保守的な閾値で早めに省略する (save/rotate/drawImage のコストが
+// 大規模ネットワークで積み上がりやすいため)。
+const NETWORK_DECOR_MAX_EDGES = 500;
+// チェーン分解 + Catmull-Rom の再計算を、急成長中でも1秒間に何度も
+// 走らせないための最小間隔。
+const TOPOLOGY_REBUILD_MIN_INTERVAL_MS = 250;
+
+// M22: 水面テクスチャの1タイルが表すワールド単位。
+const WATER_TILE_WORLD_SIZE = 11;
+// 水面パターンのゆっくりとした平行移動 (ワールド単位/ミリ秒)。
+// prefers-reduced-motion のときは 0 にしてアニメを止める。
+const WATER_DRIFT_SPEED = 0.0006;
+// 岸辺の帯の太さ (ワールド単位)。内側=浅瀬 (明るい水色)、外側=湿った砂。
+const SHORE_BAND_WORLD = 1.6;
+const SHORE_SHALLOW_COLOR = 'rgba(190, 225, 232, 0.5)';
+const SHORE_WET_SAND_COLOR = 'rgba(150, 130, 95, 0.55)';
+// 岸線に沿って葦を置く間隔 (ワールド単位)。
+const REED_SPACING_WORLD = 6;
+
 // M16.5: 地形テクスチャ (苔の粒ノイズ・岩のまだら・水面の揺らぎ) 用の
 // 軽量な決定的疑似乱数。整数座標だけから求まるので追加のフィールドデータも
 // state も要らず、Math.sin 等より安い整数演算のみ (毎ピクセル呼ばれるため
@@ -148,6 +215,23 @@ export class CanvasRenderer {
   private prevMaxBio = -1;
   private prevShowHeat: boolean | null = null;
   private prevStageId: StageId | null = null;
+  private prevSpritesReady = false;
+  private prevWaterReady = false;
+  private prevFoodReady = false;
+
+  // M21: タイルテクスチャの CanvasPattern はテクスチャ名ごとに1度だけ作る
+  // (createPattern をフレームごとに呼ばない)。setTransform で毎フレーム
+  // カメラ位置/ズームに追従させる。
+  private patternCache = new Map<TileTextureName, CanvasPattern>();
+  // M22: 水面パターンのゆっくりとした揺らぎ用の起点時刻。
+  private readonly startTime = typeof performance !== 'undefined' ? performance.now() : 0;
+  private readonly reducedMotion =
+    typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // M24: 小物の散布はステージの地形 (moisture/obstacle/water) だけに依存する
+  // 決定的な結果なので、ステージが変わらない限り使い回す。
+  private cachedDecorStageId: StageId | null = null;
+  private cachedDecorations: DecorPlacement[] | null = null;
 
   // M8 P3 drawEdges: nodeMap とバケツ分けは state (nodes/edges の参照) が
   // 変わらない限り使い回す。RAF は Worker のスナップショット送信より
@@ -155,12 +239,34 @@ export class CanvasRenderer {
   // 同じ state を複数フレームで描くケースは珍しくない。
   private cachedState: SimState | null = null;
   private cachedNodeMap: Map<NodeId, SimNode> | null = null;
-  private cachedRadiusBuckets: SimEdge[][] | null = null;
+  // M23: 「等幅の折れ線ループ」をやめ、チェーン (分岐点間の単純path) ごとに
+  // Catmull-Rom で滑らかにした部分線分をバケツ分けして持つ。ワールド座標の
+  // まま保持し、画面座標への変換 (offX/offY/scale) は描画時に行う
+  // (カメラの移動/ズームは state と無関係に毎フレーム変わりうるため)。
+  private cachedSegmentBuckets: SmoothedSegment[][] | null = null;
+  private cachedDegree: Map<NodeId, number> | null = null;
+  private cachedAdjacency: Map<NodeId, { edgeId: EdgeId; other: NodeId }[]> | null = null;
+  private cachedGrowthTips: { pos: Vec2; dir: Vec2 }[] | null = null;
+  private cachedEdgeMap: Map<EdgeId, SimEdge> | null = null;
+  // M23: ノード位置は生成時に固定される (sim 側で pos は書き換わらない) ため、
+  // トポロジ (ノード数:エッジ数) が変わらない限りチェーン分解/Catmull-Rom の
+  // 幾何計算 (位置) を使い回せる。太さ/色調は radius/flux に依存するので
+  // 毎スナップショット作り直すが、そちらは map 参照だけの軽い処理で済む。
+  private cachedTopologyKey: string | null = null;
+  private cachedGeomPoints: { pos: Vec2; sourceEdgeId: EdgeId }[][] | null = null;
+  // チェーン分解 + Catmull-Rom の再計算 (このファイルで最も重い処理) を、
+  // 急成長中 (ほぼ毎スナップショットでノード/エッジ数が変わる) でも
+  // 連続で走らせないための間引き。多少の反映遅れ (最大 topologyRebuildMinIntervalMs)
+  // は見た目に影響しない。
+  private lastTopologyRebuildMs = -Infinity;
 
   // M8 P3 drawNodes: グロー (radial gradient) をノードごとに毎フレーム
   // 生成する代わりに、色ごとに1枚だけ焼いたスプライトを drawImage で貼る。
   private sourceGlowSprite: HTMLCanvasElement;
   private sinkGlowSprite: HTMLCanvasElement;
+  // M23: 成長前線の扇スプライト (+x 方向に開く)。回転させて drawImage するだけで
+  // 済ませ、createRadialGradient をチップ毎・毎フレーム生成しない。
+  private growthFanSprite: HTMLCanvasElement;
 
   constructor(private canvas: HTMLCanvasElement, private opts: RenderOptions) {
     const ctx = canvas.getContext('2d');
@@ -180,6 +286,12 @@ export class CanvasRenderer {
 
     this.sourceGlowSprite = buildGlowSprite(SOURCE_DOT);
     this.sinkGlowSprite = buildGlowSprite(SINK_DOT);
+    this.growthFanSprite = buildFanGlowSprite(TUBE_GLOW, FAN_HALF_ANGLE);
+
+    // M20/M21: テクスチャ/スプライトの先読みを開始する (失敗しても reject
+    // しない設計なので fire-and-forget で問題ない)。未ロードの間は各
+    // 描画メソッドが従来の手続き描画へフォールバックする。
+    void assets.preloadAll();
   }
 
   resize(): void {
@@ -213,10 +325,20 @@ export class CanvasRenderer {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, cssW, cssH);
 
+    const scale = side / view.worldSpan;
+    const offX = left - view.worldLeft * scale;
+    const offY = top - view.worldTop * scale;
+
+    // 1.5 M21: 地面タイルテクスチャ (アセット未ロードなら何もせず上の
+    //     単色グラデーションがそのまま地面として見える = フォールバック)。
+    this.drawTerrainTexture(ctx, stageId, scale, offX, offY, left, top, side);
+    // 1.6 M21: 木漏れ日のまだら (ワールド座標に固定した明るい斑点)。
+    this.drawDappledLight(ctx, view, scale, offX, offY);
+
     // 2. 場系を焼いて貼る。view (カメラのズーム/パン) に応じて
     //    fieldCanvas (常に世界全体を焼いた1枚) から必要な矩形だけを
     //    切り出して拡大する。zoom=1 のときは全体をそのまま貼るのと同じ。
-    this.paintFieldLayer(env, bio, stageId);
+    const { spritesReady, waterReady, foodReady } = this.paintFieldLayer(env, bio, stageId);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     const fieldScale = this.opts.fieldSize / this.opts.worldSize;
@@ -227,10 +349,32 @@ export class CanvasRenderer {
       left, top, side, side,
     );
 
+    // 2.4 M22: 水場の再設計 (「水色の丸」の代わりに湖岸線のある水域)。
+    //     アセット未ロードの間は paintFieldLayer が従来通りの水色を
+    //     焼くので、ここでは何も描かない。
+    if (waterReady) {
+      this.drawWaterBodies(ctx, env, stageId, scale, offX, offY);
+    }
+
+    // 2.5 M21: 岩場のスプライト化 (ぼかし塊の代わりに rock-cluster/
+    //     small-stone を配置)。アセット未ロードの間は paintFieldLayer が
+    //     従来通りの岩色を焼くので、ここでは何も描かない。
+    if (spritesReady) {
+      this.drawRockSprites(ctx, env, scale, offX, offY);
+    }
+
+    // 2.6 M24: 生態感の小物 (キノコ/苔の茂み/朽木) をステージ地形から
+    //     決定的に散らす。アセット未ロードならスキップ (何も描かない=現状維持)。
+    if (spritesReady) {
+      this.drawEcologyDecor(ctx, env, stageId, scale, offX, offY);
+    }
+
+    // 2.7 M24: エサのオーブ化 (緑のぼかし光→光る果実)。
+    if (foodReady) {
+      this.drawFoodOrbs(ctx, env, scale, offX, offY);
+    }
+
     // 3. ステージの装飾アイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
-    const scale = side / view.worldSpan;
-    const offX = left - view.worldLeft * scale;
-    const offY = top - view.worldTop * scale;
     this.drawLandmarks(ctx, landmarks, stageId, scale, offX, offY);
 
     // 4. 脈管網
@@ -276,12 +420,16 @@ export class CanvasRenderer {
     thumb.height = size;
     const tctx = thumb.getContext('2d');
     if (!tctx) return Promise.resolve('');
-    this.paintFieldLayer(env, bio, stageId);
+    const { spritesReady, waterReady, foodReady } = this.paintFieldLayer(env, bio, stageId);
     tctx.fillStyle = rgb(STAGE_BG[stageId].inner);
     tctx.fillRect(0, 0, size, size);
     tctx.imageSmoothingEnabled = true;
     tctx.drawImage(this.fieldCanvas, 0, 0, size, size);
     const scale = size / this.opts.worldSize;
+    if (waterReady) this.drawWaterBodies(tctx, env, stageId, scale, 0, 0);
+    if (spritesReady) this.drawRockSprites(tctx, env, scale, 0, 0);
+    if (spritesReady) this.drawEcologyDecor(tctx, env, stageId, scale, 0, 0);
+    if (foodReady) this.drawFoodOrbs(tctx, env, scale, 0, 0);
     this.drawLandmarks(tctx, landmarks, stageId, scale, 0, 0);
     this.drawEdges(tctx, state, scale, 0, 0);
     this.drawNodes(tctx, state, scale, 0, 0);
@@ -290,7 +438,9 @@ export class CanvasRenderer {
     });
   }
 
-  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): void {
+  // 戻り値: 岩スプライト/湖岸線用アセットがロード済みか (呼び出し側が
+  // drawRockSprites / drawWaterBodies を呼ぶかどうかの判断に使う)。
+  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): { spritesReady: boolean; waterReady: boolean; foodReady: boolean } {
     const data = this.fieldImage.data;
     const bioData = bio.field.data;
     const nutData = env.nutrients.data;
@@ -317,7 +467,21 @@ export class CanvasRenderer {
       || Math.abs(maxBio - this.prevMaxBio) / Math.max(this.prevMaxBio, 1e-6) > 0.02;
     const heatChanged = this.prevShowHeat !== this.opts.showHeat;
     const stageChanged = this.prevStageId !== null && this.prevStageId !== stageId;
-    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged;
+    // M21: 岩スプライト用アセットが (ロード完了して) 使えるようになった/
+    // 使えなくなった瞬間は、既に焼いた岩色の生ピクセルを消すために
+    // 全面再計算する (以後は spritesReady のまま変わらないので通常は
+    // このチェックのコストはほぼゼロ)。
+    const spritesReady = assets.getSprite('rock-cluster', 1) !== null;
+    const spritesReadyChanged = this.prevSpritesReady !== spritesReady;
+    // M22: 湖岸線描画が使えるようになった/使えなくなった瞬間も同様に
+    // 全面再計算する。
+    const waterReady = assets.getTexture('water-surface') !== null;
+    const waterReadyChanged = this.prevWaterReady !== waterReady;
+    // M24: エサのオーブ化が使えるようになった/使えなくなった瞬間も同様に
+    // 全面再計算する。
+    const foodReady = assets.getSpriteSingle('food-orb-orange') !== null;
+    const foodReadyChanged = this.prevFoodReady !== foodReady;
+    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged || spritesReadyChanged || waterReadyChanged || foodReadyChanged;
     const rockColor = STAGE_ROCK_COLOR[stageId];
     const bgInner = STAGE_BG[stageId].inner;
     // GRAIN_ALPHA を先に掛けておき、ホットループ内では乗算1回で済ませる。
@@ -377,8 +541,9 @@ export class CanvasRenderer {
           a = Math.max(a, fa);
         }
 
-        // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)
-        if (nut > 0.05) {
+        // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)。
+        // M24: エサのオーブ化が使えるときは drawFoodOrbs に描画を譲る。
+        if (nut > 0.05 && !foodReady) {
           const k = Math.min(1, nut * 0.6);
           const fa = 0.18 + k * 0.32;
           [r, g, b] = blend(r, g, b, FOOD_GLOW[0], FOOD_GLOW[1], FOOD_GLOW[2], fa);
@@ -413,7 +578,11 @@ export class CanvasRenderer {
         // 障害物 — ステージごとの石材色 (洞窟は青灰、砂漠は赤茶、都市跡は風化ベージュ)。
         // M16.5: 単色のぼかし塊だと質感が無いため、まだら (陰影) ノイズを
         // 明度に乗せて「陰影とエッジのある岩」に近づける。
-        if (ob > 0.5) {
+        // M21: 岩スプライトが使えるときは、ここでの塗りつぶしをやめて
+        // drawRockSprites (スクリーン解像度) に描画を譲る。ぼかし塊の
+        // 上にスプライトを重ねると輪郭からはみ出た旧ぼかしが透けて
+        // 見えてしまうため。
+        if (ob > 0.5 && !spritesReady) {
           const shade = 0.72 + hashNoise(x + 5000, y + 5000) * 0.55;
           [r, g, b] = blend(
             r, g, b,
@@ -427,7 +596,9 @@ export class CanvasRenderer {
         // 水と分かるよう青で上書きする (通行不能な地形という点は obstacle と共通)。
         // M16.5: 深みのグラデーション (揺らぎノイズで深浅を表現) + 縁の明るい
         // ライン (境界付近の値だけ明るい水色にする) を足す。
-        if (wb > 0.5) {
+        // M22: 湖岸線描画 (drawWaterBodies) が使えるときは、ここでの
+        // 「水色の丸」塗りつぶしをやめて岸線ベースの描画に譲る。
+        if (wb > 0.5 && !waterReady) {
           const depth = Math.min(1, (wb - 0.5) * 2.2); // 境界付近ほど浅い (0) 、内側ほど深い (1)
           const ripple = hashNoise(x - 3000, y - 3000) * 0.3;
           const t = Math.min(1, depth + ripple * 0.3);
@@ -498,26 +669,354 @@ export class CanvasRenderer {
     this.prevMaxBio = maxBio;
     this.prevShowHeat = this.opts.showHeat;
     this.prevStageId = stageId;
+    this.prevSpritesReady = spritesReady;
+    this.prevWaterReady = waterReady;
+    this.prevFoodReady = foodReady;
+    return { spritesReady, waterReady, foodReady };
   }
 
-  // state (nodes/edges の参照) が前回と同じなら nodeMap / radius バケツを
+  // M21: ステージごとの地面タイルテクスチャをスクリーン解像度のまま
+  // createPattern で敷き込む。96×96 の fieldCanvas とは独立にズーム/パンの
+  // カメラ変換だけをパターンの変換行列に反映するので、ズームしてもテクスチャ
+  // の実解像度が保たれる (G3 の解消条件)。アセット未ロードなら何もせず、
+  // 呼び出し側で既に描いた STAGE_BG のグラデーションがそのまま地面になる。
+  private drawTerrainTexture(ctx: CanvasRenderingContext2D, stageId: StageId, scale: number, offX: number, offY: number, left: number, top: number, side: number): void {
+    const name = TILE_TEXTURE_BY_STAGE[stageId];
+    const img = assets.getTexture(name);
+    if (!img || img.naturalWidth === 0) return;
+
+    let pattern = this.patternCache.get(name);
+    if (!pattern) {
+      const created = ctx.createPattern(img, 'repeat');
+      if (!created) return;
+      pattern = created;
+      this.patternCache.set(name, pattern);
+    }
+    const tilePx = TILE_WORLD_SIZE * scale;
+    const s = tilePx / img.naturalWidth;
+    if (typeof DOMMatrix !== 'undefined' && pattern.setTransform) {
+      pattern.setTransform(new DOMMatrix().translate(offX, offY).scale(s, s));
+    }
+    ctx.save();
+    ctx.fillStyle = pattern;
+    ctx.fillRect(left, top, side, side);
+    ctx.restore();
+  }
+
+  // M21: 「中央がやや明るいラジアルグラデーション1枚」だった光をやめ、
+  // ワールド座標に固定したまばらな明るい斑点 (木漏れ日) を敷く。カメラの
+  // 表示範囲だけを走査するので、ズーム/パンしても斑点の実寸 (=世界座標の
+  // 大きさ) は変わらない。
+  private drawDappledLight(ctx: CanvasRenderingContext2D, view: WorldView, scale: number, offX: number, offY: number): void {
+    const cell = DAPPLE_CELL_WORLD;
+    const x0 = Math.floor(view.worldLeft / cell) - 1;
+    const x1 = Math.ceil((view.worldLeft + view.worldSpan) / cell) + 1;
+    const y0 = Math.floor(view.worldTop / cell) - 1;
+    const y1 = Math.ceil((view.worldTop + view.worldSpan) / cell) + 1;
+    const cellPx = cell * scale;
+    ctx.save();
+    for (let gy = y0; gy <= y1; gy++) {
+      for (let gx = x0; gx <= x1; gx++) {
+        const n = hashNoise(gx, gy);
+        if (n < DAPPLE_THRESHOLD) continue;
+        const alpha = (n - DAPPLE_THRESHOLD) * (DAPPLE_MAX_ALPHA / (1 - DAPPLE_THRESHOLD));
+        ctx.fillStyle = `rgba(255, 240, 200, ${alpha.toFixed(3)})`;
+        ctx.fillRect(offX + gx * cellPx, offY + gy * cellPx, cellPx + 1, cellPx + 1);
+      }
+    }
+    ctx.restore();
+  }
+
+  // M21: 障害物フィールドの連結成分ごとに rock-cluster / small-stone
+  // スプライトを配置する。接地影 (AO) と輪郭の淡い明暗エッジで「陰影と
+  // エッジのある岩」を表現する (旧: 96×96 のぼかし色塊)。
+  private drawRockSprites(ctx: CanvasRenderingContext2D, env: GridEnvironment, scale: number, offX: number, offY: number): void {
+    // M14 の placeWaterBody は water と obstacle に同じ形を重ね書きするため、
+    // 生の obstacle をそのまま使うと湖の上にも岩スプライトが乗って水域を
+    // 隠してしまう。水域 (M22 の drawWaterBodies が別途担当) の分は除外する。
+    const obData = env.obstacle.data;
+    const waterData = env.water.data;
+    const rockOnly = new Float32Array(obData.length);
+    for (let i = 0; i < obData.length; i++) {
+      const ob = obData[i] ?? 0;
+      rockOnly[i] = ob > 0.5 && (waterData[i] ?? 0) <= 0.5 ? ob : 0;
+    }
+    const blobs = extractTerrainBlobs(rockOnly, this.opts.fieldSize, this.opts.worldSize);
+    for (const blob of blobs) {
+      const family = blob.cellCount <= SMALL_BLOB_MAX_CELLS ? 'small-stone' : 'rock-cluster';
+      const count = SPRITE_FAMILIES[family] ?? 1;
+      const idx = 1 + Math.min(count - 1, Math.floor(hashNoise(Math.round(blob.cx * 13), Math.round(blob.cy * 13)) * count));
+      const sprite = assets.getSprite(family, idx);
+      if (!sprite) continue;
+
+      const cx = offX + blob.cx * scale;
+      const cy = offY + blob.cy * scale;
+      const sizePx = blob.radiusWorld * ROCK_SPRITE_SCALE * scale;
+      const rot = hashNoise(Math.round(blob.cx * 7), Math.round(blob.cy * 7)) * Math.PI * 2;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + sizePx * 0.26, sizePx * 0.46, sizePx * 0.17, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 245, 220, 0.22)';
+      ctx.lineWidth = Math.max(0.6, sizePx * 0.02);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, sizePx * 0.42, sizePx * 0.4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      drawRoundSprite(ctx, sprite, cx, cy, sizePx, rot);
+    }
+  }
+
+  // M24: キノコ/苔の茂み/朽木をステージ地形から決定的に散らす。粘菌が届いて
+  // 栄養を食べ尽くした場所のキノコは、その場所の現在の nutrients 値に
+  // 応じて次第に透明になり消える (nutrients 消費と連動、sim 側は無改修)。
+  private drawEcologyDecor(ctx: CanvasRenderingContext2D, env: GridEnvironment, stageId: StageId, scale: number, offX: number, offY: number): void {
+    if (this.cachedDecorStageId !== stageId || this.cachedDecorations === null) {
+      this.cachedDecorStageId = stageId;
+      this.cachedDecorations = scatterDecorations(
+        env.moisture.data, env.obstacle.data, env.water.data, this.opts.fieldSize, this.opts.worldSize,
+      );
+    }
+    const fieldSize = this.opts.fieldSize;
+    const worldSize = this.opts.worldSize;
+    const nutData = env.nutrients.data;
+    const spriteSize = Math.max(3, 4.2 * scale / 5.76);
+
+    for (const d of this.cachedDecorations) {
+      const family = d.kind === 'mushroom' ? 'mushroom-red' : d.kind === 'moss-clump' ? 'moss-clump' : null;
+      const sprite = family
+        ? assets.getSprite(family, d.variant)
+        : assets.getSpriteSingle('driftwood');
+      if (!sprite) continue;
+
+      let alpha = 1;
+      if (d.kind === 'mushroom') {
+        // 粘菌がこの場所の栄養を食べ尽くすにつれ、キノコも薄くなって消える。
+        const fx = Math.min(fieldSize - 1, Math.max(0, Math.round((d.pos.x / worldSize) * fieldSize)));
+        const fy = Math.min(fieldSize - 1, Math.max(0, Math.round((d.pos.y / worldSize) * fieldSize)));
+        const nut = nutData[fy * fieldSize + fx] ?? 0;
+        alpha = Math.max(0, Math.min(1, nut / 0.25));
+        if (alpha <= 0.02) continue;
+      }
+
+      const cx = offX + d.pos.x * scale;
+      const cy = offY + d.pos.y * scale;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      drawRoundSprite(ctx, sprite, cx, cy, spriteSize, d.rotation);
+      ctx.restore();
+    }
+  }
+
+  // M24: エサ (nutrients フィールド) の連結成分ごとに food-orb スプライトを
+  // 配置する。旧: 緑のぼかし光。ブロブは毎フレーム現在の nutrients から
+  // 再抽出するので、吸収されて小さくなるにつれ自然にオーブも縮む。
+  // しきい値は「置いた直後の広いガウス裾野まで拾わない」よう、見た目の
+  // 密な核だけが残る高さに置く (実測: 0.08 だと裾野が広すぎて巨大化した)。
+  private drawFoodOrbs(ctx: CanvasRenderingContext2D, env: GridEnvironment, scale: number, offX: number, offY: number): void {
+    const blobs = extractTerrainBlobs(env.nutrients.data, this.opts.fieldSize, this.opts.worldSize, 0.18);
+    for (const blob of blobs) {
+      const name = hashNoise(Math.round(blob.cx * 11), Math.round(blob.cy * 11)) < 0.5 ? 'food-orb-orange' : 'food-orb-green';
+      const sprite = assets.getSpriteSingle(name);
+      if (!sprite) continue;
+      const cx = offX + blob.cx * scale;
+      const cy = offY + blob.cy * scale;
+      const sizePx = Math.min(28, Math.max(3, blob.radiusWorld * 1.3 * scale));
+      // 小さいブロブ (吸収され尽くす直前) ほど薄く見せる。
+      const alpha = Math.max(0.25, Math.min(1, blob.radiusWorld / 2));
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      drawRoundSprite(ctx, sprite, cx, cy, sizePx, 0);
+      ctx.restore();
+    }
+  }
+
+  // M22: 「水色の丸」の代わりに湖岸線 (marching squares) ベースの水域を描く。
+  // 内側を water-surface パターンで塗り、岸に沿って浅瀬 (内側) / 湿った砂
+  // (外側) の帯を重ねる。wetland/continent は岸線上に葦も散らす。
+  private drawWaterBodies(ctx: CanvasRenderingContext2D, env: GridEnvironment, stageId: StageId, scale: number, offX: number, offY: number): void {
+    const { loops } = extractCoastline(env.water.data, this.opts.fieldSize, this.opts.worldSize);
+    if (loops.length === 0) return;
+
+    const img = assets.getTexture('water-surface');
+
+    for (const loop of loops) {
+      if (loop.length < 3) continue;
+      const path = new Path2D();
+      const p0 = loop[0]!;
+      path.moveTo(offX + p0.x * scale, offY + p0.y * scale);
+      for (let i = 1; i < loop.length; i++) {
+        const p = loop[i]!;
+        path.lineTo(offX + p.x * scale, offY + p.y * scale);
+      }
+      path.closePath();
+
+      // 水面の塗り: パターンがあれば貼る (ゆっくり平行移動)、無ければ
+      // 深い水色の単色フォールバック (アセット未ロードの一時的な状態)。
+      ctx.save();
+      ctx.clip(path);
+      if (img && img.naturalWidth > 0) {
+        let pattern = this.patternCache.get('water-surface');
+        if (!pattern) {
+          const created = ctx.createPattern(img, 'repeat');
+          if (created) {
+            pattern = created;
+            this.patternCache.set('water-surface', pattern);
+          }
+        }
+        if (pattern) {
+          const tilePx = WATER_TILE_WORLD_SIZE * scale;
+          const s = tilePx / img.naturalWidth;
+          const drift = this.reducedMotion ? 0 : ((performance.now() - this.startTime) * WATER_DRIFT_SPEED) % WATER_TILE_WORLD_SIZE;
+          if (typeof DOMMatrix !== 'undefined' && pattern.setTransform) {
+            pattern.setTransform(new DOMMatrix().translate(offX + drift * scale, offY).scale(s, s));
+          }
+          ctx.fillStyle = pattern;
+        } else {
+          ctx.fillStyle = rgb(WATER_BODY_DEEP);
+        }
+      } else {
+        ctx.fillStyle = rgb(WATER_BODY_DEEP);
+      }
+      ctx.fill(path);
+      // M22: 現物のテクスチャ (プレースホルダ品質、CREDITS.md 参照) は
+      // 実測でかなり暗く、地形の陰と紛れて「水域」と読み取りにくい。
+      // パターンの質感を保ったまま、常に最低限の深い水色を保証する
+      // 半透明の色かぶせを重ねる (テクスチャ有無に関わらず判別できるように)。
+      ctx.fillStyle = `rgba(${WATER_BODY_DEEP[0]}, ${WATER_BODY_DEEP[1]}, ${WATER_BODY_DEEP[2]}, 0.45)`;
+      ctx.fill(path);
+      ctx.restore();
+
+      // 岸の帯: 内側 (浅瀬) は塗りつぶし内でクリップして重ね、外側
+      // (湿った砂) はクリップせずに岸線の外側へはみ出させる。
+      const bandPx = Math.max(1, SHORE_BAND_WORLD * scale);
+      ctx.save();
+      ctx.clip(path);
+      ctx.strokeStyle = SHORE_SHALLOW_COLOR;
+      ctx.lineWidth = bandPx * 2;
+      ctx.stroke(path);
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = SHORE_WET_SAND_COLOR;
+      ctx.lineWidth = bandPx * 1.4;
+      ctx.stroke(path);
+      ctx.restore();
+
+      if (stageId === 'wetland' || stageId === 'continent') {
+        this.drawShoreReeds(ctx, loop, scale, offX, offY);
+      }
+    }
+  }
+
+  // M22: 岸線上に一定間隔で葦を散らす (旧: ランドマーク座標のみ → 岸線サンプリング)。
+  private drawShoreReeds(ctx: CanvasRenderingContext2D, loop: { x: number; y: number }[], scale: number, offX: number, offY: number): void {
+    let acc = 0;
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i]!;
+      const b = loop[(i + 1) % loop.length]!;
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+      acc += segLen;
+      if (acc >= REED_SPACING_WORLD) {
+        acc = 0;
+        // このセグメント終端 (岸線上の決定的な点) に葦を1本描く。
+        if (hashNoise(Math.round(a.x * 4), Math.round(a.y * 4)) < 0.6) {
+          this.drawReeds(ctx, offX + a.x * scale, offY + a.y * scale, scale * 0.5);
+        }
+      }
+    }
+  }
+
+  // state (nodes/edges の参照) が前回と同じなら nodeMap / チェーン分解結果を
   // 使い回す。新しいスナップショットが届いたときだけ再構築する。
+  //
+  // M23: 「等幅の折れ線ループ」をやめ、グラフを分岐点間のチェーンに分解して
+  // Catmull-Rom で滑らかにする。エッジ本数が多いフレーム (ズームアウトで
+  // 広域が見えている等) では分割数を落として性能を保つ (GLOW_MAX_EDGES と
+  // 同じ考え方の性能ガード)。
   private syncEdgeCache(state: SimState): void {
     if (state === this.cachedState) return;
     this.cachedState = state;
-    this.cachedNodeMap = new Map(state.nodes.map((n) => [n.id, n]));
-    const buckets: SimEdge[][] = Array.from({ length: RADIUS_BUCKET_COUNT }, () => []);
-    for (const e of state.edges) {
-      const idx = Math.min(RADIUS_BUCKET_COUNT - 1, Math.floor((e.radius / RADIUS_BUCKET_MAX) * RADIUS_BUCKET_COUNT));
-      buckets[Math.max(0, idx)]!.push(e);
+    const edgeMap = new Map(state.edges.map((e) => [e.id, e]));
+    this.cachedEdgeMap = edgeMap;
+
+    // トポロジ (ノード数:エッジ数) が変わっていなければ、チェーン分解と
+    // Catmull-Rom による位置計算 (この関数で最も重い部分) は使い回す。
+    // 急成長中は毎スナップショットでトポロジが変わり得るため、さらに
+    // 最小間隔 (TOPOLOGY_REBUILD_MIN_INTERVAL_MS) で間引く。
+    const topologyKey = `${state.nodes.length}:${state.edges.length}`;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    const dueForRebuild = now - this.lastTopologyRebuildMs >= TOPOLOGY_REBUILD_MIN_INTERVAL_MS;
+    if (this.cachedGeomPoints === null || (topologyKey !== this.cachedTopologyKey && dueForRebuild)) {
+      this.cachedTopologyKey = topologyKey;
+      this.lastTopologyRebuildMs = now;
+      const nodeMap = new Map(state.nodes.map((n) => [n.id, n]));
+      this.cachedNodeMap = nodeMap;
+      this.cachedDegree = computeDegree(state.nodes, state.edges);
+      const adjacency = new Map<NodeId, { edgeId: EdgeId; other: NodeId }[]>();
+      for (const n of state.nodes) adjacency.set(n.id, []);
+      for (const e of state.edges) {
+        adjacency.get(e.from)?.push({ edgeId: e.id, other: e.to });
+        adjacency.get(e.to)?.push({ edgeId: e.id, other: e.from });
+      }
+      this.cachedAdjacency = adjacency;
+
+      const edgeCount = state.edges.length;
+      const samplesPerSegment = edgeCount > 600 ? 1 : edgeCount > 250 ? 2 : 4;
+      const chains: Chain[] = traceChains(state.nodes, state.edges);
+
+      const geomPoints: { pos: Vec2; sourceEdgeId: EdgeId }[][] = [];
+      const growthTips: { pos: Vec2; dir: Vec2 }[] = [];
+      for (const chain of chains) {
+        const points = smoothChain(chain, nodeMap, edgeMap, samplesPerSegment);
+        geomPoints.push(points.map((p) => ({ pos: p.pos, sourceEdgeId: p.sourceEdgeId })));
+        // 成長前線 (末端が relay = source/sink ではない本物のチップ) の扇演出用に、
+        // チップ位置と直前の進行方向を記録する (位置は不変なのでここで確定)。
+        if (points.length >= 2) {
+          const tipNode = nodeMap.get(chain.nodeIds[chain.nodeIds.length - 1]!);
+          if (chain.endIsLeaf && tipNode?.type === 'relay') {
+            const last = points[points.length - 1]!;
+            const prev = points[points.length - 2]!;
+            const dx = last.pos.x - prev.pos.x, dy = last.pos.y - prev.pos.y;
+            const len = Math.hypot(dx, dy) || 1;
+            growthTips.push({ pos: last.pos, dir: { x: dx / len, y: dy / len } });
+          }
+          const startNode = nodeMap.get(chain.nodeIds[0]!);
+          if (chain.startIsLeaf && startNode?.type === 'relay') {
+            const first = points[0]!;
+            const second = points[1]!;
+            const dx = first.pos.x - second.pos.x, dy = first.pos.y - second.pos.y;
+            const len = Math.hypot(dx, dy) || 1;
+            growthTips.push({ pos: first.pos, dir: { x: dx / len, y: dy / len } });
+          }
+        }
+      }
+      this.cachedGeomPoints = geomPoints;
+      this.cachedGrowthTips = growthTips;
     }
-    this.cachedRadiusBuckets = buckets;
+
+    // 毎スナップショット: 太さ/色調は radius/flux に依存するので都度作り直すが、
+    // 位置計算 (上で使い回し済み) と違い map 参照だけの軽い処理で済む。
+    const buckets: SmoothedSegment[][] = Array.from({ length: RADIUS_BUCKET_COUNT }, () => []);
+    for (const points of this.cachedGeomPoints!) {
+      for (let i = 1; i < points.length; i++) {
+        const p0 = points[i - 1]!;
+        const p1 = points[i]!;
+        const radius = edgeMap.get(p1.sourceEdgeId)?.radius ?? 0;
+        const idx = Math.min(RADIUS_BUCKET_COUNT - 1, Math.floor((radius / RADIUS_BUCKET_MAX) * RADIUS_BUCKET_COUNT));
+        buckets[Math.max(0, idx)]!.push({ ax: p0.pos.x, ay: p0.pos.y, bx: p1.pos.x, by: p1.pos.y, radius, edgeId: p1.sourceEdgeId });
+      }
+    }
+    this.cachedSegmentBuckets = buckets;
   }
 
   private drawEdges(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
     this.syncEdgeCache(state);
-    const nodeMap = this.cachedNodeMap!;
-    const buckets = this.cachedRadiusBuckets!;
+    const edgeMap = this.cachedEdgeMap!;
+    const buckets = this.cachedSegmentBuckets!;
     const pxPerWorld = scale / 5.76;  // 参照 (W=576, world=100) 比
 
     ctx.save();
@@ -529,22 +1028,21 @@ export class CanvasRenderer {
     // (「金色に光る」自体はどのズームでも芯線の色で保たれる)。
     const glowEnabled = state.edges.length <= GLOW_MAX_EDGES;
 
-    // バケツ (太さの昇順) ごとに、見た目 (色/太さ) が近いエッジを1本の
+    // バケツ (太さの昇順) ごとに、見た目 (色/太さ) が近い部分線分を1本の
     // Path2D にまとめてから stroke() する。flux は毎tick変わるので
-    // グルーピング自体は毎フレーム作り直すが、E 回の stroke() 呼び出しを
+    // グルーピング自体は毎フレーム作り直すが、stroke() 呼び出しを
     // バケツ内のスタイル種類数まで減らせる。
     const styleGroups = new Map<string, { path: Path2D; color: string; lineWidth: number; glowColor: string; glowWidth: number }>();
     for (const bucket of buckets) {
       if (bucket.length === 0) continue;
       styleGroups.clear();
-      for (const e of bucket) {
-        const a = nodeMap.get(e.from);
-        const b = nodeMap.get(e.to);
-        if (!a || !b) continue;
+      for (const seg of bucket) {
+        const e = edgeMap.get(seg.edgeId);
+        if (!e) continue;
         const fluxN = Math.min(1, e.flux / 5);
-        const tubeW = Math.max(0.7, e.radius * 1.05 + fluxN * 1.4) * pxPerWorld;
+        const tubeW = Math.max(0.7, seg.radius * 1.05 + fluxN * 1.4) * pxPerWorld;
         // activity (flux) が高いほど明るく発光させる (ROADMAP.md M16.5)。
-        const t = Math.min(1, fluxN * 0.65 + Math.min(1, e.radius / 2) * 0.55);
+        const t = Math.min(1, fluxN * 0.65 + Math.min(1, seg.radius / 2) * 0.55);
         const toneStep = Math.round(t * TONE_STEPS);
         const lineWidth = Math.max(0.6, tubeW * 0.55);
         const widthStep = Math.round(lineWidth / WIDTH_QUANT);
@@ -567,8 +1065,8 @@ export class CanvasRenderer {
           };
           styleGroups.set(key, group);
         }
-        group.path.moveTo(offX + a.pos.x * scale, offY + a.pos.y * scale);
-        group.path.lineTo(offX + b.pos.x * scale, offY + b.pos.y * scale);
+        group.path.moveTo(offX + seg.ax * scale, offY + seg.ay * scale);
+        group.path.lineTo(offX + seg.bx * scale, offY + seg.by * scale);
       }
       if (glowEnabled) {
         ctx.save();
@@ -585,6 +1083,86 @@ export class CanvasRenderer {
         ctx.lineWidth = group.lineWidth;
         ctx.stroke(group.path);
       }
+    }
+    ctx.restore();
+
+    if (state.edges.length <= NETWORK_DECOR_MAX_EDGES) {
+      this.drawHubStars(ctx, state, scale, offX, offY);
+      this.drawGrowthFronts(ctx, scale, offX, offY);
+    }
+  }
+
+  // M23: 次数3以上の分岐点 (ハブ) を、ベタ円ではなく「中心の粒 + 放射状の
+  // 短い光条」で描く。光条は実際に接続しているエッジの向きへ伸ばす。
+  // 性能ガード: ハブ/成長前線の演出も GLOW_MAX_EDGES と同じ考え方で、
+  // 該当ノード数が多いフレーム (大規模ネットワーク) では省略する。
+  private drawHubStars(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
+    const degree = this.cachedDegree!;
+    const adjacency = this.cachedAdjacency!;
+    const nodeMap = this.cachedNodeMap!;
+    const streakLen = Math.max(3, 3.2 * scale / 5.76);
+    const coreR = Math.max(1, streakLen * 0.22);
+
+    // 全ハブの光条/コアをそれぞれ1本の Path2D にまとめ、save/stroke/fill の
+    // 呼び出し回数をハブ数に依存させない (数百ハブでも stroke は1回)。
+    const streaks = new Path2D();
+    const cores = new Path2D();
+    let hubCount = 0;
+    for (const n of state.nodes) {
+      if (n.type !== 'relay') continue; // source/sink は drawNodes が別に描く
+      const d = degree.get(n.id) ?? 0;
+      if (d < 3) continue;
+      if (++hubCount > HUB_STAR_MAX) break;
+      const cx = offX + n.pos.x * scale;
+      const cy = offY + n.pos.y * scale;
+      for (const { other } of adjacency.get(n.id) ?? []) {
+        const o = nodeMap.get(other);
+        if (!o) continue;
+        const dx = o.pos.x - n.pos.x, dy = o.pos.y - n.pos.y;
+        const len = Math.hypot(dx, dy) || 1;
+        streaks.moveTo(cx, cy);
+        streaks.lineTo(cx + (dx / len) * streakLen, cy + (dy / len) * streakLen);
+      }
+      cores.moveTo(cx + coreR, cy);
+      cores.arc(cx, cy, coreR, 0, Math.PI * 2);
+    }
+    if (hubCount === 0) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = `rgba(${TUBE_GLOW[0]}, ${TUBE_GLOW[1]}, ${TUBE_GLOW[2]}, 0.5)`;
+    ctx.lineWidth = Math.max(0.8, streakLen * 0.16);
+    ctx.lineCap = 'round';
+    ctx.stroke(streaks);
+    ctx.restore();
+
+    ctx.fillStyle = `rgb(${TUBE_LIGHT[0]}, ${TUBE_LIGHT[1]}, ${TUBE_LIGHT[2]})`;
+    ctx.fill(cores);
+  }
+
+  // M23: 成長前線 (伸長中の管の先端) を、進行方向へ伸びる扇状のグラデードで
+  // 強調する。「探索している」方向が絵から読めるようにする。事前に1度だけ
+  // 焼いた扇スプライト (buildFanGlowSprite) を回転させて貼るだけにし、
+  // createRadialGradient をチップ毎・毎フレーム生成しない (M8 P3 と同じ手法)。
+  private drawGrowthFronts(ctx: CanvasRenderingContext2D, scale: number, offX: number, offY: number): void {
+    const tips = this.cachedGrowthTips!;
+    if (tips.length === 0) return;
+    const fanLen = Math.max(4, 5.5 * scale / 5.76);
+    const d = fanLen * 2;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    let count = 0;
+    for (const tip of tips) {
+      if (++count > GROWTH_FRONT_MAX) break;
+      const cx = offX + tip.pos.x * scale;
+      const cy = offY + tip.pos.y * scale;
+      const angle = Math.atan2(tip.dir.y, tip.dir.x);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.drawImage(this.growthFanSprite, -d / 2, -d / 2, d, d);
+      ctx.restore();
     }
     ctx.restore();
   }
@@ -791,6 +1369,42 @@ function buildGlowSprite(color: [number, number, number]): HTMLCanvasElement {
   cx.arc(r, r, r, 0, Math.PI * 2);
   cx.fill();
   return c;
+}
+
+// M23 drawGrowthFronts: +x 方向 (中心から右向き) に開く扇形グローを一度だけ
+// 焼く。実際の描画時は translate+rotate してから必要な直径に drawImage する。
+function buildFanGlowSprite(color: [number, number, number], halfAngle: number): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = GLOW_SPRITE_SIZE;
+  c.height = GLOW_SPRITE_SIZE;
+  const cx = c.getContext('2d');
+  if (!cx) return c;
+  const r = GLOW_SPRITE_SIZE / 2;
+  const grad = cx.createRadialGradient(r, r, 0, r, r, r);
+  grad.addColorStop(0, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.4)`);
+  grad.addColorStop(1, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0)`);
+  cx.fillStyle = grad;
+  cx.beginPath();
+  cx.moveTo(r, r);
+  cx.arc(r, r, r, -halfAngle, halfAngle);
+  cx.closePath();
+  cx.fill();
+  return c;
+}
+
+// M21/M24: 現物のスプライト素材 (プレースホルダ品質、CREDITS.md 参照) は
+// コンタクトシートからの切り出しで透過縁が無く、正方形の背景ごと不透明に
+// 焼き付いている。そのまま drawImage すると「四角い写真」に見えてしまう
+// ため、円形にクリップしてから描き自然な物体に近づける。
+function drawRoundSprite(ctx: CanvasRenderingContext2D, sprite: CanvasImageSource, cx: number, cy: number, size: number, rotation: number): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, size / 2, size / 2, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.drawImage(sprite, -size / 2, -size / 2, size, size);
+  ctx.restore();
 }
 
 function blend(r: number, g: number, b: number, r2: number, g2: number, b2: number, a2: number): [number, number, number] {

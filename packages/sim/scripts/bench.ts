@@ -195,6 +195,84 @@ function runWorldScale(): void {
   }
 }
 
+// M25: 「チャンク化前後で tick 結果が bit 一致する」ことのリグレッション
+// テスト (test/chunk-grid.test.ts / determinism.test.ts) とは別に、M25〜M27
+// (半無限ワールド) が現実的に到達しうる規模 (エッジ1万本オーダー) で
+// 性能が崩れないことを確認するための大規模ケース。
+//
+// 有限ワールドで自然な成長だけに任せると、初期食料を使い切った時点で
+// 定常状態に入り ~650〜1300 edges で頭打ちになる (食料を外周へ定期的に
+// 足しても、境界 (worldMargin) に達した前線はそこで伸長を止めるため
+// 解消しない — M25〜M27 の動機そのもので、ROADMAP.md「現在地」の
+// 第4回検証で実測した Day24 完全停滞と同じ現象)。半無限ワールド自体は
+// このセッションの範囲外なので、代わりに格子状の合成ネットワーク
+// (nodes/edges を直接構築) で1万エッジ規模を再現し、そのスケールで
+// 毎tickのサブシステム (flux/activity/biomass/growth/prune) が
+// 破綻しないことを確認する。
+function buildSyntheticLattice(sideNodes: number, worldSize: number): Setup {
+  const state = createInitialState(7, worldSize);
+  const spacing = worldSize / sideNodes;
+  const idOf = (x: number, y: number) => y * sideNodes + x;
+  for (let y = 0; y < sideNodes; y++) {
+    for (let x = 0; x < sideNodes; x++) {
+      state.nodes.push({
+        id: idOf(x, y),
+        pos: { x: (x + 0.5) * spacing, y: (y + 0.5) * spacing },
+        type: x === 0 && y === 0 ? 'source' : (x === sideNodes - 1 && y === sideNodes - 1 ? 'sink' : 'relay'),
+        bornAt: 0,
+      });
+    }
+  }
+  let nextEdgeId = 0;
+  for (let y = 0; y < sideNodes; y++) {
+    for (let x = 0; x < sideNodes; x++) {
+      if (x + 1 < sideNodes) {
+        state.edges.push({
+          id: nextEdgeId++, from: idOf(x, y), to: idOf(x + 1, y), length: spacing, bornAt: 0,
+          flux: 0, radius: 0.8, activity: 0.5, fatigue: 0, stress: 0,
+        });
+      }
+      if (y + 1 < sideNodes) {
+        state.edges.push({
+          id: nextEdgeId++, from: idOf(x, y), to: idOf(x, y + 1), length: spacing, bornAt: 0,
+          flux: 0, radius: 0.8, activity: 0.5, fatigue: 0, stress: 0,
+        });
+      }
+    }
+  }
+  state.nextNodeId = sideNodes * sideNodes;
+  state.nextEdgeId = nextEdgeId;
+
+  const rng = createRNG(7);
+  const env = new GridEnvironment({ worldSize, fieldSize: 256 });
+  env.placeFood({ x: worldSize * 0.9, y: worldSize * 0.9 }, worldSize * 0.05, 1.0);
+  const act = new ActivityField(worldSize, 256);
+  const bio = new BiomassField(worldSize, 256);
+  const bus = new EventBus();
+  return { state, env, act, bio, rng, bus };
+}
+
+function runLargeScale(): void {
+  // 71×71 格子 ≈ 5041 nodes, 2×71×70 = 9940 edges。
+  // 合成格子は実際の flux 経路に基づかないため、prune (60tick毎) が
+  // 「活動していない枝」として大半を刈ってしまう — それ自体は sim の
+  // 正しい振る舞いであり、このベンチの関心事ではない。ここで測りたいのは
+  // 「1万エッジ規模のグラフ1枚に対して各サブシステムが1tickでいくら
+  // かかるか」なので、prune が effective に効き始める前 (60tick 未満) の
+  // 範囲だけを計測する。
+  const ctx = buildSyntheticLattice(71, 400);
+  console.log(`large-scale: 合成格子で nodes=${ctx.state.nodes.length} edges=${ctx.state.edges.length} を用意`);
+  const TICKS = 40;
+  const acc = zeroTimes();
+  const t0 = performance.now();
+  for (let t = 0; t < TICKS; t++) stepWithTiming(ctx, DEFAULT_PARAMS, acc);
+  const elapsed = performance.now() - t0;
+  const perTick = elapsed / TICKS;
+  console.log(`large-scale: ${TICKS} ticks 後 (prune 前) nodes=${ctx.state.nodes.length} edges=${ctx.state.edges.length}, ${fmt(perTick)} ms/tick avg, ×${(16 / perTick).toFixed(1)} 実効速度目安`);
+  console.log(`  内訳 (合計ms): index=${acc.index.toFixed(0)} flux=${acc.flux.toFixed(0)} activity=${acc.activity.toFixed(0)} biomass=${acc.biomass.toFixed(0)} radius=${acc.radius.toFixed(0)} growth=${acc.growth.toFixed(0)} prune=${acc.prune.toFixed(0)}`);
+}
+
 if (process.argv.includes('--smoke')) runSmoke();
+else if (process.argv.includes('--largescale')) runLargeScale();
 else if (process.argv.includes('--worldscale')) runWorldScale();
 else runReport(1500, 100);

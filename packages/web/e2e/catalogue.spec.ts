@@ -67,8 +67,16 @@ test('実績はバッジグリッドで12個表示され、達成すると解除
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => {
     localStorage.setItem('morpho.onboarded.v1', '1');
-    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長 (3840ms=16ms×TICKS_PER_DAY) に固定し、既存のタイムアウト前提を崩さない。
-    localStorage.setItem('morpho.dayMs.v1', '3840');
+    // M15.7: 旧 tick レート (×1で16ms/tick, 640ms/日相当のペース) を再現する日長
+    // (3840ms=16ms×TICKS_PER_DAY) だと、並列実行でCPUが混み合い waitForReady()
+    // までに実時間が余分にかかった場合、初期6分岐 (皿3コロニー×初期分岐) の
+    // radius が育って 'pillar' (太い幹20本以上) の閾値をこの待ち時間だけで
+    // 越えてしまうことがある (実測: 2ワーカー並列だと再現性あり)。
+    // 「開始時点で0個」の検査自体はこの後まだ何も操作していないことの確認が
+    // 目的なので、待ち時間中に自然発生する tick 数を絞るため日長をさらに
+    // 長くする (この後の実績解除の検査は setSpeedMax で ×24 にするので
+    // 影響しない)。
+    localStorage.setItem('morpho.dayMs.v1', '40000');
   });
   await page.goto('/');
   await waitForReady(page);

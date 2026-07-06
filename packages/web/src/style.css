@@ -466,6 +466,7 @@ body { overflow: hidden; }
   border-radius: 999px; background: var(--bar-empty); color: var(--text-dim);
 }
 .challenge-status.done { background: var(--accent-soft); color: var(--accent); }
+.challenge-status.expired { background: var(--bar-empty); color: var(--text-dim); font-style: italic; }
 
 /* M11: ゆるいデイリー */
 .dailies { list-style: none; margin: 0 0 6px; padding: 0; }

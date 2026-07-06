@@ -3,6 +3,7 @@ import {
   eraFor, type EraInput,
   DIFFUSE_MIN_DAY, PLASMODIUM_MIN_DAY, MATURE_MIN_DAY, PLASMODIUM_MASS_KG_REQUIRED,
   estimateEraEta, type EraSample,
+  describeEraBlocker,
 } from '../src/era.js';
 
 function input(overrides: Partial<EraInput> = {}): EraInput {
@@ -112,6 +113,67 @@ describe('eraFor', () => {
       names.push(e.name);
     }
     expect(names).toEqual(['胞子期', '拡散期', '変形体期', '成熟期']);
+  });
+});
+
+describe('describeEraBlocker', () => {
+  it('成熟期に到達済みなら空文字 (もう条件はない)', () => {
+    const e = describeEraBlocker(input({
+      coloniesReached: 3, massKg: 10, connectedNetworks: 1, sourceColonies: 3, exploration: 0.5,
+      day: MATURE_MIN_DAY,
+    }));
+    expect(e).toBe('');
+  });
+
+  it('胞子期でまだ最初の拠点にも届いていなければ、その条件を示す', () => {
+    const e = describeEraBlocker(input());
+    expect(e).toBe('条件: 最初の拠点に到達');
+  });
+
+  it('胞子期で拠点条件は満たしたが day ゲート待ちなら day を示す', () => {
+    const e = describeEraBlocker(input({ coloniesReached: 1, day: 2 }));
+    expect(e).toBe(`条件: Day ${DIFFUSE_MIN_DAY} まで経過`);
+  });
+
+  it('拡散期でまだ2拠点目に届いていなければその条件を示す', () => {
+    const e = describeEraBlocker(input({ coloniesReached: 1, day: DIFFUSE_MIN_DAY }));
+    expect(e).toBe('条件: もう1拠点に到達');
+  });
+
+  it('拡散期で拠点は足りているが質量が足りなければ質量条件を示す', () => {
+    const e = describeEraBlocker(input({ coloniesReached: 2, massKg: 0.5, day: DIFFUSE_MIN_DAY }));
+    expect(e).toBe('条件: 総質量を増やす');
+  });
+
+  it('拡散期で条件は満たしたが day ゲート待ちなら day を示す', () => {
+    const e = describeEraBlocker(input({
+      coloniesReached: 2, massKg: PLASMODIUM_MASS_KG_REQUIRED, day: DIFFUSE_MIN_DAY,
+    }));
+    expect(e).toBe(`条件: Day ${PLASMODIUM_MIN_DAY} まで経過`);
+  });
+
+  it('変形体期でネットワーク未統合なら「ネットワークをひとつに」を示す', () => {
+    const e = describeEraBlocker(input({
+      coloniesReached: 2, massKg: PLASMODIUM_MASS_KG_REQUIRED, day: PLASMODIUM_MIN_DAY,
+      connectedNetworks: 2, sourceColonies: 2, exploration: 0.9,
+    }));
+    expect(e).toBe('条件: ネットワークをひとつに');
+  });
+
+  it('変形体期で統合済みだが探索率が足りなければその条件を示す', () => {
+    const e = describeEraBlocker(input({
+      coloniesReached: 3, massKg: 10, day: PLASMODIUM_MIN_DAY,
+      connectedNetworks: 1, sourceColonies: 3, exploration: 0.1,
+    }));
+    expect(e).toBe('条件: 個体をさらに広げる');
+  });
+
+  it('変形体期で条件は満たしたが day ゲート待ちなら day を示す', () => {
+    const e = describeEraBlocker(input({
+      coloniesReached: 3, massKg: 10, day: PLASMODIUM_MIN_DAY,
+      connectedNetworks: 1, sourceColonies: 3, exploration: 0.9,
+    }));
+    expect(e).toBe(`条件: Day ${MATURE_MIN_DAY} まで経過`);
   });
 });
 

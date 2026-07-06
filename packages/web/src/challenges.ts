@@ -22,6 +22,11 @@ export interface ChallengeDef {
   description: string;
   goal: string;
   isComplete(input: ChallengeCheckInput): boolean;
+  // M27: この Day を過ぎると、今の皿ではもう達成不可能になる条件を持つ
+  // チャレンジだけ設定する (省略時は期限なし)。「この皿では期限切れ —
+  // 次の皿で挑戦」の判定に使う (day は reset() のたびに 0 に戻るので、
+  // 次の皿では自動的に再挑戦できる)。
+  goalDeadlineDay?: number;
 }
 
 const CHALLENGES: Record<ChallengeKind, ChallengeDef> = {
@@ -43,6 +48,7 @@ const CHALLENGES: Record<ChallengeKind, ChallengeDef> = {
     description: 'すべての拠点をできるだけ早くつなごう',
     goal: 'Day 0 のうちに全拠点接続',
     isComplete: (i) => i.connectProgress >= 1 && i.day <= 0,
+    goalDeadlineDay: 0,
   },
   cheapest: {
     kind: 'cheapest',
@@ -64,6 +70,11 @@ export const CHALLENGE_KINDS: ChallengeKind[] = ['fastest', 'cheapest', 'clean']
 
 export function allChallenges(): ChallengeDef[] {
   return CHALLENGE_KINDS.map((k) => CHALLENGES[k]);
+}
+
+// M27: 「この皿では期限切れ」判定。まだ未達成で、かつ期限日を過ぎていれば true。
+export function isChallengeExpired(chal: ChallengeDef, day: number, completed: boolean): boolean {
+  return !completed && chal.goalDeadlineDay !== undefined && day > chal.goalDeadlineDay;
 }
 
 export function dateKey(date: Date): string {

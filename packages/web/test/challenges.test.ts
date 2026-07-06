@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { allChallenges, dateKey, DailyChallengeTracker } from '../src/challenges.js';
+import { allChallenges, dateKey, DailyChallengeTracker, isChallengeExpired } from '../src/challenges.js';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -39,6 +39,29 @@ describe('allChallenges', () => {
     it('Day 0 でも全接続していなければ未達成', () => {
       expect(fastest.isComplete({ connectProgress: 0.9, day: 0, networkLinks: 0, toxin: 0 })).toBe(false);
     });
+  });
+});
+
+// M27: 「この皿では期限切れ」— fastest は Day 0 を過ぎると、その皿ではもう
+// 達成不可能になる (isComplete が day<=0 を要求するため)。
+describe('isChallengeExpired', () => {
+  const fastest = allChallenges().find((c) => c.kind === 'fastest')!;
+  const cheapest = allChallenges().find((c) => c.kind === 'cheapest')!;
+
+  it('fastest は Day 0 のうちは期限切れではない', () => {
+    expect(isChallengeExpired(fastest, 0, false)).toBe(false);
+  });
+
+  it('fastest は Day 1 以降、未達成なら期限切れになる', () => {
+    expect(isChallengeExpired(fastest, 1, false)).toBe(true);
+  });
+
+  it('達成済みなら Day が過ぎていても期限切れ扱いにしない', () => {
+    expect(isChallengeExpired(fastest, 5, true)).toBe(false);
+  });
+
+  it('期限日を持たないチャレンジ (cheapest) はいつまでも期限切れにならない', () => {
+    expect(isChallengeExpired(cheapest, 1000, false)).toBe(false);
   });
 });
 
