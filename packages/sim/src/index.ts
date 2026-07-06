@@ -5,6 +5,8 @@ export * from './rng.js';
 // 低レイヤの場ヘルパ
 export * from './field/grid.js';
 export * from './field/scalar-field.js';
+// M25: 半無限ワールド向けのチャンク化フィールド (既存ステージは未使用)。
+export * from './field/chunk-grid.js';
 
 // 静的な土地 + 動的な場 (活動 / 体)
 export * from './env/environment.js';
