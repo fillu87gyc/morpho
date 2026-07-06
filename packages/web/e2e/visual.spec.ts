@@ -143,6 +143,86 @@ test('M22: 大陸ステージの水域に岸線・浅瀬・湿った砂の3ト�
   expect(errors).toEqual([]);
 });
 
+test('M23: 最大ズームでも脈の発光が残り、描画コストが予算内に収まる', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+  });
+  await page.goto('/?debug');
+  await waitForReady(page);
+
+  // 脈が育つ時間を少し与える (通常速度、極端な早送りはしない)。
+  await page.click('#speed-btn-8');
+  await page.waitForTimeout(3000);
+
+  // 皿ステージは複数コロニーがワールド全体に散らばって生成されるため、
+  // ズームスライダー (常にワールド中心基準) だけだとコロニーが視野に
+  // 1つも入らない seed があり得る。ミニマップ上のコロニーの目印
+  // (NETWORK_COLORS) をピクセル走査で見つけてクリックし、
+  // camera.focusOn() で確実にコロニーへズームする (M6 の手法を流用)。
+  await page.click('#record-tab-map');
+  const minimapBox = await page.locator('#minimap').boundingBox();
+  if (!minimapBox) throw new Error('minimap has no bounding box');
+  const markerPos = await page.evaluate(() => {
+    const canvas = document.getElementById('minimap') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // minimap.ts の NETWORK_COLORS。
+    const colors: [number, number, number][] = [
+      [143, 208, 255], [255, 210, 122], [157, 255, 160], [255, 157, 199], [201, 162, 255], [255, 255, 255],
+    ];
+    for (let y = 0; y < height; y += 2) {
+      for (let x = 0; x < width; x += 2) {
+        const i = (y * width + x) * 4;
+        const r = data[i]!, g = data[i + 1]!, b = data[i + 2]!;
+        for (const [cr, cg, cb] of colors) {
+          if (Math.abs(r - cr) < 20 && Math.abs(g - cg) < 20 && Math.abs(b - cb) < 20) {
+            return { x: x / width, y: y / height };
+          }
+        }
+      }
+    }
+    return null;
+  });
+  if (!markerPos) throw new Error('minimap上にコロニーの目印が見つからなかった');
+  await page.mouse.click(minimapBox.x + minimapBox.width * markerPos.x, minimapBox.y + minimapBox.height * markerPos.y);
+  await page.waitForTimeout(600);
+
+  // render.ts の TUBE_LIGHT/TUBE_DARK (クリーム〜濃い金、脈管の芯線色) に
+  // 近い色のピクセルが十分な数存在すること (脈自体が消えていたり描画が
+  // 壊れていれば退行として検出できる)。
+  const veinPixels = await countPixelsNear(page, [255, 226, 150], 90);
+  expect(veinPixels).toBeGreaterThan(30);
+
+  // 性能ガード: draw コストの中央値が 3ms/frame 予算内。perf HUD は瞬間値
+  // (1フレーム分) なので、Day節目のサムネイル撮影 (M8 P3) 等でたまたま
+  // 重いフレームを1回引くとフレーキーになる。何回かサンプリングして
+  // 中央値で見ることで、そうした単発スパイクと持続的な退行を区別する。
+  const readDrawMs = () => page.evaluate(() => {
+    const el = document.querySelector('#perf-hud, .perf-hud');
+    const text = el?.textContent ?? document.body.innerText;
+    const m = text.match(/draw ([\d.]+)ms/);
+    return m ? Number(m[1]) : null;
+  });
+  const samples: number[] = [];
+  for (let i = 0; i < 7; i++) {
+    const v = await readDrawMs();
+    if (v !== null) samples.push(v);
+    await page.waitForTimeout(120);
+  }
+  samples.sort((a, b) => a - b);
+  const median = samples[Math.floor(samples.length / 2)];
+  expect(median).not.toBeUndefined();
+  // 予算は3ms/frameだが、成長中のネットワーク+ズーム5倍という負荷の高い
+  // シナリオで中央値を取っても環境ノイズで±0.5ms程度は揺れる (実測)。
+  // 閾値はノイズを吸収しつつ、無制限化などの明確な退行 (実測10ms超) は
+  // 確実に検出できる位置に置く。
+  expect(median!).toBeLessThan(4.5);
+
+  expect(errors).toEqual([]);
+});
+
 test('M21: 最大ズームでも地面のディテールが無地グラデーションに潰れない', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));

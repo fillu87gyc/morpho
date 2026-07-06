@@ -19,6 +19,7 @@ import type {
   BiomassField,
   Vec2,
   NodeId,
+  EdgeId,
   SimNode,
   SimEdge,
 } from '@morpho/sim';
@@ -28,11 +29,23 @@ import { MultiLayerDirtyTracker } from './field-diff.js';
 import { assets, SPRITE_FAMILIES, type TileTextureName } from './assets.js';
 import { extractTerrainBlobs, SMALL_BLOB_MAX_CELLS } from './terrain-blobs.js';
 import { extractCoastline } from './coastline.js';
+import { traceChains, smoothChain, computeDegree, type Chain } from './vein-curves.js';
 
 export interface RenderOptions {
   worldSize: number;
   fieldSize: number;
   showHeat: boolean;
+}
+
+// M23: Catmull-Rom で滑らかにしたチェーンを、描画時にバケツ分けして
+// 保持するための部分線分。ワールド座標のまま持つ (画面座標変換は描画時)。
+interface SmoothedSegment {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  radius: number;
+  edgeId: EdgeId;
 }
 
 // paintFieldLayer が焼くレイヤ数: biomass / nutrients / moisture / brightness /
@@ -137,6 +150,19 @@ const DAPPLE_MAX_ALPHA = 0.34;
 // M21: 岩スプライトの見かけの大きさ (obstacle 連結成分の概算半径に対する倍率)。
 const ROCK_SPRITE_SCALE = 2.4;
 
+// M23: 大規模ネットワーク時の性能ガード (GLOW_MAX_EDGES と同じ考え方)。
+// ハブ/成長前線の演出はノード数に比例するコストなので上限を設ける。
+const HUB_STAR_MAX = 150;
+const GROWTH_FRONT_MAX = 150;
+const FAN_HALF_ANGLE = Math.PI / 5;
+// ハブ/成長前線は「追加の演出」なので、曲線描画本体 (GLOW_MAX_EDGES) より
+// 保守的な閾値で早めに省略する (save/rotate/drawImage のコストが
+// 大規模ネットワークで積み上がりやすいため)。
+const NETWORK_DECOR_MAX_EDGES = 500;
+// チェーン分解 + Catmull-Rom の再計算を、急成長中でも1秒間に何度も
+// 走らせないための最小間隔。
+const TOPOLOGY_REBUILD_MIN_INTERVAL_MS = 250;
+
 // M22: 水面テクスチャの1タイルが表すワールド単位。
 const WATER_TILE_WORLD_SIZE = 11;
 // 水面パターンのゆっくりとした平行移動 (ワールド単位/ミリ秒)。
@@ -206,12 +232,34 @@ export class CanvasRenderer {
   // 同じ state を複数フレームで描くケースは珍しくない。
   private cachedState: SimState | null = null;
   private cachedNodeMap: Map<NodeId, SimNode> | null = null;
-  private cachedRadiusBuckets: SimEdge[][] | null = null;
+  // M23: 「等幅の折れ線ループ」をやめ、チェーン (分岐点間の単純path) ごとに
+  // Catmull-Rom で滑らかにした部分線分をバケツ分けして持つ。ワールド座標の
+  // まま保持し、画面座標への変換 (offX/offY/scale) は描画時に行う
+  // (カメラの移動/ズームは state と無関係に毎フレーム変わりうるため)。
+  private cachedSegmentBuckets: SmoothedSegment[][] | null = null;
+  private cachedDegree: Map<NodeId, number> | null = null;
+  private cachedAdjacency: Map<NodeId, { edgeId: EdgeId; other: NodeId }[]> | null = null;
+  private cachedGrowthTips: { pos: Vec2; dir: Vec2 }[] | null = null;
+  private cachedEdgeMap: Map<EdgeId, SimEdge> | null = null;
+  // M23: ノード位置は生成時に固定される (sim 側で pos は書き換わらない) ため、
+  // トポロジ (ノード数:エッジ数) が変わらない限りチェーン分解/Catmull-Rom の
+  // 幾何計算 (位置) を使い回せる。太さ/色調は radius/flux に依存するので
+  // 毎スナップショット作り直すが、そちらは map 参照だけの軽い処理で済む。
+  private cachedTopologyKey: string | null = null;
+  private cachedGeomPoints: { pos: Vec2; sourceEdgeId: EdgeId }[][] | null = null;
+  // チェーン分解 + Catmull-Rom の再計算 (このファイルで最も重い処理) を、
+  // 急成長中 (ほぼ毎スナップショットでノード/エッジ数が変わる) でも
+  // 連続で走らせないための間引き。多少の反映遅れ (最大 topologyRebuildMinIntervalMs)
+  // は見た目に影響しない。
+  private lastTopologyRebuildMs = -Infinity;
 
   // M8 P3 drawNodes: グロー (radial gradient) をノードごとに毎フレーム
   // 生成する代わりに、色ごとに1枚だけ焼いたスプライトを drawImage で貼る。
   private sourceGlowSprite: HTMLCanvasElement;
   private sinkGlowSprite: HTMLCanvasElement;
+  // M23: 成長前線の扇スプライト (+x 方向に開く)。回転させて drawImage するだけで
+  // 済ませ、createRadialGradient をチップ毎・毎フレーム生成しない。
+  private growthFanSprite: HTMLCanvasElement;
 
   constructor(private canvas: HTMLCanvasElement, private opts: RenderOptions) {
     const ctx = canvas.getContext('2d');
@@ -231,6 +279,7 @@ export class CanvasRenderer {
 
     this.sourceGlowSprite = buildGlowSprite(SOURCE_DOT);
     this.sinkGlowSprite = buildGlowSprite(SINK_DOT);
+    this.growthFanSprite = buildFanGlowSprite(TUBE_GLOW, FAN_HALF_ANGLE);
 
     // M20/M21: テクスチャ/スプライトの先読みを開始する (失敗しても reject
     // しない設計なので fire-and-forget で問題ない)。未ロードの間は各
@@ -795,24 +844,93 @@ export class CanvasRenderer {
     }
   }
 
-  // state (nodes/edges の参照) が前回と同じなら nodeMap / radius バケツを
+  // state (nodes/edges の参照) が前回と同じなら nodeMap / チェーン分解結果を
   // 使い回す。新しいスナップショットが届いたときだけ再構築する。
+  //
+  // M23: 「等幅の折れ線ループ」をやめ、グラフを分岐点間のチェーンに分解して
+  // Catmull-Rom で滑らかにする。エッジ本数が多いフレーム (ズームアウトで
+  // 広域が見えている等) では分割数を落として性能を保つ (GLOW_MAX_EDGES と
+  // 同じ考え方の性能ガード)。
   private syncEdgeCache(state: SimState): void {
     if (state === this.cachedState) return;
     this.cachedState = state;
-    this.cachedNodeMap = new Map(state.nodes.map((n) => [n.id, n]));
-    const buckets: SimEdge[][] = Array.from({ length: RADIUS_BUCKET_COUNT }, () => []);
-    for (const e of state.edges) {
-      const idx = Math.min(RADIUS_BUCKET_COUNT - 1, Math.floor((e.radius / RADIUS_BUCKET_MAX) * RADIUS_BUCKET_COUNT));
-      buckets[Math.max(0, idx)]!.push(e);
+    const edgeMap = new Map(state.edges.map((e) => [e.id, e]));
+    this.cachedEdgeMap = edgeMap;
+
+    // トポロジ (ノード数:エッジ数) が変わっていなければ、チェーン分解と
+    // Catmull-Rom による位置計算 (この関数で最も重い部分) は使い回す。
+    // 急成長中は毎スナップショットでトポロジが変わり得るため、さらに
+    // 最小間隔 (TOPOLOGY_REBUILD_MIN_INTERVAL_MS) で間引く。
+    const topologyKey = `${state.nodes.length}:${state.edges.length}`;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    const dueForRebuild = now - this.lastTopologyRebuildMs >= TOPOLOGY_REBUILD_MIN_INTERVAL_MS;
+    if (this.cachedGeomPoints === null || (topologyKey !== this.cachedTopologyKey && dueForRebuild)) {
+      this.cachedTopologyKey = topologyKey;
+      this.lastTopologyRebuildMs = now;
+      const nodeMap = new Map(state.nodes.map((n) => [n.id, n]));
+      this.cachedNodeMap = nodeMap;
+      this.cachedDegree = computeDegree(state.nodes, state.edges);
+      const adjacency = new Map<NodeId, { edgeId: EdgeId; other: NodeId }[]>();
+      for (const n of state.nodes) adjacency.set(n.id, []);
+      for (const e of state.edges) {
+        adjacency.get(e.from)?.push({ edgeId: e.id, other: e.to });
+        adjacency.get(e.to)?.push({ edgeId: e.id, other: e.from });
+      }
+      this.cachedAdjacency = adjacency;
+
+      const edgeCount = state.edges.length;
+      const samplesPerSegment = edgeCount > 600 ? 1 : edgeCount > 250 ? 2 : 4;
+      const chains: Chain[] = traceChains(state.nodes, state.edges);
+
+      const geomPoints: { pos: Vec2; sourceEdgeId: EdgeId }[][] = [];
+      const growthTips: { pos: Vec2; dir: Vec2 }[] = [];
+      for (const chain of chains) {
+        const points = smoothChain(chain, nodeMap, edgeMap, samplesPerSegment);
+        geomPoints.push(points.map((p) => ({ pos: p.pos, sourceEdgeId: p.sourceEdgeId })));
+        // 成長前線 (末端が relay = source/sink ではない本物のチップ) の扇演出用に、
+        // チップ位置と直前の進行方向を記録する (位置は不変なのでここで確定)。
+        if (points.length >= 2) {
+          const tipNode = nodeMap.get(chain.nodeIds[chain.nodeIds.length - 1]!);
+          if (chain.endIsLeaf && tipNode?.type === 'relay') {
+            const last = points[points.length - 1]!;
+            const prev = points[points.length - 2]!;
+            const dx = last.pos.x - prev.pos.x, dy = last.pos.y - prev.pos.y;
+            const len = Math.hypot(dx, dy) || 1;
+            growthTips.push({ pos: last.pos, dir: { x: dx / len, y: dy / len } });
+          }
+          const startNode = nodeMap.get(chain.nodeIds[0]!);
+          if (chain.startIsLeaf && startNode?.type === 'relay') {
+            const first = points[0]!;
+            const second = points[1]!;
+            const dx = first.pos.x - second.pos.x, dy = first.pos.y - second.pos.y;
+            const len = Math.hypot(dx, dy) || 1;
+            growthTips.push({ pos: first.pos, dir: { x: dx / len, y: dy / len } });
+          }
+        }
+      }
+      this.cachedGeomPoints = geomPoints;
+      this.cachedGrowthTips = growthTips;
     }
-    this.cachedRadiusBuckets = buckets;
+
+    // 毎スナップショット: 太さ/色調は radius/flux に依存するので都度作り直すが、
+    // 位置計算 (上で使い回し済み) と違い map 参照だけの軽い処理で済む。
+    const buckets: SmoothedSegment[][] = Array.from({ length: RADIUS_BUCKET_COUNT }, () => []);
+    for (const points of this.cachedGeomPoints!) {
+      for (let i = 1; i < points.length; i++) {
+        const p0 = points[i - 1]!;
+        const p1 = points[i]!;
+        const radius = edgeMap.get(p1.sourceEdgeId)?.radius ?? 0;
+        const idx = Math.min(RADIUS_BUCKET_COUNT - 1, Math.floor((radius / RADIUS_BUCKET_MAX) * RADIUS_BUCKET_COUNT));
+        buckets[Math.max(0, idx)]!.push({ ax: p0.pos.x, ay: p0.pos.y, bx: p1.pos.x, by: p1.pos.y, radius, edgeId: p1.sourceEdgeId });
+      }
+    }
+    this.cachedSegmentBuckets = buckets;
   }
 
   private drawEdges(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
     this.syncEdgeCache(state);
-    const nodeMap = this.cachedNodeMap!;
-    const buckets = this.cachedRadiusBuckets!;
+    const edgeMap = this.cachedEdgeMap!;
+    const buckets = this.cachedSegmentBuckets!;
     const pxPerWorld = scale / 5.76;  // 参照 (W=576, world=100) 比
 
     ctx.save();
@@ -824,22 +942,21 @@ export class CanvasRenderer {
     // (「金色に光る」自体はどのズームでも芯線の色で保たれる)。
     const glowEnabled = state.edges.length <= GLOW_MAX_EDGES;
 
-    // バケツ (太さの昇順) ごとに、見た目 (色/太さ) が近いエッジを1本の
+    // バケツ (太さの昇順) ごとに、見た目 (色/太さ) が近い部分線分を1本の
     // Path2D にまとめてから stroke() する。flux は毎tick変わるので
-    // グルーピング自体は毎フレーム作り直すが、E 回の stroke() 呼び出しを
+    // グルーピング自体は毎フレーム作り直すが、stroke() 呼び出しを
     // バケツ内のスタイル種類数まで減らせる。
     const styleGroups = new Map<string, { path: Path2D; color: string; lineWidth: number; glowColor: string; glowWidth: number }>();
     for (const bucket of buckets) {
       if (bucket.length === 0) continue;
       styleGroups.clear();
-      for (const e of bucket) {
-        const a = nodeMap.get(e.from);
-        const b = nodeMap.get(e.to);
-        if (!a || !b) continue;
+      for (const seg of bucket) {
+        const e = edgeMap.get(seg.edgeId);
+        if (!e) continue;
         const fluxN = Math.min(1, e.flux / 5);
-        const tubeW = Math.max(0.7, e.radius * 1.05 + fluxN * 1.4) * pxPerWorld;
+        const tubeW = Math.max(0.7, seg.radius * 1.05 + fluxN * 1.4) * pxPerWorld;
         // activity (flux) が高いほど明るく発光させる (ROADMAP.md M16.5)。
-        const t = Math.min(1, fluxN * 0.65 + Math.min(1, e.radius / 2) * 0.55);
+        const t = Math.min(1, fluxN * 0.65 + Math.min(1, seg.radius / 2) * 0.55);
         const toneStep = Math.round(t * TONE_STEPS);
         const lineWidth = Math.max(0.6, tubeW * 0.55);
         const widthStep = Math.round(lineWidth / WIDTH_QUANT);
@@ -862,8 +979,8 @@ export class CanvasRenderer {
           };
           styleGroups.set(key, group);
         }
-        group.path.moveTo(offX + a.pos.x * scale, offY + a.pos.y * scale);
-        group.path.lineTo(offX + b.pos.x * scale, offY + b.pos.y * scale);
+        group.path.moveTo(offX + seg.ax * scale, offY + seg.ay * scale);
+        group.path.lineTo(offX + seg.bx * scale, offY + seg.by * scale);
       }
       if (glowEnabled) {
         ctx.save();
@@ -880,6 +997,86 @@ export class CanvasRenderer {
         ctx.lineWidth = group.lineWidth;
         ctx.stroke(group.path);
       }
+    }
+    ctx.restore();
+
+    if (state.edges.length <= NETWORK_DECOR_MAX_EDGES) {
+      this.drawHubStars(ctx, state, scale, offX, offY);
+      this.drawGrowthFronts(ctx, scale, offX, offY);
+    }
+  }
+
+  // M23: 次数3以上の分岐点 (ハブ) を、ベタ円ではなく「中心の粒 + 放射状の
+  // 短い光条」で描く。光条は実際に接続しているエッジの向きへ伸ばす。
+  // 性能ガード: ハブ/成長前線の演出も GLOW_MAX_EDGES と同じ考え方で、
+  // 該当ノード数が多いフレーム (大規模ネットワーク) では省略する。
+  private drawHubStars(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number): void {
+    const degree = this.cachedDegree!;
+    const adjacency = this.cachedAdjacency!;
+    const nodeMap = this.cachedNodeMap!;
+    const streakLen = Math.max(3, 3.2 * scale / 5.76);
+    const coreR = Math.max(1, streakLen * 0.22);
+
+    // 全ハブの光条/コアをそれぞれ1本の Path2D にまとめ、save/stroke/fill の
+    // 呼び出し回数をハブ数に依存させない (数百ハブでも stroke は1回)。
+    const streaks = new Path2D();
+    const cores = new Path2D();
+    let hubCount = 0;
+    for (const n of state.nodes) {
+      if (n.type !== 'relay') continue; // source/sink は drawNodes が別に描く
+      const d = degree.get(n.id) ?? 0;
+      if (d < 3) continue;
+      if (++hubCount > HUB_STAR_MAX) break;
+      const cx = offX + n.pos.x * scale;
+      const cy = offY + n.pos.y * scale;
+      for (const { other } of adjacency.get(n.id) ?? []) {
+        const o = nodeMap.get(other);
+        if (!o) continue;
+        const dx = o.pos.x - n.pos.x, dy = o.pos.y - n.pos.y;
+        const len = Math.hypot(dx, dy) || 1;
+        streaks.moveTo(cx, cy);
+        streaks.lineTo(cx + (dx / len) * streakLen, cy + (dy / len) * streakLen);
+      }
+      cores.moveTo(cx + coreR, cy);
+      cores.arc(cx, cy, coreR, 0, Math.PI * 2);
+    }
+    if (hubCount === 0) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = `rgba(${TUBE_GLOW[0]}, ${TUBE_GLOW[1]}, ${TUBE_GLOW[2]}, 0.5)`;
+    ctx.lineWidth = Math.max(0.8, streakLen * 0.16);
+    ctx.lineCap = 'round';
+    ctx.stroke(streaks);
+    ctx.restore();
+
+    ctx.fillStyle = `rgb(${TUBE_LIGHT[0]}, ${TUBE_LIGHT[1]}, ${TUBE_LIGHT[2]})`;
+    ctx.fill(cores);
+  }
+
+  // M23: 成長前線 (伸長中の管の先端) を、進行方向へ伸びる扇状のグラデードで
+  // 強調する。「探索している」方向が絵から読めるようにする。事前に1度だけ
+  // 焼いた扇スプライト (buildFanGlowSprite) を回転させて貼るだけにし、
+  // createRadialGradient をチップ毎・毎フレーム生成しない (M8 P3 と同じ手法)。
+  private drawGrowthFronts(ctx: CanvasRenderingContext2D, scale: number, offX: number, offY: number): void {
+    const tips = this.cachedGrowthTips!;
+    if (tips.length === 0) return;
+    const fanLen = Math.max(4, 5.5 * scale / 5.76);
+    const d = fanLen * 2;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    let count = 0;
+    for (const tip of tips) {
+      if (++count > GROWTH_FRONT_MAX) break;
+      const cx = offX + tip.pos.x * scale;
+      const cy = offY + tip.pos.y * scale;
+      const angle = Math.atan2(tip.dir.y, tip.dir.x);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.drawImage(this.growthFanSprite, -d / 2, -d / 2, d, d);
+      ctx.restore();
     }
     ctx.restore();
   }
@@ -1084,6 +1281,27 @@ function buildGlowSprite(color: [number, number, number]): HTMLCanvasElement {
   cx.fillStyle = grad;
   cx.beginPath();
   cx.arc(r, r, r, 0, Math.PI * 2);
+  cx.fill();
+  return c;
+}
+
+// M23 drawGrowthFronts: +x 方向 (中心から右向き) に開く扇形グローを一度だけ
+// 焼く。実際の描画時は translate+rotate してから必要な直径に drawImage する。
+function buildFanGlowSprite(color: [number, number, number], halfAngle: number): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = GLOW_SPRITE_SIZE;
+  c.height = GLOW_SPRITE_SIZE;
+  const cx = c.getContext('2d');
+  if (!cx) return c;
+  const r = GLOW_SPRITE_SIZE / 2;
+  const grad = cx.createRadialGradient(r, r, 0, r, r, r);
+  grad.addColorStop(0, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.4)`);
+  grad.addColorStop(1, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0)`);
+  cx.fillStyle = grad;
+  cx.beginPath();
+  cx.moveTo(r, r);
+  cx.arc(r, r, r, -halfAngle, halfAngle);
+  cx.closePath();
   cx.fill();
   return c;
 }
