@@ -30,6 +30,7 @@ import { assets, SPRITE_FAMILIES, type TileTextureName } from './assets.js';
 import { extractTerrainBlobs, SMALL_BLOB_MAX_CELLS } from './terrain-blobs.js';
 import { extractCoastline } from './coastline.js';
 import { traceChains, smoothChain, computeDegree, type Chain } from './vein-curves.js';
+import { scatterDecorations, type DecorPlacement } from './ecology-scatter.js';
 
 export interface RenderOptions {
   worldSize: number;
@@ -216,6 +217,7 @@ export class CanvasRenderer {
   private prevStageId: StageId | null = null;
   private prevSpritesReady = false;
   private prevWaterReady = false;
+  private prevFoodReady = false;
 
   // M21: タイルテクスチャの CanvasPattern はテクスチャ名ごとに1度だけ作る
   // (createPattern をフレームごとに呼ばない)。setTransform で毎フレーム
@@ -225,6 +227,11 @@ export class CanvasRenderer {
   private readonly startTime = typeof performance !== 'undefined' ? performance.now() : 0;
   private readonly reducedMotion =
     typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // M24: 小物の散布はステージの地形 (moisture/obstacle/water) だけに依存する
+  // 決定的な結果なので、ステージが変わらない限り使い回す。
+  private cachedDecorStageId: StageId | null = null;
+  private cachedDecorations: DecorPlacement[] | null = null;
 
   // M8 P3 drawEdges: nodeMap とバケツ分けは state (nodes/edges の参照) が
   // 変わらない限り使い回す。RAF は Worker のスナップショット送信より
@@ -331,7 +338,7 @@ export class CanvasRenderer {
     // 2. 場系を焼いて貼る。view (カメラのズーム/パン) に応じて
     //    fieldCanvas (常に世界全体を焼いた1枚) から必要な矩形だけを
     //    切り出して拡大する。zoom=1 のときは全体をそのまま貼るのと同じ。
-    const { spritesReady, waterReady } = this.paintFieldLayer(env, bio, stageId);
+    const { spritesReady, waterReady, foodReady } = this.paintFieldLayer(env, bio, stageId);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     const fieldScale = this.opts.fieldSize / this.opts.worldSize;
@@ -354,6 +361,17 @@ export class CanvasRenderer {
     //     従来通りの岩色を焼くので、ここでは何も描かない。
     if (spritesReady) {
       this.drawRockSprites(ctx, env, scale, offX, offY);
+    }
+
+    // 2.6 M24: 生態感の小物 (キノコ/苔の茂み/朽木) をステージ地形から
+    //     決定的に散らす。アセット未ロードならスキップ (何も描かない=現状維持)。
+    if (spritesReady) {
+      this.drawEcologyDecor(ctx, env, stageId, scale, offX, offY);
+    }
+
+    // 2.7 M24: エサのオーブ化 (緑のぼかし光→光る果実)。
+    if (foodReady) {
+      this.drawFoodOrbs(ctx, env, scale, offX, offY);
     }
 
     // 3. ステージの装飾アイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
@@ -402,7 +420,7 @@ export class CanvasRenderer {
     thumb.height = size;
     const tctx = thumb.getContext('2d');
     if (!tctx) return Promise.resolve('');
-    const { spritesReady, waterReady } = this.paintFieldLayer(env, bio, stageId);
+    const { spritesReady, waterReady, foodReady } = this.paintFieldLayer(env, bio, stageId);
     tctx.fillStyle = rgb(STAGE_BG[stageId].inner);
     tctx.fillRect(0, 0, size, size);
     tctx.imageSmoothingEnabled = true;
@@ -410,6 +428,8 @@ export class CanvasRenderer {
     const scale = size / this.opts.worldSize;
     if (waterReady) this.drawWaterBodies(tctx, env, stageId, scale, 0, 0);
     if (spritesReady) this.drawRockSprites(tctx, env, scale, 0, 0);
+    if (spritesReady) this.drawEcologyDecor(tctx, env, stageId, scale, 0, 0);
+    if (foodReady) this.drawFoodOrbs(tctx, env, scale, 0, 0);
     this.drawLandmarks(tctx, landmarks, stageId, scale, 0, 0);
     this.drawEdges(tctx, state, scale, 0, 0);
     this.drawNodes(tctx, state, scale, 0, 0);
@@ -420,7 +440,7 @@ export class CanvasRenderer {
 
   // 戻り値: 岩スプライト/湖岸線用アセットがロード済みか (呼び出し側が
   // drawRockSprites / drawWaterBodies を呼ぶかどうかの判断に使う)。
-  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): { spritesReady: boolean; waterReady: boolean } {
+  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): { spritesReady: boolean; waterReady: boolean; foodReady: boolean } {
     const data = this.fieldImage.data;
     const bioData = bio.field.data;
     const nutData = env.nutrients.data;
@@ -457,7 +477,11 @@ export class CanvasRenderer {
     // 全面再計算する。
     const waterReady = assets.getTexture('water-surface') !== null;
     const waterReadyChanged = this.prevWaterReady !== waterReady;
-    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged || spritesReadyChanged || waterReadyChanged;
+    // M24: エサのオーブ化が使えるようになった/使えなくなった瞬間も同様に
+    // 全面再計算する。
+    const foodReady = assets.getSpriteSingle('food-orb-orange') !== null;
+    const foodReadyChanged = this.prevFoodReady !== foodReady;
+    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged || spritesReadyChanged || waterReadyChanged || foodReadyChanged;
     const rockColor = STAGE_ROCK_COLOR[stageId];
     const bgInner = STAGE_BG[stageId].inner;
     // GRAIN_ALPHA を先に掛けておき、ホットループ内では乗算1回で済ませる。
@@ -517,8 +541,9 @@ export class CanvasRenderer {
           a = Math.max(a, fa);
         }
 
-        // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)
-        if (nut > 0.05) {
+        // 食料 — 仄かな緑の発光 (additive ぽい弱い乗せ)。
+        // M24: エサのオーブ化が使えるときは drawFoodOrbs に描画を譲る。
+        if (nut > 0.05 && !foodReady) {
           const k = Math.min(1, nut * 0.6);
           const fa = 0.18 + k * 0.32;
           [r, g, b] = blend(r, g, b, FOOD_GLOW[0], FOOD_GLOW[1], FOOD_GLOW[2], fa);
@@ -646,7 +671,8 @@ export class CanvasRenderer {
     this.prevStageId = stageId;
     this.prevSpritesReady = spritesReady;
     this.prevWaterReady = waterReady;
-    return { spritesReady, waterReady };
+    this.prevFoodReady = foodReady;
+    return { spritesReady, waterReady, foodReady };
   }
 
   // M21: ステージごとの地面タイルテクスチャをスクリーン解像度のまま
@@ -740,10 +766,70 @@ export class CanvasRenderer {
       ctx.stroke();
       ctx.restore();
 
+      drawRoundSprite(ctx, sprite, cx, cy, sizePx, rot);
+    }
+  }
+
+  // M24: キノコ/苔の茂み/朽木をステージ地形から決定的に散らす。粘菌が届いて
+  // 栄養を食べ尽くした場所のキノコは、その場所の現在の nutrients 値に
+  // 応じて次第に透明になり消える (nutrients 消費と連動、sim 側は無改修)。
+  private drawEcologyDecor(ctx: CanvasRenderingContext2D, env: GridEnvironment, stageId: StageId, scale: number, offX: number, offY: number): void {
+    if (this.cachedDecorStageId !== stageId || this.cachedDecorations === null) {
+      this.cachedDecorStageId = stageId;
+      this.cachedDecorations = scatterDecorations(
+        env.moisture.data, env.obstacle.data, env.water.data, this.opts.fieldSize, this.opts.worldSize,
+      );
+    }
+    const fieldSize = this.opts.fieldSize;
+    const worldSize = this.opts.worldSize;
+    const nutData = env.nutrients.data;
+    const spriteSize = Math.max(3, 4.2 * scale / 5.76);
+
+    for (const d of this.cachedDecorations) {
+      const family = d.kind === 'mushroom' ? 'mushroom-red' : d.kind === 'moss-clump' ? 'moss-clump' : null;
+      const sprite = family
+        ? assets.getSprite(family, d.variant)
+        : assets.getSpriteSingle('driftwood');
+      if (!sprite) continue;
+
+      let alpha = 1;
+      if (d.kind === 'mushroom') {
+        // 粘菌がこの場所の栄養を食べ尽くすにつれ、キノコも薄くなって消える。
+        const fx = Math.min(fieldSize - 1, Math.max(0, Math.round((d.pos.x / worldSize) * fieldSize)));
+        const fy = Math.min(fieldSize - 1, Math.max(0, Math.round((d.pos.y / worldSize) * fieldSize)));
+        const nut = nutData[fy * fieldSize + fx] ?? 0;
+        alpha = Math.max(0, Math.min(1, nut / 0.25));
+        if (alpha <= 0.02) continue;
+      }
+
+      const cx = offX + d.pos.x * scale;
+      const cy = offY + d.pos.y * scale;
       ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(rot);
-      ctx.drawImage(sprite, -sizePx / 2, -sizePx / 2, sizePx, sizePx);
+      ctx.globalAlpha = alpha;
+      drawRoundSprite(ctx, sprite, cx, cy, spriteSize, d.rotation);
+      ctx.restore();
+    }
+  }
+
+  // M24: エサ (nutrients フィールド) の連結成分ごとに food-orb スプライトを
+  // 配置する。旧: 緑のぼかし光。ブロブは毎フレーム現在の nutrients から
+  // 再抽出するので、吸収されて小さくなるにつれ自然にオーブも縮む。
+  // しきい値は「置いた直後の広いガウス裾野まで拾わない」よう、見た目の
+  // 密な核だけが残る高さに置く (実測: 0.08 だと裾野が広すぎて巨大化した)。
+  private drawFoodOrbs(ctx: CanvasRenderingContext2D, env: GridEnvironment, scale: number, offX: number, offY: number): void {
+    const blobs = extractTerrainBlobs(env.nutrients.data, this.opts.fieldSize, this.opts.worldSize, 0.18);
+    for (const blob of blobs) {
+      const name = hashNoise(Math.round(blob.cx * 11), Math.round(blob.cy * 11)) < 0.5 ? 'food-orb-orange' : 'food-orb-green';
+      const sprite = assets.getSpriteSingle(name);
+      if (!sprite) continue;
+      const cx = offX + blob.cx * scale;
+      const cy = offY + blob.cy * scale;
+      const sizePx = Math.min(28, Math.max(3, blob.radiusWorld * 1.3 * scale));
+      // 小さいブロブ (吸収され尽くす直前) ほど薄く見せる。
+      const alpha = Math.max(0.25, Math.min(1, blob.radiusWorld / 2));
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      drawRoundSprite(ctx, sprite, cx, cy, sizePx, 0);
       ctx.restore();
     }
   }
@@ -1304,6 +1390,21 @@ function buildFanGlowSprite(color: [number, number, number], halfAngle: number):
   cx.closePath();
   cx.fill();
   return c;
+}
+
+// M21/M24: 現物のスプライト素材 (プレースホルダ品質、CREDITS.md 参照) は
+// コンタクトシートからの切り出しで透過縁が無く、正方形の背景ごと不透明に
+// 焼き付いている。そのまま drawImage すると「四角い写真」に見えてしまう
+// ため、円形にクリップしてから描き自然な物体に近づける。
+function drawRoundSprite(ctx: CanvasRenderingContext2D, sprite: CanvasImageSource, cx: number, cy: number, size: number, rotation: number): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, size / 2, size / 2, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.drawImage(sprite, -size / 2, -size / 2, size, size);
+  ctx.restore();
 }
 
 function blend(r: number, g: number, b: number, r2: number, g2: number, b2: number, a2: number): [number, number, number] {

@@ -223,6 +223,31 @@ test('M23: 最大ズームでも脈の発光が残り、描画コストが予算
   expect(errors).toEqual([]);
 });
 
+test('M24: 皿ステージ Day 0 でエサがオーブとして見え、コンソールエラーが出ない', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+
+  // エサはランダム配置なので、稀に画面外に寄ってしまう回もある。
+  // 皿を引き直して数回まで再試行する (M22 と同じ考え方)。
+  let orbPixels = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt === 0) {
+      await page.goto('/');
+    } else {
+      await page.click('#reset');
+    }
+    await waitForReady(page);
+    await page.waitForTimeout(300);
+    // render.ts の food-orb 系の暖色 (橙のオーブ、実測平均 rgb≈(150,90,40) 付近
+    // の飽和した暖色域) に近いピクセルの存在を検査する。
+    orbPixels = await countPixelsNear(page, [190, 120, 55], 55);
+    if (orbPixels > 15) break;
+  }
+  expect(orbPixels).toBeGreaterThan(15);
+
+  expect(errors).toEqual([]);
+});
+
 test('M21: 最大ズームでも地面のディテールが無地グラデーションに潰れない', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
