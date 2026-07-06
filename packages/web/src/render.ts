@@ -27,6 +27,7 @@ import type { StageId } from './stages.js';
 import { MultiLayerDirtyTracker } from './field-diff.js';
 import { assets, SPRITE_FAMILIES, type TileTextureName } from './assets.js';
 import { extractTerrainBlobs, SMALL_BLOB_MAX_CELLS } from './terrain-blobs.js';
+import { extractCoastline } from './coastline.js';
 
 export interface RenderOptions {
   worldSize: number;
@@ -136,6 +137,18 @@ const DAPPLE_MAX_ALPHA = 0.34;
 // M21: 岩スプライトの見かけの大きさ (obstacle 連結成分の概算半径に対する倍率)。
 const ROCK_SPRITE_SCALE = 2.4;
 
+// M22: 水面テクスチャの1タイルが表すワールド単位。
+const WATER_TILE_WORLD_SIZE = 11;
+// 水面パターンのゆっくりとした平行移動 (ワールド単位/ミリ秒)。
+// prefers-reduced-motion のときは 0 にしてアニメを止める。
+const WATER_DRIFT_SPEED = 0.0006;
+// 岸辺の帯の太さ (ワールド単位)。内側=浅瀬 (明るい水色)、外側=湿った砂。
+const SHORE_BAND_WORLD = 1.6;
+const SHORE_SHALLOW_COLOR = 'rgba(190, 225, 232, 0.5)';
+const SHORE_WET_SAND_COLOR = 'rgba(150, 130, 95, 0.55)';
+// 岸線に沿って葦を置く間隔 (ワールド単位)。
+const REED_SPACING_WORLD = 6;
+
 // M16.5: 地形テクスチャ (苔の粒ノイズ・岩のまだら・水面の揺らぎ) 用の
 // 軽量な決定的疑似乱数。整数座標だけから求まるので追加のフィールドデータも
 // state も要らず、Math.sin 等より安い整数演算のみ (毎ピクセル呼ばれるため
@@ -176,11 +189,16 @@ export class CanvasRenderer {
   private prevShowHeat: boolean | null = null;
   private prevStageId: StageId | null = null;
   private prevSpritesReady = false;
+  private prevWaterReady = false;
 
   // M21: タイルテクスチャの CanvasPattern はテクスチャ名ごとに1度だけ作る
   // (createPattern をフレームごとに呼ばない)。setTransform で毎フレーム
   // カメラ位置/ズームに追従させる。
   private patternCache = new Map<TileTextureName, CanvasPattern>();
+  // M22: 水面パターンのゆっくりとした揺らぎ用の起点時刻。
+  private readonly startTime = typeof performance !== 'undefined' ? performance.now() : 0;
+  private readonly reducedMotion =
+    typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // M8 P3 drawEdges: nodeMap とバケツ分けは state (nodes/edges の参照) が
   // 変わらない限り使い回す。RAF は Worker のスナップショット送信より
@@ -264,7 +282,7 @@ export class CanvasRenderer {
     // 2. 場系を焼いて貼る。view (カメラのズーム/パン) に応じて
     //    fieldCanvas (常に世界全体を焼いた1枚) から必要な矩形だけを
     //    切り出して拡大する。zoom=1 のときは全体をそのまま貼るのと同じ。
-    const spritesReady = this.paintFieldLayer(env, bio, stageId);
+    const { spritesReady, waterReady } = this.paintFieldLayer(env, bio, stageId);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     const fieldScale = this.opts.fieldSize / this.opts.worldSize;
@@ -274,6 +292,13 @@ export class CanvasRenderer {
       view.worldSpan * fieldScale, view.worldSpan * fieldScale,
       left, top, side, side,
     );
+
+    // 2.4 M22: 水場の再設計 (「水色の丸」の代わりに湖岸線のある水域)。
+    //     アセット未ロードの間は paintFieldLayer が従来通りの水色を
+    //     焼くので、ここでは何も描かない。
+    if (waterReady) {
+      this.drawWaterBodies(ctx, env, stageId, scale, offX, offY);
+    }
 
     // 2.5 M21: 岩場のスプライト化 (ぼかし塊の代わりに rock-cluster/
     //     small-stone を配置)。アセット未ロードの間は paintFieldLayer が
@@ -328,12 +353,13 @@ export class CanvasRenderer {
     thumb.height = size;
     const tctx = thumb.getContext('2d');
     if (!tctx) return Promise.resolve('');
-    const spritesReady = this.paintFieldLayer(env, bio, stageId);
+    const { spritesReady, waterReady } = this.paintFieldLayer(env, bio, stageId);
     tctx.fillStyle = rgb(STAGE_BG[stageId].inner);
     tctx.fillRect(0, 0, size, size);
     tctx.imageSmoothingEnabled = true;
     tctx.drawImage(this.fieldCanvas, 0, 0, size, size);
     const scale = size / this.opts.worldSize;
+    if (waterReady) this.drawWaterBodies(tctx, env, stageId, scale, 0, 0);
     if (spritesReady) this.drawRockSprites(tctx, env, scale, 0, 0);
     this.drawLandmarks(tctx, landmarks, stageId, scale, 0, 0);
     this.drawEdges(tctx, state, scale, 0, 0);
@@ -343,9 +369,9 @@ export class CanvasRenderer {
     });
   }
 
-  // 戻り値: 岩スプライト用アセットがロード済みか (呼び出し側が
-  // drawRockSprites を呼ぶかどうかの判断に使う)。
-  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): boolean {
+  // 戻り値: 岩スプライト/湖岸線用アセットがロード済みか (呼び出し側が
+  // drawRockSprites / drawWaterBodies を呼ぶかどうかの判断に使う)。
+  private paintFieldLayer(env: GridEnvironment, bio: BiomassField, stageId: StageId): { spritesReady: boolean; waterReady: boolean } {
     const data = this.fieldImage.data;
     const bioData = bio.field.data;
     const nutData = env.nutrients.data;
@@ -378,7 +404,11 @@ export class CanvasRenderer {
     // このチェックのコストはほぼゼロ)。
     const spritesReady = assets.getSprite('rock-cluster', 1) !== null;
     const spritesReadyChanged = this.prevSpritesReady !== spritesReady;
-    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged || spritesReadyChanged;
+    // M22: 湖岸線描画が使えるようになった/使えなくなった瞬間も同様に
+    // 全面再計算する。
+    const waterReady = assets.getTexture('water-surface') !== null;
+    const waterReadyChanged = this.prevWaterReady !== waterReady;
+    const full = !this.tracker.initialized || maxBioJumped || heatChanged || stageChanged || spritesReadyChanged || waterReadyChanged;
     const rockColor = STAGE_ROCK_COLOR[stageId];
     const bgInner = STAGE_BG[stageId].inner;
     // GRAIN_ALPHA を先に掛けておき、ホットループ内では乗算1回で済ませる。
@@ -492,7 +522,9 @@ export class CanvasRenderer {
         // 水と分かるよう青で上書きする (通行不能な地形という点は obstacle と共通)。
         // M16.5: 深みのグラデーション (揺らぎノイズで深浅を表現) + 縁の明るい
         // ライン (境界付近の値だけ明るい水色にする) を足す。
-        if (wb > 0.5) {
+        // M22: 湖岸線描画 (drawWaterBodies) が使えるときは、ここでの
+        // 「水色の丸」塗りつぶしをやめて岸線ベースの描画に譲る。
+        if (wb > 0.5 && !waterReady) {
           const depth = Math.min(1, (wb - 0.5) * 2.2); // 境界付近ほど浅い (0) 、内側ほど深い (1)
           const ripple = hashNoise(x - 3000, y - 3000) * 0.3;
           const t = Math.min(1, depth + ripple * 0.3);
@@ -564,7 +596,8 @@ export class CanvasRenderer {
     this.prevShowHeat = this.opts.showHeat;
     this.prevStageId = stageId;
     this.prevSpritesReady = spritesReady;
-    return spritesReady;
+    this.prevWaterReady = waterReady;
+    return { spritesReady, waterReady };
   }
 
   // M21: ステージごとの地面タイルテクスチャをスクリーン解像度のまま
@@ -623,7 +656,17 @@ export class CanvasRenderer {
   // スプライトを配置する。接地影 (AO) と輪郭の淡い明暗エッジで「陰影と
   // エッジのある岩」を表現する (旧: 96×96 のぼかし色塊)。
   private drawRockSprites(ctx: CanvasRenderingContext2D, env: GridEnvironment, scale: number, offX: number, offY: number): void {
-    const blobs = extractTerrainBlobs(env.obstacle.data, this.opts.fieldSize, this.opts.worldSize);
+    // M14 の placeWaterBody は water と obstacle に同じ形を重ね書きするため、
+    // 生の obstacle をそのまま使うと湖の上にも岩スプライトが乗って水域を
+    // 隠してしまう。水域 (M22 の drawWaterBodies が別途担当) の分は除外する。
+    const obData = env.obstacle.data;
+    const waterData = env.water.data;
+    const rockOnly = new Float32Array(obData.length);
+    for (let i = 0; i < obData.length; i++) {
+      const ob = obData[i] ?? 0;
+      rockOnly[i] = ob > 0.5 && (waterData[i] ?? 0) <= 0.5 ? ob : 0;
+    }
+    const blobs = extractTerrainBlobs(rockOnly, this.opts.fieldSize, this.opts.worldSize);
     for (const blob of blobs) {
       const family = blob.cellCount <= SMALL_BLOB_MAX_CELLS ? 'small-stone' : 'rock-cluster';
       const count = SPRITE_FAMILIES[family] ?? 1;
@@ -653,6 +696,102 @@ export class CanvasRenderer {
       ctx.rotate(rot);
       ctx.drawImage(sprite, -sizePx / 2, -sizePx / 2, sizePx, sizePx);
       ctx.restore();
+    }
+  }
+
+  // M22: 「水色の丸」の代わりに湖岸線 (marching squares) ベースの水域を描く。
+  // 内側を water-surface パターンで塗り、岸に沿って浅瀬 (内側) / 湿った砂
+  // (外側) の帯を重ねる。wetland/continent は岸線上に葦も散らす。
+  private drawWaterBodies(ctx: CanvasRenderingContext2D, env: GridEnvironment, stageId: StageId, scale: number, offX: number, offY: number): void {
+    const { loops } = extractCoastline(env.water.data, this.opts.fieldSize, this.opts.worldSize);
+    if (loops.length === 0) return;
+
+    const img = assets.getTexture('water-surface');
+
+    for (const loop of loops) {
+      if (loop.length < 3) continue;
+      const path = new Path2D();
+      const p0 = loop[0]!;
+      path.moveTo(offX + p0.x * scale, offY + p0.y * scale);
+      for (let i = 1; i < loop.length; i++) {
+        const p = loop[i]!;
+        path.lineTo(offX + p.x * scale, offY + p.y * scale);
+      }
+      path.closePath();
+
+      // 水面の塗り: パターンがあれば貼る (ゆっくり平行移動)、無ければ
+      // 深い水色の単色フォールバック (アセット未ロードの一時的な状態)。
+      ctx.save();
+      ctx.clip(path);
+      if (img && img.naturalWidth > 0) {
+        let pattern = this.patternCache.get('water-surface');
+        if (!pattern) {
+          const created = ctx.createPattern(img, 'repeat');
+          if (created) {
+            pattern = created;
+            this.patternCache.set('water-surface', pattern);
+          }
+        }
+        if (pattern) {
+          const tilePx = WATER_TILE_WORLD_SIZE * scale;
+          const s = tilePx / img.naturalWidth;
+          const drift = this.reducedMotion ? 0 : ((performance.now() - this.startTime) * WATER_DRIFT_SPEED) % WATER_TILE_WORLD_SIZE;
+          if (typeof DOMMatrix !== 'undefined' && pattern.setTransform) {
+            pattern.setTransform(new DOMMatrix().translate(offX + drift * scale, offY).scale(s, s));
+          }
+          ctx.fillStyle = pattern;
+        } else {
+          ctx.fillStyle = rgb(WATER_BODY_DEEP);
+        }
+      } else {
+        ctx.fillStyle = rgb(WATER_BODY_DEEP);
+      }
+      ctx.fill(path);
+      // M22: 現物のテクスチャ (プレースホルダ品質、CREDITS.md 参照) は
+      // 実測でかなり暗く、地形の陰と紛れて「水域」と読み取りにくい。
+      // パターンの質感を保ったまま、常に最低限の深い水色を保証する
+      // 半透明の色かぶせを重ねる (テクスチャ有無に関わらず判別できるように)。
+      ctx.fillStyle = `rgba(${WATER_BODY_DEEP[0]}, ${WATER_BODY_DEEP[1]}, ${WATER_BODY_DEEP[2]}, 0.45)`;
+      ctx.fill(path);
+      ctx.restore();
+
+      // 岸の帯: 内側 (浅瀬) は塗りつぶし内でクリップして重ね、外側
+      // (湿った砂) はクリップせずに岸線の外側へはみ出させる。
+      const bandPx = Math.max(1, SHORE_BAND_WORLD * scale);
+      ctx.save();
+      ctx.clip(path);
+      ctx.strokeStyle = SHORE_SHALLOW_COLOR;
+      ctx.lineWidth = bandPx * 2;
+      ctx.stroke(path);
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = SHORE_WET_SAND_COLOR;
+      ctx.lineWidth = bandPx * 1.4;
+      ctx.stroke(path);
+      ctx.restore();
+
+      if (stageId === 'wetland' || stageId === 'continent') {
+        this.drawShoreReeds(ctx, loop, scale, offX, offY);
+      }
+    }
+  }
+
+  // M22: 岸線上に一定間隔で葦を散らす (旧: ランドマーク座標のみ → 岸線サンプリング)。
+  private drawShoreReeds(ctx: CanvasRenderingContext2D, loop: { x: number; y: number }[], scale: number, offX: number, offY: number): void {
+    let acc = 0;
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i]!;
+      const b = loop[(i + 1) % loop.length]!;
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+      acc += segLen;
+      if (acc >= REED_SPACING_WORLD) {
+        acc = 0;
+        // このセグメント終端 (岸線上の決定的な点) に葦を1本描く。
+        if (hashNoise(Math.round(a.x * 4), Math.round(a.y * 4)) < 0.6) {
+          this.drawReeds(ctx, offX + a.x * scale, offY + a.y * scale, scale * 0.5);
+        }
+      }
     }
   }
 

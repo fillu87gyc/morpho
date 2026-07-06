@@ -97,6 +97,52 @@ async function centerBlockLumaStdDev(page: Page, blockSize = 48): Promise<number
   }, blockSize);
 }
 
+// 指定色に近い (Euclidean 距離が tolerance 以内) ピクセル数を数える。
+async function countPixelsNear(page: Page, rgb: [number, number, number], tolerance: number): Promise<number> {
+  return page.evaluate(({ rgb, tolerance }) => {
+    const canvas = document.getElementById('canvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let count = 0;
+    for (let i = 0; i < data.length; i += 4 * 3) {
+      const r = data[i] ?? 0, g = data[i + 1] ?? 0, b = data[i + 2] ?? 0;
+      const d = Math.hypot(r - rgb[0], g - rgb[1], b - rgb[2]);
+      if (d <= tolerance) count++;
+    }
+    return count;
+  }, { rgb, tolerance });
+}
+
+test('M22: 大陸ステージの水域に岸線・浅瀬・湿った砂の3トーンが見える', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
+  await page.goto('/');
+  await waitForReady(page);
+
+  // 大陸ステージの湖はランダム生成 (4〜7個、サイズも毎回変わる)。ごく稀に
+  // 岸帯の1色だけが数ピクセルを割ってしまう配置が出ることがあるため、
+  // 「petri へ戻して大陸を選び直す」= 地形を引き直して数回まで再試行する。
+  // M22 の岸帯配色 (render.ts の SHORE_SHALLOW_COLOR / SHORE_WET_SAND_COLOR /
+  // WATER_BODY_DEEP に対応)。旧「水色の丸ベタ」にはこの3系統が同時には
+  // 存在しない (深浅グラデーションのみ) ため、退行時はどの試行でも落ちる。
+  let shallow = 0, wetSand = 0, deep = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await page.selectOption('#stage-select', 'petri');
+    await page.selectOption('#stage-select', 'continent');
+    await page.waitForTimeout(800);
+    shallow = await countPixelsNear(page, [190, 225, 232], 28);
+    wetSand = await countPixelsNear(page, [150, 130, 95], 28);
+    deep = await countPixelsNear(page, [30, 70, 120], 40);
+    if (shallow > 5 && wetSand > 5 && deep > 5) break;
+  }
+
+  expect(shallow).toBeGreaterThan(5);
+  expect(wetSand).toBeGreaterThan(5);
+  expect(deep).toBeGreaterThan(5);
+
+  expect(errors).toEqual([]);
+});
+
 test('M21: 最大ズームでも地面のディテールが無地グラデーションに潰れない', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => localStorage.setItem('morpho.onboarded.v1', '1'));
