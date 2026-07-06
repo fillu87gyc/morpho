@@ -81,6 +81,31 @@ export function eraFor(input: EraInput): EraStatus {
   return { name: '胞子期', progress: clamp01(input.massKg / 0.3) };
 }
 
+// M27: ETA が「—」(見積もれないほど停滞) のときに出す、次の時代への残条件の
+// 明示テキスト。eraFor() と同じ優先順位で「まだ満たしていない条件」を1つ選ぶ
+// (day ゲートは他の条件を満たしていて初めて意味を持つので、条件そのものが
+// 未達なら条件側を、条件は満たしているが日数待ちならそちらを優先する)。
+export function describeEraBlocker(input: EraInput): string {
+  const status = eraFor(input);
+  if (status.name === '成熟期') return '';
+
+  if (status.name === '変形体期') {
+    if (!networksUnified(input)) return '条件: ネットワークをひとつに';
+    if (input.exploration < MATURE_EXPLORATION_REQUIRED) return '条件: 個体をさらに広げる';
+    return `条件: Day ${MATURE_MIN_DAY} まで経過`;
+  }
+
+  if (status.name === '拡散期') {
+    if (input.coloniesReached < PLASMODIUM_COLONIES_REQUIRED) return '条件: もう1拠点に到達';
+    if (input.massKg < PLASMODIUM_MASS_KG_REQUIRED) return '条件: 総質量を増やす';
+    return `条件: Day ${PLASMODIUM_MIN_DAY} まで経過`;
+  }
+
+  // 胞子期
+  if (input.coloniesReached < DIFFUSE_COLONIES_REQUIRED) return '条件: 最初の拠点に到達';
+  return `条件: Day ${DIFFUSE_MIN_DAY} まで経過`;
+}
+
 // M16: 時代の残り時間予測「次の時代まで あと mm:ss」。
 // EraStatus.progress を実時間軸でサンプリングした履歴から、進捗速度の
 // EWMA (指数移動平均) を取り、残り距離をその速度で割って ETA (ミリ秒) を

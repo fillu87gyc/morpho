@@ -6,14 +6,14 @@ import type { Tool, StageId, EvolutionLog } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
 import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
-import { allChallenges, type DailyChallengeTracker } from './challenges.js';
+import { allChallenges, isChallengeExpired, type DailyChallengeTracker } from './challenges.js';
 import type { Scoreboard } from './scoreboard.js';
 import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 import type { Album } from './album.js';
 import { allCatalogueEntries } from './catalogue.js';
 import type { CatalogueThumbs } from './catalogue-thumbs.js';
 import { starsOf, typeDescriptionFor } from './trait-labels.js';
-import { estimateEraEta, type EraSample } from './era.js';
+import { estimateEraEta, describeEraBlocker, type EraSample, type EraInput } from './era.js';
 import { formatMMSS, TICKS_PER_DAY } from './day-loop.js';
 import { filterByArea, type WorldEvent } from './world-events.js';
 import type { WorldView } from './camera.js';
@@ -281,7 +281,14 @@ export class Ui {
     setText(this.era, s.era.name);
     this.eraRing.style.setProperty('--era-progress', String(s.era.progress));
     this.eraRing.title = `次の時代まで ${pct(s.era.progress)}`;
-    this.renderEraEta(s.era.name, s.era.progress);
+    this.renderEraEta(s.era.name, s.era.progress, {
+      coloniesReached: s.world.coloniesReached,
+      massKg: s.world.massKg,
+      connectedNetworks: s.world.connectedNetworks,
+      sourceColonies: s.world.sourceColonies,
+      exploration: s.traits.exploration,
+      day: s.day,
+    });
     setText(this.stageName, s.stage.name);
     this.stageName.title = s.stage.description;
     if (this.lastStageId !== s.stage.id) {
@@ -328,7 +335,11 @@ export class Ui {
     setText(this.lineageGen, `現在 ${this.trackers.lineage.nextGeneration()}代目`);
 
     // M11: チャレンジ一覧 (3種常時表示、達成状況が変わったときだけ書き換える)
-    const chalKey = allChallenges().map((c) => `${c.kind}:${this.trackers.challenges.isCompleted(c.kind)}`).join(',');
+    // M27: 期限切れ状態も day に応じて変わるので key に含める。
+    const chalKey = allChallenges().map((c) => {
+      const done = this.trackers.challenges.isCompleted(c.kind);
+      return `${c.kind}:${done}:${isChallengeExpired(c, s.day, done)}`;
+    }).join(',');
     if (this.lastChalKey !== chalKey) {
       this.lastChalKey = chalKey;
       const completed = allChallenges().filter((c) => this.trackers.challenges.isCompleted(c.kind)).length;
@@ -336,6 +347,7 @@ export class Ui {
       this.chalList.innerHTML = '';
       for (const chal of allChallenges()) {
         const done = this.trackers.challenges.isCompleted(chal.kind);
+        const expired = isChallengeExpired(chal, s.day, done);
         const li = document.createElement('li');
         const title = document.createElement('div');
         title.className = 'challenge-title';
@@ -351,7 +363,8 @@ export class Ui {
         const status = document.createElement('span');
         status.className = 'challenge-status';
         status.classList.toggle('done', done);
-        status.textContent = done ? '達成済み ✓' : '挑戦中…';
+        status.classList.toggle('expired', expired);
+        status.textContent = done ? '達成済み ✓' : expired ? 'この皿では期限切れ — 次の皿で挑戦' : '挑戦中…';
         li.appendChild(title);
         li.appendChild(desc);
         li.appendChild(goal);
@@ -679,7 +692,7 @@ export class Ui {
   // M16: 時代の残り時間予測。2.5秒に1点、progress を実時間軸でサンプリング
   // する (毎フレームは不要 — sim tick の粒度からしても過剰)。時代名が変わった
   // ら履歴をリセットし、切替直後の古い速度で誤った ETA を出さないようにする。
-  private renderEraEta(eraName: string, progress: number): void {
+  private renderEraEta(eraName: string, progress: number, input: EraInput): void {
     if (this.lastEraNameForEta !== eraName) {
       this.lastEraNameForEta = eraName;
       this.eraSamples = [];
@@ -692,6 +705,11 @@ export class Ui {
       if (this.eraSamples.length > this.ERA_SAMPLE_MAX) this.eraSamples.shift();
     }
     const etaMs = estimateEraEta(this.eraSamples);
-    setText(this.eraEtaEl, etaMs === null ? '次の時代まで —' : `次の時代まで あと ${formatMMSS(etaMs / 1000)}`);
+    // M27: ETA が見積もれず「—」になるときは、代わりに残条件をそのまま示す
+    // (「胞子期のまま—」のような手がかりゼロの表示にしない)。
+    const text = etaMs === null
+      ? `次の時代まで ${describeEraBlocker(input) || '—'}`
+      : `次の時代まで あと ${formatMMSS(etaMs / 1000)}`;
+    setText(this.eraEtaEl, text);
   }
 }
