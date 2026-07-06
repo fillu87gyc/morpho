@@ -12,6 +12,8 @@ export * from './field/chunk-grid.js';
 export * from './env/environment.js';
 export * from './env/activity-field.js';
 export * from './env/biomass-field.js';
+// M25: 半無限ワールド向けのチャンク化 Environment (既存ステージは未使用)。
+export * from './env/chunked-environment.js';
 
 // イベント
 export * from './events/bus.js';
