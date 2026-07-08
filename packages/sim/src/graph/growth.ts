@@ -8,7 +8,7 @@
 
 import type { SimState, SimNode, SimEdge, Vec2, NodeId } from '../types.js';
 import type { Environment, GrowthContext } from '../env/environment.js';
-import type { BiomassField } from '../env/biomass-field.js';
+import type { BiomassFieldLike } from '../field/scalar-field.js';
 import type { SeededRNG } from '../rng.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
@@ -58,7 +58,7 @@ function findMergeTarget(nodes: SimNode[], pos: Vec2, radius: number, excludeId:
 // ── tip からの前進 (主機構) ──────────────────────────
 
 function growFromTip(
-  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassFieldLike, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
   tip: SimNode, parentEdge: SimEdge | null,
   parentActivity: number, parentStress: number,
@@ -174,7 +174,7 @@ function growFromTip(
 // 「枝分かれ」と違うのは、目的が「面を太くする」だけで、前進ではない点。
 
 function lateralBud(
-  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassFieldLike, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
   tip: SimNode, parentEdge: SimEdge,
 ): boolean {
@@ -246,7 +246,7 @@ export function reclaimDepletedSinks(
 // ── 公開 entry point ─────────────────────────────────
 
 export function growthStep(
-  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassFieldLike, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
 ): void {
   // 端点からの伸長

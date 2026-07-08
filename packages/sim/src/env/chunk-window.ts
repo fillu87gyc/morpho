@@ -16,6 +16,8 @@
 import type { Vec2 } from '../types.js';
 import { GridEnvironment } from './environment.js';
 import type { ChunkedGridEnvironment } from './chunked-environment.js';
+import type { ScalarField } from '../field/scalar-field.js';
+import type { ChunkedScalarField } from '../field/chunked-scalar-field.js';
 
 export interface ChunkWindowOptions {
   /** 窓が覆うワールド単位の一辺長。 */
@@ -62,6 +64,30 @@ export function bakeChunkWindow(
     }
   }
   return grid;
+}
+
+/**
+ * ChunkedActivityField/ChunkedBiomassField の窓 (origin からの span×span) を
+ * 既存の ActivityField/BiomassField 互換の密フィールドへ焼き出す
+ * (bakeChunkWindow の Activity/Biomass 版)。target は
+ * `new ActivityField(span, fieldSize)` 等、呼び出し側が窓の span/fieldSize に
+ * 合わせて構築済みのものを渡す (再利用/破棄の判断は呼び出し側の責務)。
+ */
+export function bakeScalarFieldWindow(
+  source: ChunkedScalarField,
+  origin: Vec2,
+  span: number,
+  target: ScalarField,
+): void {
+  const n = target.fieldSize;
+  const cell = span / n;
+  for (let j = 0; j < n; j++) {
+    const wy = origin.y + (j + 0.5) * cell;
+    for (let i = 0; i < n; i++) {
+      const wx = origin.x + (i + 0.5) * cell;
+      target.field.data[j * n + i] = source.sample({ x: wx, y: wy });
+    }
+  }
 }
 
 /**

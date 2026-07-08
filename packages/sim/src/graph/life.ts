@@ -5,8 +5,7 @@
 
 import type { SimState, SimEdge, Vec2 } from '../types.js';
 import type { Environment } from '../env/environment.js';
-import type { ActivityField } from '../env/activity-field.js';
-import type { BiomassField } from '../env/biomass-field.js';
+import type { ActivityFieldLike, BiomassFieldLike } from '../field/scalar-field.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
 import { type NodeIndex, buildDensityGrid, clamp01, crowdingAt } from './index-utils.js';
@@ -27,7 +26,7 @@ function tempSuitability(temperature: number, params: SimParams): number {
 // ── Activity: 場に書く → 拡散 → 各エッジが場を読んで自分を更新 ─
 
 export function updateActivity(
-  state: SimState, env: Environment, actField: ActivityField,
+  state: SimState, env: Environment, actField: ActivityFieldLike,
   params: SimParams, idx: NodeIndex,
 ): void {
   // 自身の activity を場に書き込む (伝播の源泉)
@@ -97,7 +96,7 @@ export function updateActivity(
 // 観測時には一本の線ではなく「面」として見える。
 
 export function updateBiomass(
-  state: SimState, bioField: BiomassField, params: SimParams, idx: NodeIndex,
+  state: SimState, bioField: BiomassFieldLike, params: SimParams, idx: NodeIndex,
 ): void {
   for (const e of state.edges) {
     const a = idx.byId.get(e.from), b = idx.byId.get(e.to);

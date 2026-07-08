@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createInitialState, seedSource, createRNG, ActivityField, BiomassField,
   EventBus, DEFAULT_PARAMS, run, step, createStepCache, ChunkedGridEnvironment,
-  GridEnvironment, type Vec2, type SimState,
+  GridEnvironment, ChunkedActivityField, ChunkedBiomassField, type Vec2, type SimState,
 } from '../src/index.js';
 import { reclaimDepletedSinks } from '../src/graph/growth.js';
 
@@ -48,11 +48,47 @@ function makeWildland(reclaim: number) {
   return { env, params, rng, act, bio, state, bus, cache };
 }
 
-function drive(w: ReturnType<typeof makeWildland>, ticks: number) {
+interface WildlandWorld {
+  env: ChunkedGridEnvironment;
+  params: typeof DEFAULT_PARAMS;
+  rng: ReturnType<typeof createRNG>;
+  act: Parameters<typeof step>[2];
+  bio: Parameters<typeof step>[3];
+  state: SimState;
+  bus: EventBus;
+  cache: ReturnType<typeof createStepCache>;
+}
+
+function drive(w: WildlandWorld, ticks: number) {
   for (let t = 1; t <= ticks; t++) {
     step(w.state, w.env, w.act, w.bio, w.params, w.rng, w.bus, w.cache);
     w.env.decay(0.0006, 0.0009, 0.0009, 0.0015);
   }
+}
+
+// makeWildland は ActivityField/BiomassField (worldSize 全体を覆う密フィールド)
+// を使っていた — チャンク化スカラー場 (chunked-scalar-field.test.ts) の追加で
+// 判明した通り、無限規模の worldSize ではこれが解像度を失い biomassPull が
+// 事実上効かなくなる。この対照はチャンク化した ChunkedActivityField/
+// ChunkedBiomassField を使い、正しい局所解像度のままでも同じ「reclaim ありは
+// 停滞しない」結論が成り立つことを確認する — game.ts が実際に配線するのは
+// こちらの構成になる。
+function makeWildlandChunked(reclaim: number) {
+  const env = new ChunkedGridEnvironment({
+    worldSize: WORLD, worldSeed: 99, chunkCells: CHUNK_CELLS, cellWorldSize: CELL,
+    generateTerrain: (_c, rng) => ({
+      foodPatches: [{ x: rng.range(4, CHUNK_W - 4), y: rng.range(4, CHUNK_W - 4), radius: 5, amount: 1.0 }],
+    }),
+  });
+  const params = { ...DEFAULT_PARAMS, forageReclaimThreshold: reclaim };
+  const rng = createRNG(99);
+  const act = new ChunkedActivityField();
+  const bio = new ChunkedBiomassField();
+  const state = createInitialState(99, WORLD);
+  seedSource(state, CENTER, 6);
+  const bus = new EventBus();
+  const cache = createStepCache();
+  return { env, params, rng, act, bio, state, bus, cache };
 }
 
 describe('reclaimDepletedSinks (単体)', () => {
@@ -130,5 +166,18 @@ describe('無限ステージの前線が停滞しない (M25 受け入れ)', () 
     expect(treatment.env.generatedChunkCount()).toBeGreaterThan(endChunks * 1.5);
     // 対照は後半でチャンク生成がほぼ止まる (前線が sink で詰まる)。
     expect(endChunks - midChunks).toBeLessThan(treatment.env.generatedChunkCount() / 3);
+  }, 60_000);
+});
+
+describe('チャンク化スカラー場でも同じ結論が成り立つ (実際に game.ts が配線する構成)', () => {
+  it('ChunkedActivityField/ChunkedBiomassField でも reclaim ありは伸び続ける', () => {
+    const w = makeWildlandChunked(0.3);
+    drive(w, 3000);
+    const midSpan = span(w.state), midChunks = w.env.generatedChunkCount();
+    drive(w, 5000);
+    const endSpan = span(w.state), endChunks = w.env.generatedChunkCount();
+    expect(endSpan).toBeGreaterThan(midSpan);
+    expect(endChunks).toBeGreaterThan(midChunks);
+    expect(endSpan).toBeGreaterThan(60);
   }, 60_000);
 });

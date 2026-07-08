@@ -13,8 +13,7 @@
 
 import type { SimState } from '../types.js';
 import type { Environment } from '../env/environment.js';
-import type { ActivityField } from '../env/activity-field.js';
-import type { BiomassField } from '../env/biomass-field.js';
+import type { ActivityFieldLike, BiomassFieldLike } from '../field/scalar-field.js';
 import type { SeededRNG } from '../rng.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
@@ -37,7 +36,7 @@ export function createStepCache(): StepCache {
 }
 
 export function step(
-  state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
+  state: SimState, env: Environment, actField: ActivityFieldLike, bioField: BiomassFieldLike,
   params: SimParams, rng: SeededRNG, bus: EventBus, cache: StepCache = createStepCache(),
 ): void {
   state.tick++;
@@ -63,7 +62,7 @@ export function step(
 }
 
 export function run(
-  state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
+  state: SimState, env: Environment, actField: ActivityFieldLike, bioField: BiomassFieldLike,
   params: SimParams, rng: SeededRNG, bus: EventBus, ticks: number,
 ): void {
   const cache = createStepCache();
