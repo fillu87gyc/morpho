@@ -109,6 +109,7 @@ const STAGE_BG: Record<StageId, { inner: [number, number, number]; outer: [numbe
   ruins:     { inner: [112, 96, 74], outer: [62, 52, 40] },  // 風化した石材
   wetland:   { inner: [70, 96, 78],  outer: [38, 54, 44] },  // 湿った苔
   continent: { inner: [78, 94, 86],  outer: [40, 50, 46] },  // 海沿いの陸地
+  wildland:  { inner: [78, 94, 86],  outer: [40, 50, 46] },  // 大陸の延長 (どこまでも続く陸地)
 };
 
 const STAGE_ROCK_COLOR: Record<StageId, [number, number, number]> = {
@@ -118,6 +119,7 @@ const STAGE_ROCK_COLOR: Record<StageId, [number, number, number]> = {
   ruins:     [180, 154, 116], // 風化した石材 (暖かいベージュ)
   wetland:   [102, 110, 96],
   continent: [124, 120, 108],
+  wildland:  [124, 120, 108],
 };
 
 // M14: 大陸ステージの水域 (通行不能な水面)。obstacle の石色より青く、
@@ -136,6 +138,7 @@ const TILE_TEXTURE_BY_STAGE: Record<StageId, TileTextureName> = {
   ruins: 'stone-ruins',
   wetland: 'moss-ground',
   continent: 'moss-ground',
+  wildland: 'moss-ground',
 };
 // タイル画像1枚がワールド座標で何単位分を表すか。値が大きいほど1枚が
 // 大きく引き伸ばされて見える (荒くなる) が継ぎ目は目立ちにくくなる。

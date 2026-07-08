@@ -179,6 +179,11 @@ function loop(): void {
       events: game.events(),
       evolution: game.evolution(),
       perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed },
+      // M25: この snapshot が反映する tick() 呼び出し群の間に窓が動いた量。
+      // dirty (=この回で実際に snapshot を送る) のときだけ消費する —
+      // 送らない回で消費すると、次に実際に送られる snapshot にその分の
+      // シフトが乗らずカメラがずれる。
+      windowShift: game.consumeWindowShift(),
     }, [nodesBuf.buffer, edgesBuf.buffer]);
     dirty = false;
   }

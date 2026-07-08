@@ -12,10 +12,12 @@ import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, createStepCache, computeTraits,
   createGenome, createChildGenome, applyGenome, computeIndividuality, classifyIndividual,
+  ChunkedGridEnvironment, ChunkedActivityField, ChunkedBiomassField,
+  bakeChunkWindow, bakeScalarFieldWindow, followWindowOrigin,
   type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
   type Genome, type Individuality, type IndividualTypeInfo, type StepCache,
 } from '@morpho/sim';
-import { STAGES, type StageId, type StageConfig } from './stages.js';
+import { STAGES, WILDLAND_CHUNK_CELLS, type StageId, type StageConfig } from './stages.js';
 import { computeQuests, type QuestStatus } from './quests.js';
 import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 import { TICKS_PER_DAY } from './day-loop.js';
@@ -89,6 +91,20 @@ export type GameSnapshot = FastSnapshot & DerivedSnapshot;
 
 export const WORLD = 100;
 export const FIELD = 96;
+
+// M25: 「原野」(半無限ワールド) 専用の定数。
+// WILDLAND_WORLD_SIZE は growth.ts の worldMargin 境界判定に実用上ひっかから
+// ない程度に大きい値 (実質「無限」)。窓の一辺は既存ステージと同じ WORLD を
+// 使う — Camera/Minimap が起動時に一度だけ game.worldSize (=WORLD) で構築
+// され、以後ステージを切り替えても再構築されない前提を尊重するため、
+// 「原野」もこの同じ WORLD をローカル座標系の広さとして扱う (窓が前線を
+// 追って実座標側を平行移動することで、無限に広い土地を同じ大きさの窓から
+// 覗き続ける)。
+const WILDLAND_WORLD_SIZE = 1_000_000;
+const WILDLAND_CENTER: Vec2 = { x: WILDLAND_WORLD_SIZE / 2, y: WILDLAND_WORLD_SIZE / 2 };
+// 窓の bbox が縁からこの割合以内に近づいたら再センタリングする
+// (chunk-window.ts の followWindowOrigin と同じ意味、値は経験的に選定)。
+const WILDLAND_REBAKE_MARGIN = 0.25;
 
 // M6: 単一 source ではなく、大マップに複数のコロニー (群体) を離して配置する。
 // ズームアウト (zoom=1) すると全コロニーを見渡せ、ズームインすると
@@ -186,6 +202,28 @@ export class Game {
   // (= 一度設置した拠点は「到達対象」として残す)。
   private coloniesTotal = 6;
 
+  // M25: 「原野」(半無限ワールド) 専用。stage.infinite でないステージでは
+  // 全て null のまま — この節を触らない限り既存6ステージの挙動は完全に不変。
+  //
+  // this.env/act/bio (上の public フィールド) は常に「今の窓だけを覆う密な
+  // 表示用スナップショット」であり続ける (既存6ステージではそれが実体その
+  // ものと一致するので追加コストは無い)。実際の無限シミュレーションは
+  // chunkEnv/chunkAct/chunkBio (ChunkedGridEnvironment 系) が担い、tick() の
+  // 最後に windowOrigin 周辺だけを this.env/act/bio へ焼き直す。ツール配置
+  // (apply) はこの chunk* 側へ直接書く — 密窓へ書いても次の焼き直しで
+  // 消えてしまうため。
+  private chunkEnv: ChunkedGridEnvironment | null = null;
+  private chunkAct: ChunkedActivityField | null = null;
+  private chunkBio: ChunkedBiomassField | null = null;
+  // 窓 (this.env 等、ローカル座標 0..WORLD) の左上に対応する、chunkEnv 側の
+  // 実座標。ノード位置は sim 内では実座標のまま保持し、表示用スナップショット
+  // (snapshotFast の state) だけをこの値で平行移動する。
+  private windowOrigin: Vec2 = { x: 0, y: 0 };
+  // 前線を追って窓が再センタリングされた量の累積 (main.ts がカメラを同じ量
+  // だけずらして「窓が動いた」ことを見た目に響かせないための差分)。
+  // consumeWindowShift() で1回読むと 0 に戻る。
+  private windowShiftDelta: Vec2 | null = null;
+
   constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome) {
     this.seed = seed;
     this.reset(seed, stageId, parentGenome);
@@ -204,30 +242,59 @@ export class Game {
       ? createChildGenome(parentGenome, this.rng, mutationScaleFor(this.stage))
       : createGenome(this.rng);
     this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
+    this.undo = new UndoStack(10);
+    this.bus = new EventBus();
+    this.stepCache = createStepCache();
+    // 表示用の密フィールド (this.env/act/bio) は無限/既存どちらのステージでも
+    // 必ずこの大きさで作る — 無限ステージは以後これを「窓」として毎tick焼き
+    // 直し、既存ステージはこれ自体が sim の実体になる。
     this.env = new GridEnvironment({
       worldSize: WORLD, fieldSize: FIELD,
       baseMoisture: this.stage.baseMoisture, baseBrightness: this.stage.baseBrightness,
       baseTemperature: this.stage.baseTemperature,
     });
-    this.undo = new UndoStack(10);
     this.act = new ActivityField(WORLD, FIELD);
     this.bio = new BiomassField(WORLD, FIELD);
-    this.bus = new EventBus();
-    this.state = createInitialState(seed, WORLD);
-    this.stepCache = createStepCache();
 
-    // M14: 大陸ステージは worldPoints() で拠点を手続き生成する (rng は genome の
-    // あとに消費するので、既存5ステージの rng 消費順には影響しない)。
-    const wp = this.stage.worldPoints?.(this.rng, WORLD);
-    this.sourcePoints = wp?.sources ?? DEFAULT_SOURCE_POINTS;
-    this.foodPoints = wp?.food ?? DEFAULT_FOOD_POINTS;
+    if (this.stage.infinite) {
+      const chunkTerrain = this.stage.chunkTerrain;
+      this.chunkEnv = new ChunkedGridEnvironment({
+        worldSize: WILDLAND_WORLD_SIZE, worldSeed: seed,
+        chunkCells: WILDLAND_CHUNK_CELLS, cellWorldSize: 1,
+        baseMoisture: this.stage.baseMoisture, baseBrightness: this.stage.baseBrightness,
+        baseTemperature: this.stage.baseTemperature,
+        generateTerrain: chunkTerrain ? (coord, rng, worldSeed) => chunkTerrain(coord, rng, worldSeed) : undefined,
+      });
+      this.chunkAct = new ChunkedActivityField(WILDLAND_CHUNK_CELLS, 1);
+      this.chunkBio = new ChunkedBiomassField(WILDLAND_CHUNK_CELLS, 1);
+      this.state = createInitialState(seed, WILDLAND_WORLD_SIZE);
+      this.sourcePoints = [WILDLAND_CENTER];
+      this.foodPoints = []; // M27 の栄養再生は使わない (chunkTerrain が代わりに供給する)
+      seedSource(this.state, WILDLAND_CENTER, 6);
+      // 窓 (ローカル座標 0..WORLD) の中心に種が来るよう初期原点を決める。
+      this.windowOrigin = { x: WILDLAND_CENTER.x - WORLD / 2, y: WILDLAND_CENTER.y - WORLD / 2 };
+      this.windowShiftDelta = null;
+      this.rebakeWildlandWindow();
+      this.landmarks = [];
+    } else {
+      this.chunkEnv = null; this.chunkAct = null; this.chunkBio = null;
+      this.windowOrigin = { x: 0, y: 0 };
+      this.windowShiftDelta = null;
+      this.state = createInitialState(seed, WORLD);
 
-    for (const p of this.sourcePoints) {
-      clearAroundSource(this.env, p, 4);
-      seedSource(this.state, p, 6);
+      // M14: 大陸ステージは worldPoints() で拠点を手続き生成する (rng は genome の
+      // あとに消費するので、既存5ステージの rng 消費順には影響しない)。
+      const wp = this.stage.worldPoints?.(this.rng, WORLD);
+      this.sourcePoints = wp?.sources ?? DEFAULT_SOURCE_POINTS;
+      this.foodPoints = wp?.food ?? DEFAULT_FOOD_POINTS;
+
+      for (const p of this.sourcePoints) {
+        clearAroundSource(this.env, p, 4);
+        seedSource(this.state, p, 6);
+      }
+      for (const f of this.foodPoints) this.env.placeFood(f.pos, f.radius, f.amount * this.stage.foodAmountMultiplier);
+      this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [...this.sourcePoints, ...this.foodPoints.map((f) => f.pos)]);
     }
-    for (const f of this.foodPoints) this.env.placeFood(f.pos, f.radius, f.amount * this.stage.foodAmountMultiplier);
-    this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [...this.sourcePoints, ...this.foodPoints.map((f) => f.pos)]);
 
     this.evoLog = [];
     this.eraLog = [];
@@ -236,9 +303,41 @@ export class Game {
     this.lastLoopAtTick = -999;
     this.lastObstacleAvoidedAtTick = -999;
     this.lastSporeFormedAtTick = -999;
-    this.coloniesTotal = this.foodPoints.length;
+    this.coloniesTotal = this.stage.infinite ? 1 : this.foodPoints.length;
     this.lastEra = '胞子期'; // 起動直後の初期時代 (eraFor() の既定と一致させる)
     this.pushEvent(`新しい${this.stage.name}が用意された`, 'stage-reset');
+  }
+
+  // M25: chunkEnv/chunkAct/chunkBio (実座標) の windowOrigin 周辺 span=WORLD
+  // を、表示用の密フィールド this.env/act/bio へ焼き直す。前線が窓の縁に
+  // 近づいていたら先に再センタリングし、その移動量を windowShiftDelta へ
+  // 積む (main.ts がカメラを同じ量だけずらして継ぎ目を隠す)。
+  private rebakeWildlandWindow(): void {
+    const chunkEnv = this.chunkEnv, chunkAct = this.chunkAct, chunkBio = this.chunkBio;
+    if (!chunkEnv || !chunkAct || !chunkBio) return;
+    const next = followWindowOrigin(
+      this.windowOrigin, this.state.nodes.map((n) => n.pos), WORLD, WILDLAND_REBAKE_MARGIN,
+    );
+    if (next) {
+      const dx = this.windowOrigin.x - next.x, dy = this.windowOrigin.y - next.y;
+      this.windowShiftDelta = {
+        x: (this.windowShiftDelta?.x ?? 0) + dx, y: (this.windowShiftDelta?.y ?? 0) + dy,
+      };
+      this.windowOrigin = next;
+    }
+    bakeChunkWindow(chunkEnv, this.windowOrigin, { span: WORLD, fieldSize: FIELD }, this.env);
+    bakeScalarFieldWindow(chunkAct, this.windowOrigin, WORLD, this.act);
+    bakeScalarFieldWindow(chunkBio, this.windowOrigin, WORLD, this.bio);
+  }
+
+  // main.ts が毎フレーム一度だけ呼ぶ。窓が再センタリングされていればその
+  // 移動量 (ローカル座標系での平行移動) を返し、内部カウンタは 0 に戻す。
+  // camera.shiftCenter(dx, dy) に同じ値を渡すと、見た目上「窓が動いた」
+  // ことに気づかれない (常に前線を追い続けているだけに見える)。
+  consumeWindowShift(): Vec2 | null {
+    const d = this.windowShiftDelta;
+    this.windowShiftDelta = null;
+    return d;
   }
 
   setTool(t: Tool): void { this.tool = t; }
@@ -249,9 +348,15 @@ export class Game {
   // スケジューラ (sim-worker.ts) は、予算に収まると見積もった tick 数を
   // 明示的に渡す (speed そのままとは限らない)。
   tick(steps: number = this.speed): void {
+    // M25: 「原野」は実座標側 (chunkEnv/chunkAct/chunkBio) を sim の実体として
+    // step() に渡す — Environment/ActivityFieldLike/BiomassFieldLike の
+    // 構造的インターフェース越しなので sim 側は無改修のまま両対応する。
+    const env = this.chunkEnv ?? this.env;
+    const act = this.chunkAct ?? this.act;
+    const bio = this.chunkBio ?? this.bio;
     for (let i = 0; i < steps; i++) {
-      step(this.state, this.env, this.act, this.bio, this.params, this.rng, this.bus, this.stepCache);
-      this.env.decay(
+      step(this.state, env, act, bio, this.params, this.rng, this.bus, this.stepCache);
+      env.decay(
         this.stage.nutrientDecayPerTick, this.stage.moistureRelaxPerTick,
         this.stage.tempRelaxPerTick, this.stage.toxinDecayPerTick,
       );
@@ -261,8 +366,11 @@ export class Game {
       if (this.state.tick % 12 === 0) this.checkEraTransition();
       // M27: 日の変わり目に一度だけ、元の食料点へ薄く栄養を再生する
       // (Day 24 前後での完全停滞を「拡がる→痩せる→また拡がる」に変える)。
-      if (this.state.tick % TICKS_PER_DAY === 0) this.regenerateNutrients();
+      // 「原野」は chunkTerrain が代わりに前線の先へ栄養を供給し続けるため
+      // 対象外 (foodPoints=[] なので実質 no-op だが、意図を明示しておく)。
+      if (!this.stage.infinite && this.state.tick % TICKS_PER_DAY === 0) this.regenerateNutrients();
     }
+    if (this.stage.infinite) this.rebakeWildlandWindow();
     this.drainBus();
   }
 
@@ -307,7 +415,13 @@ export class Game {
     for (const e of events) {
       const r = this.eventToWorldEvent(e);
       if (!r) continue;
-      this.worldEventLog.push({ day, tick: e.tick, kind: r.kind, text: r.text, x: r.pos?.x, y: r.pos?.y });
+      // M25: sim 内のイベント座標は「原野」では実座標のまま流れてくる。
+      // 「最近の出来事」のエリア注視 (カメラ視野との交差判定) はローカル
+      // 座標 (0..WORLD) 前提なので、窓原点ぶん引いてから記録する。
+      const pos = r.pos && this.stage.infinite
+        ? { x: r.pos.x - this.windowOrigin.x, y: r.pos.y - this.windowOrigin.y }
+        : r.pos;
+      this.worldEventLog.push({ day, tick: e.tick, kind: r.kind, text: r.text, x: pos?.x, y: pos?.y });
     }
   }
 
@@ -358,6 +472,9 @@ export class Game {
   // fieldSize/worldSize 比の変換は GridEnvironment.toField() と同じ式
   // (private のため、Undo 記録用にここでも同じ変換を行う)。
   apply(pos: Vec2): void {
+    // M25: 「原野」は表示用の窓 (this.env) へ書いても次の tick() の焼き直しで
+    // 消えてしまう。実座標側 (chunkEnv) へ直接書く専用経路を使う。
+    if (this.stage.infinite) { this.applyWildlandTool(pos); return; }
     const r = this.brushRadius;
     const s = this.fieldSize / this.worldSize;
     const fx = pos.x * s, fy = pos.y * s;
@@ -413,6 +530,56 @@ export class Game {
     }
   }
 
+  // M25: 「原野」専用のツール適用。実座標 (windowOrigin ぶんずらした pos) へ
+  // chunkEnv 側の place* を直接呼ぶ。チャンク系フィールドは密な FieldGrid
+  // ではない (Map ベース) ため Undo の記録方式 (recordBefore) がそのままでは
+  // 使えず、この一手を取り消す機能はスコープ外とする (canUndo は自然に
+  // false のまま — 既存ステージの Undo 挙動には一切影響しない)。'erase' も
+  // 同じ理由でスコープ外 (無効: 押しても何も起きない)。
+  private applyWildlandTool(pos: Vec2): void {
+    const env = this.chunkEnv;
+    if (!env) return;
+    const r = this.brushRadius;
+    const real: Vec2 = { x: pos.x + this.windowOrigin.x, y: pos.y + this.windowOrigin.y };
+    switch (this.tool) {
+      case 'food':
+        env.placeFood(real, r, 0.7);
+        this.coloniesTotal += 1;
+        this.pushEvent('栄養を撒いた', 'tool-food', pos);
+        break;
+      case 'light':
+        env.placeLight(real, r, 0.45);
+        this.pushEvent('光をあてた', 'tool-light', pos);
+        break;
+      case 'water':
+        env.placeWater(real, r, 0.4);
+        this.pushEvent('水を引いた', 'tool-water', pos);
+        break;
+      case 'drain':
+        env.placeDrain(real, r, 0.35);
+        this.pushEvent('水を止めた', 'tool-drain', pos);
+        break;
+      case 'stone':
+        env.placeStone(real, Math.max(2, r * 0.5));
+        this.pushEvent('障害物を置いた', 'tool-stone', pos);
+        break;
+      case 'heat':
+        env.placeHeat(real, r, 0.12);
+        this.pushEvent('温度を上げた', 'tool-heat', pos);
+        break;
+      case 'cool':
+        env.placeHeat(real, r, -0.12);
+        this.pushEvent('温度を下げた', 'tool-cool', pos);
+        break;
+      case 'toxin':
+        env.placeToxin(real, r, 0.35);
+        this.pushEvent('毒素をまいた', 'tool-toxin', pos);
+        break;
+      case 'erase':
+        break; // スコープ外 (上記コメント参照)
+    }
+  }
+
   private eraseFields(fx: number, fy: number, fr: number): void {
     for (const f of [this.env.nutrients, this.env.moisture, this.env.brightness, this.env.obstacle, this.env.toxin]) {
       this.undo.recordBefore(f, fx, fy, fr + 1);
@@ -447,10 +614,25 @@ export class Game {
     const day = Math.floor(this.state.tick / TICKS_PER_DAY);
     const thickEdges = this.state.edges.filter((e) => e.radius > 1.5).length;
     return {
-      state: this.state, env: this.env, bio: this.bio, genome: this.genome,
+      state: this.stage.infinite ? this.translatedState() : this.state,
+      env: this.env, bio: this.bio, genome: this.genome,
       day, thickEdges,
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
       landmarks: this.landmarks,
+    };
+  }
+
+  // M25: render.ts/main.ts はノード座標がローカル座標 (0..WORLD、camera/env と
+  // 同じ座標系) であることを前提にしている。「原野」の sim 本体は実座標
+  // (windowOrigin ぶん大きい) のまま保持するので、描画に渡す直前だけ
+  // ノード位置を平行移動した浅いクローンを作る (ノード数は prune で有界、
+  // 実測 数十〜数百件程度に保たれるため毎フレームの複製コストは小さい —
+  // ROADMAP.md M25 参照)。edges はノードIDだけを参照する構造なので複製不要。
+  private translatedState(): SimState {
+    const o = this.windowOrigin;
+    return {
+      ...this.state,
+      nodes: this.state.nodes.map((n) => ({ ...n, pos: { x: n.pos.x - o.x, y: n.pos.y - o.y } })),
     };
   }
 
@@ -471,7 +653,18 @@ export class Game {
       connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
       exploration: traits.exploration, day: Math.floor(this.state.tick / TICKS_PER_DAY),
     });
-    return { traits, individuality, typeInfo, balance, world, quests, colonyMarkers: colonies.markers, era };
+    // M25: colonyMarkers の pos/centroid は computeColonyNetworks が
+    // this.state (「原野」では実座標) から導出するため、カメラ追従
+    // (focusOn) やミニマップがローカル座標 (0..WORLD) を前提にできるよう
+    // ここで窓原点ぶん平行移動する。
+    const colonyMarkers = this.stage.infinite
+      ? colonies.markers.map((m) => ({
+        ...m,
+        pos: { x: m.pos.x - this.windowOrigin.x, y: m.pos.y - this.windowOrigin.y },
+        centroid: { x: m.centroid.x - this.windowOrigin.x, y: m.centroid.y - this.windowOrigin.y },
+      }))
+      : colonies.markers;
+    return { traits, individuality, typeInfo, balance, world, quests, colonyMarkers, era };
   }
 
   snapshot(): GameSnapshot {

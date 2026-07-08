@@ -5,6 +5,21 @@
 import type { Vec2 } from '../types.js';
 import { makeField, sampleField, gradientField, type FieldGrid } from './grid.js';
 
+// growth.ts/life.ts が ActivityField/BiomassField に対して実際に呼ぶメソッドは
+// これだけ (sample/deposit/diffuse[/depositSegment]) — チャンク版
+// (ChunkedActivityField/ChunkedBiomassField, chunked-scalar-field.ts) と
+// 密版を、sim のコア (step.ts/life.ts/growth.ts) から見て同じ形に保つための
+// 構造的インターフェース。密なフィールド全体を返す `.field.data` はここに
+// 含めない (web 側の描画/統計専用の関心事であり、sim のコアは使わない)。
+export interface ActivityFieldLike {
+  sample(pos: Vec2): number;
+  deposit(pos: Vec2, amount: number, radius: number): void;
+  diffuse(decay: number, diffusion: number): void;
+}
+export interface BiomassFieldLike extends ActivityFieldLike {
+  depositSegment(a: Vec2, b: Vec2, amount: number, radius: number): void;
+}
+
 export interface ScalarFieldOptions {
   // deposit でセル値が超えてはいけない上限。Activity と Biomass で値が違うため。
   depositCap: number;

@@ -63,6 +63,13 @@ export class ChunkedFieldGrid {
     return this.chunks.has(chunkKey(cx, cy));
   }
 
+  /** 生成済みなら返す。無ければ (生成せず) null。ChunkedScalarField.diffuse()
+   * の隣接チャンク読み取りのように「無ければ 0 として扱いたいが、読むだけで
+   * チャンクを実体化させたくない」場面向け (ensureChunk と違い副作用が無い)。 */
+  peekChunk(cx: number, cy: number): Float32Array | null {
+    return this.chunks.get(chunkKey(cx, cy)) ?? null;
+  }
+
   /** 無ければ決定的に生成して返す。既存チャンクはキャッシュを返すだけ。 */
   ensureChunk(cx: number, cy: number): Float32Array {
     const key = chunkKey(cx, cy);
@@ -133,6 +140,75 @@ export class ChunkedFieldGrid {
         const dx = tx - ccx, dy = ty - ccy;
         const w = Math.exp(-(dx * dx + dy * dy) / (2 * r2));
         this.addCell(tx, ty, amount * w);
+      }
+    }
+  }
+
+  /** scalar-field.ts の stampDisk と等価 (中心が濃く縁で線形に薄くなる円盤、
+   * セル毎に cap で頭打ち)。ActivityField/BiomassField のチャンク版が使う。 */
+  stampDiskCapped(worldX: number, worldY: number, radiusWorld: number, amount: number, cap: number): void {
+    const s = this.cellWorldSize;
+    const ccx = worldX / s, ccy = worldY / s;
+    const rCell = radiusWorld / s;
+    const r2 = rCell * rCell;
+    const x0 = Math.floor(ccx - rCell);
+    const x1 = Math.ceil(ccx + rCell);
+    const y0 = Math.floor(ccy - rCell);
+    const y1 = Math.ceil(ccy + rCell);
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        const dx = tx - ccx, dy = ty - ccy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= r2) {
+          const w = 1 - Math.sqrt(d2) / rCell;
+          const { chunk: cx, local: lx } = chunkIndexOf(tx, this.chunkCells);
+          const { chunk: cy, local: ly } = chunkIndexOf(ty, this.chunkCells);
+          const data = this.ensureChunk(cx, cy);
+          const idx = ly * this.chunkCells + lx;
+          const next = (data[idx] ?? 0) + amount * w;
+          data[idx] = next > cap ? cap : next;
+        }
+      }
+    }
+  }
+
+  /** チャンクのデータ全体を置き換える (diffuse の二段階コミットで使う)。 */
+  setChunkData(cx: number, cy: number, data: Float32Array): void {
+    this.chunks.set(chunkKey(cx, cy), data);
+  }
+
+  /** biomass-field.ts の depositSegment と等価 (線分 a→b に沿った膜、
+   * セル毎に cap で頭打ち)。チャンク境界をまたぐ線分も正しく複数チャンクへ
+   * 書き込む (遅延生成される)。 */
+  stampSegmentCapped(
+    ax: number, ay: number, bx: number, by: number, radiusWorld: number, amount: number, cap: number,
+  ): void {
+    const s = this.cellWorldSize;
+    const cax = ax / s, cay = ay / s, cbx = bx / s, cby = by / s;
+    const rCell = radiusWorld / s;
+    const dx = cbx - cax, dy = cby - cay;
+    const lenSq = dx * dx + dy * dy;
+    const r2 = rCell * rCell;
+    const x0 = Math.floor(Math.min(cax, cbx) - rCell);
+    const x1 = Math.ceil(Math.max(cax, cbx) + rCell);
+    const y0 = Math.floor(Math.min(cay, cby) - rCell);
+    const y1 = Math.ceil(Math.max(cay, cby) + rCell);
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        let t = lenSq > 0 ? ((tx - cax) * dx + (ty - cay) * dy) / lenSq : 0;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        const px = cax + dx * t, py = cay + dy * t;
+        const ddx = tx - px, ddy = ty - py;
+        const d2 = ddx * ddx + ddy * ddy;
+        if (d2 <= r2) {
+          const w = 1 - Math.sqrt(d2) / rCell;
+          const { chunk: cx, local: lx } = chunkIndexOf(tx, this.chunkCells);
+          const { chunk: cy, local: ly } = chunkIndexOf(ty, this.chunkCells);
+          const data = this.ensureChunk(cx, cy);
+          const idx = ly * this.chunkCells + lx;
+          const next = (data[idx] ?? 0) + amount * w;
+          data[idx] = next > cap ? cap : next;
+        }
       }
     }
   }

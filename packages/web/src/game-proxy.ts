@@ -22,6 +22,9 @@ export class GameProxy {
   // M9: Worker が日境界に到達して自動停止したことを、メインループが
   // 1回だけ拾えるようにするフラグ (consumeDayCompleted で読むと消費される)。
   private dayCompletedFlag = false;
+  // M25: 直近の snapshot メッセージに乗ってきた窓シフト量。main.ts が毎フレーム
+  // consumeWindowShift() で1度だけ読む (消費型、Game 本体の同名メソッドと同じ設計)。
+  private pendingWindowShift: Vec2 | null = null;
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -45,6 +48,14 @@ export class GameProxy {
         this.recentEvents = msg.events;
         this.evoLog = msg.evolution;
         this.latestPerf = msg.perf;
+        // M25: 複数回ぶんの windowShift が1つの snapshot に集約されている
+        // 可能性があるので、既に溜まっている分に加算する (取りこぼし防止)。
+        if (msg.windowShift) {
+          this.pendingWindowShift = {
+            x: (this.pendingWindowShift?.x ?? 0) + msg.windowShift.x,
+            y: (this.pendingWindowShift?.y ?? 0) + msg.windowShift.y,
+          };
+        }
       } else if (msg.type === 'dayCompleted') {
         this.dayCompletedFlag = true;
       }
@@ -90,6 +101,12 @@ export class GameProxy {
   consumeDayCompleted(): boolean {
     const v = this.dayCompletedFlag;
     this.dayCompletedFlag = false;
+    return v;
+  }
+  // M25: Game.consumeWindowShift() と同じ意味・同じ消費型 API。
+  consumeWindowShift(): Vec2 | null {
+    const v = this.pendingWindowShift;
+    this.pendingWindowShift = null;
     return v;
   }
 

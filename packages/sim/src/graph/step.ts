@@ -13,15 +13,14 @@
 
 import type { SimState } from '../types.js';
 import type { Environment } from '../env/environment.js';
-import type { ActivityField } from '../env/activity-field.js';
-import type { BiomassField } from '../env/biomass-field.js';
+import type { ActivityFieldLike, BiomassFieldLike } from '../field/scalar-field.js';
 import type { SeededRNG } from '../rng.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
 import { buildIndex, type NodeIndex } from './index-utils.js';
 import { updateFlux } from './flux.js';
 import { updateActivity, updateBiomass, updateRadius } from './life.js';
-import { growthStep } from './growth.js';
+import { growthStep, reclaimDepletedSinks } from './growth.js';
 import { prune } from './prune.js';
 
 // buildIndex は state.nodes/edges 全体から Map/Set を組み直す O(N+E) の処理。
@@ -37,7 +36,7 @@ export function createStepCache(): StepCache {
 }
 
 export function step(
-  state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
+  state: SimState, env: Environment, actField: ActivityFieldLike, bioField: BiomassFieldLike,
   params: SimParams, rng: SeededRNG, bus: EventBus, cache: StepCache = createStepCache(),
 ): void {
   state.tick++;
@@ -48,7 +47,12 @@ export function step(
   // Biomass は毎 tick: 場が拡散・減衰しながら膜のかたちを保つ。
   updateBiomass(state, bioField, params, idx);
   if (state.tick % 4 === 0)  updateRadius(state, params, bus);
-  if (state.tick % 12 === 0) growthStep(state, env, bioField, params, rng, bus, idx);
+  if (state.tick % 12 === 0) {
+    // growth の直前に、枯れた sink を前線チップへ戻す (無限ステージのみ有効。
+    // params.forageReclaimThreshold=0 の既存ステージでは即 return する)。
+    reclaimDepletedSinks(state, env, params);
+    growthStep(state, env, bioField, params, rng, bus, idx);
+  }
   if (state.tick % 60 === 0) {
     prune(state, params, bus);
     // prune は state.nodes/edges を直接 filter するため idx と食い違う。
@@ -58,7 +62,7 @@ export function step(
 }
 
 export function run(
-  state: SimState, env: Environment, actField: ActivityField, bioField: BiomassField,
+  state: SimState, env: Environment, actField: ActivityFieldLike, bioField: BiomassFieldLike,
   params: SimParams, rng: SeededRNG, bus: EventBus, ticks: number,
 ): void {
   const cache = createStepCache();

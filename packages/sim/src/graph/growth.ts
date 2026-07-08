@@ -8,7 +8,7 @@
 
 import type { SimState, SimNode, SimEdge, Vec2, NodeId } from '../types.js';
 import type { Environment, GrowthContext } from '../env/environment.js';
-import type { BiomassField } from '../env/biomass-field.js';
+import type { BiomassFieldLike } from '../field/scalar-field.js';
 import type { SeededRNG } from '../rng.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
@@ -58,7 +58,7 @@ function findMergeTarget(nodes: SimNode[], pos: Vec2, radius: number, excludeId:
 // ── tip からの前進 (主機構) ──────────────────────────
 
 function growFromTip(
-  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassFieldLike, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
   tip: SimNode, parentEdge: SimEdge | null,
   parentActivity: number, parentStress: number,
@@ -174,7 +174,7 @@ function growFromTip(
 // 「枝分かれ」と違うのは、目的が「面を太くする」だけで、前進ではない点。
 
 function lateralBud(
-  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassFieldLike, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
   tip: SimNode, parentEdge: SimEdge,
 ): boolean {
@@ -220,10 +220,33 @@ function lateralBud(
   return true;
 }
 
+// ── 再採餌 (forager): 枯れた sink を前線チップへ戻す ──────
+//
+// sink は「食料に到達した終端」なので findTipNodes から除外され、二度と
+// 伸びない。有限ワールドでは食料が尽きた時点で前線が全て sink になり成長が
+// 完全停止する (ROADMAP M25 で実測: 前線ノードが全て sink、relay leaf ゼロ、
+// source は degree 上限 = 伸びる余地がどこにも無い状態)。
+//
+// params.forageReclaimThreshold > 0 のとき、局所の栄養がそこまで枯れた sink を
+// relay へ戻し、再び前線チップとして次の餌場へ這い出せるようにする。これにより
+// 「餌場に到達→吸う→枯れる→次へ這い出す」の forager ループが成立し、チャンク
+// 食料を渡り歩きながら前線が無限に前進する。既存ステージは threshold=0 で無効
+// なので挙動・決定論ともに完全に不変。
+export function reclaimDepletedSinks(
+  state: SimState, env: Environment, params: SimParams,
+): void {
+  const t = params.forageReclaimThreshold;
+  if (t <= 0) return;
+  for (const n of state.nodes) {
+    if (n.type !== 'sink') continue;
+    if (env.sampleGrowthContext(n.pos).nutrients < t) n.type = 'relay';
+  }
+}
+
 // ── 公開 entry point ─────────────────────────────────
 
 export function growthStep(
-  state: SimState, env: Environment, bioField: BiomassField, params: SimParams,
+  state: SimState, env: Environment, bioField: BiomassFieldLike, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
 ): void {
   // 端点からの伸長

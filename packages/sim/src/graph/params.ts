@@ -38,6 +38,13 @@ export interface SimParams {
   alpha: number;               // radius の成長係数
   beta: number;                // radius の減衰係数
 
+  // ── 再採餌 (forager, 無限ワールド用) ──
+  // sink は本来「食料に到達した終端」で二度と伸びない。局所の栄養がこの値
+  // 未満まで枯れた sink を relay (前線チップ) へ戻し、次の餌場へ這い出させる。
+  // 0 (既定) で無効 = 既存ステージは完全に不変。無限ステージ (原野) だけが
+  // 正の値を入れて「前線が尽きない」forager ループを成立させる (ROADMAP M25)。
+  forageReclaimThreshold: number;
+
   // ── 環境スコア ──────────────────────
   foodReachThreshold: number;
   nutrientBias: number;
@@ -99,6 +106,7 @@ export const DEFAULT_PARAMS: SimParams = {
   branchProbabilityBase: 0.04,
   alpha: 0.30,
   beta: 0.06,
+  forageReclaimThreshold: 0, // 既定は無効 (既存ステージは sink を戻さない)
 
   foodReachThreshold: 0.55,
   nutrientBias: 2.5,

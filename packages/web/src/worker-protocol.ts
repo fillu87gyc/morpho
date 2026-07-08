@@ -58,6 +58,12 @@ export type WireSnapshot = Omit<GameSnapshot, 'state'> & {
 };
 
 export type FromWorkerMessage =
-  | { type: 'snapshot'; snapshot: WireSnapshot; events: readonly WorldEvent[]; evolution: EvolutionLog[]; perf: PerfInfo }
+  // M25: windowShift は「原野」で窓が前線を追って再センタリングされたときの
+  // 移動量 (Game.consumeWindowShift() と同じ意味)。非無限ステージでは常に
+  // null。main.ts が camera.shiftCenter() へそのまま渡す。
+  | {
+    type: 'snapshot'; snapshot: WireSnapshot; events: readonly WorldEvent[]; evolution: EvolutionLog[];
+    perf: PerfInfo; windowShift: Vec2 | null;
+  }
   // M9: runUntilTick の target に到達し、Worker が自動で speed=0 に止めた通知。
   | { type: 'dayCompleted' };
