@@ -6,7 +6,15 @@
 
 import { type GridEnvironment, type SeededRNG, type SimParams, type Vec2 } from '@morpho/sim';
 
-export type StageId = 'petri' | 'cave' | 'desert' | 'ruins' | 'wetland' | 'continent';
+export type StageId = 'petri' | 'cave' | 'desert' | 'ruins' | 'wetland' | 'continent' | 'wildland';
+
+// M25: 「原野」用のチャンク単位の地形生成 (無限ワールド)。既存6ステージの
+// generateTerrain (GridEnvironment 全体を一度だけ焼く) とは前提が違う —
+// ChunkedGridEnvironment がチャンクを初めて触れた瞬間に1度ずつ呼ばれる。
+export interface ChunkTerrainResult {
+  obstaclePatches?: { x: number; y: number; radius: number }[];
+  foodPatches?: { x: number; y: number; radius: number; amount: number }[];
+}
 
 // M14: 大陸ステージ専用。source (拠点の種となるコロニー核) と
 // 食料拠点を手続き的に生成して返す。
@@ -42,6 +50,11 @@ export interface StageConfig {
   // (既存5ステージの挙動・rng 消費順は一切変えない)。大陸ステージだけが
   // これを定義し、拠点をポアソンディスク風に手続き生成する。
   worldPoints?(rng: SeededRNG, worldSize: number): WorldPoints;
+  // M25: このステージが半無限ワールド (ChunkedGridEnvironment ベース) かどうか。
+  // 省略時は false (既存6ステージ)。true のときだけ game.ts が別経路を通る。
+  infinite?: boolean;
+  // M25: 「原野」専用のチャンク単位地形生成 (infinite=true のときだけ使う)。
+  chunkTerrain?(coord: { cx: number; cy: number }, rng: SeededRNG, worldSeed: number): ChunkTerrainResult;
 }
 
 export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland', 'continent'];
@@ -283,6 +296,10 @@ function generateContinentTerrain(env: GridEnvironment, rng: SeededRNG, worldSiz
   return landmarks;
 }
 
+// 「原野」のチャンク一辺のセル数 (ChunkedGridEnvironment の chunkCells と
+// chunkTerrain のローカル座標範囲を揃えるための共有定数)。
+export const WILDLAND_CHUNK_CELLS = 48;
+
 export const STAGES: Record<StageId, StageConfig> = {
   petri: {
     id: 'petri',
@@ -378,5 +395,40 @@ export const STAGES: Record<StageId, StageConfig> = {
     toxinDecayPerTick: 0.0015,
     generateTerrain: generateContinentTerrain,
     worldPoints: generateContinentWorldPoints,
+  },
+  // M25: 半無限ワールド。ChunkedGridEnvironment + forager reclaim (sim 側で
+  // 実証済み: test/forage-reclaim.test.ts) により、前線が尽きず伸び続ける。
+  // 既存6ステージと違い generateTerrain (一括生成) は使わず、chunkTerrain が
+  // チャンクを初めて訪れた瞬間に決定的な地形を生成する。
+  wildland: {
+    id: 'wildland',
+    name: '原野',
+    description: '果てのない野原。歩けば歩くほど、その先にも大地が続いている。',
+    baseMoisture: 0.32,
+    baseBrightness: 0.22,
+    baseTemperature: 0.5,
+    // sim/test/forage-reclaim.test.ts で実証済みの値。0 (既定・無効) だと
+    // 前線が sink で詰まり Day24 相当で完全停止する (ROADMAP.md M25)。
+    paramOverrides: { forageReclaimThreshold: 0.3 },
+    foodAmountMultiplier: 1.0,
+    nutrientDecayPerTick: 0.0006,
+    moistureRelaxPerTick: 0.0009,
+    tempRelaxPerTick: 0.0009,
+    toxinDecayPerTick: 0.0015,
+    infinite: true,
+    // 無限ステージでは使わない (chunkTerrain が代わりを務める)。型を満たす
+    // だけの no-op。
+    generateTerrain: () => [],
+    chunkTerrain: (_coord, rng, _worldSeed): ChunkTerrainResult => {
+      const cells = WILDLAND_CHUNK_CELLS;
+      const obstaclePatches = rng.next() < 0.35
+        ? [{ x: rng.range(4, cells - 4), y: rng.range(4, cells - 4), radius: rng.range(2, 5) }]
+        : [];
+      const foodPatches = [{
+        x: rng.range(4, cells - 4), y: rng.range(4, cells - 4),
+        radius: rng.range(4, 6), amount: rng.range(0.9, 1.3),
+      }];
+      return { obstaclePatches, foodPatches };
+    },
   },
 };

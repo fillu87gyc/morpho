@@ -82,6 +82,16 @@ export class Camera {
     this.clampCenter();
   }
 
+  // M25: 「原野」の窓 (ローカル座標系) が前線を追って再センタリングされた
+  // とき、描画されている内容のローカル座標もその分だけ動く
+  // (Game.consumeWindowShift() 参照)。カメラを同じ量だけ動かすことで、
+  // 「窓が動いた」ことに気づかれず前線を追い続けているように見せる。
+  shiftCenter(dx: number, dy: number): void {
+    this.cx += dx;
+    this.cy += dy;
+    this.clampCenter();
+  }
+
   private clampCenter(): void {
     const span = this.worldSize / this.zoom;
     const half = span / 2;

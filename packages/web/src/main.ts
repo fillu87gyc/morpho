@@ -995,6 +995,11 @@ function frame() {
       tool: game.tool as Tool,
     } : undefined;
     const snap = game.snapshot();
+    // M25: 「原野」の窓が前線を追って再センタリングされていたら、カメラも
+    // 同じ量だけずらして継ぎ目に気づかれないようにする (この snap の
+    // state は既に新しい窓原点で平行移動済みなので、描画より前に必ず適用する)。
+    const windowShift = game.consumeWindowShift();
+    if (windowShift) camera.shiftCenter(windowShift.x, windowShift.y);
     // M14: 時代が切り替わった節目に 🍄 を1度だけ贈る (進化の記録には
     // game.ts 側の eraLog で既に残っている、ここは通貨報酬だけを付与)。
     if (snap.era.name !== lastEraName) {

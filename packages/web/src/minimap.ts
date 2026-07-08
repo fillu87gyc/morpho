@@ -25,6 +25,7 @@ const MINIMAP_TERRAIN: Record<StageId, string> = {
   ruins:     'rgba(108, 94, 74, 1)',
   wetland:   'rgba(56, 84, 58, 1)',
   continent: 'rgba(64, 84, 58, 1)',
+  wildland:  'rgba(64, 84, 58, 1)',
 };
 const MINIMAP_ROCK = 'rgba(110, 106, 116, 0.9)';
 const MINIMAP_WATER = 'rgba(52, 100, 156, 0.95)';
