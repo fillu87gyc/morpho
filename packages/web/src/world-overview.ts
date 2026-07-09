@@ -13,6 +13,7 @@
 // 「実座標 - windowOrigin」で変換する (そのために windowOrigin を同梱する)。
 
 import type { Vec2 } from '@morpho/sim';
+import type { BBox } from './camera.js';
 
 // チャンク1枚ぶんの要約。sim 側の地形要約 (ChunkTerrainSummary) と
 // バイオマス要約 (FieldChunkSummary) を web 側で合流させた形。
@@ -59,6 +60,33 @@ export function computeReachDistance(positions: readonly Vec2[], origin: Vec2): 
     if (d > best) best = d;
   }
   return best;
+}
+
+// M28-B: 訪問済みチャンク集合の bbox を窓ローカル座標 (camera/render と同じ系、
+// 実座標 − windowOrigin) で返す。カメラの動的最小ズーム (camera.ts の
+// wildlandMinZoom) とパン範囲の材料。チャンクが空なら null。
+// windowOrigin は「今の」窓原点を渡すこと — overview.windowOrigin (集計時点の
+// 値) は窓の再センタリングで最大1秒古くなりうるため、スナップショットに同梱
+// される現在値 (FastSnapshot.windowOrigin) を使う。
+export function overviewLocalBBox(
+  chunks: readonly WorldChunkSummary[],
+  chunkWorldSize: number,
+  windowOrigin: Vec2,
+): BBox | null {
+  if (chunks.length === 0) return null;
+  let minCx = Infinity, minCy = Infinity, maxCx = -Infinity, maxCy = -Infinity;
+  for (const c of chunks) {
+    if (c.cx < minCx) minCx = c.cx;
+    if (c.cy < minCy) minCy = c.cy;
+    if (c.cx > maxCx) maxCx = c.cx;
+    if (c.cy > maxCy) maxCy = c.cy;
+  }
+  return {
+    minX: minCx * chunkWorldSize - windowOrigin.x,
+    minY: minCy * chunkWorldSize - windowOrigin.y,
+    maxX: (maxCx + 1) * chunkWorldSize - windowOrigin.x,
+    maxY: (maxCy + 1) * chunkWorldSize - windowOrigin.y,
+  };
 }
 
 // メインスレッド側の最新値の置き場。window.__worldOverview のような一時

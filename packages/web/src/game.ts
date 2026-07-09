@@ -77,6 +77,11 @@ export interface FastSnapshot {
   stage: { id: StageId; name: string; description: string };
   // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
   landmarks: Vec2[];
+  // M28-B: 「原野」の現在の窓原点 (実座標)。俯瞰チャンク (実座標のチャンク
+  // 番地) を窓ローカル座標へ変換するのに使う。worldOverview.windowOrigin は
+  // 集計時点の値 (最大1秒古い) なので、描画は必ずこちら (snapshot と同時刻の
+  // 現在値) を使うこと。有界6ステージでは undefined。
+  windowOrigin?: Vec2;
 }
 
 export interface DerivedSnapshot {
@@ -641,6 +646,7 @@ export class Game {
       day, thickEdges,
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
       landmarks: this.landmarks,
+      windowOrigin: this.stage.infinite ? { x: this.windowOrigin.x, y: this.windowOrigin.y } : undefined,
     };
   }
 

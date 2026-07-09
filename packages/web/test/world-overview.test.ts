@@ -1,7 +1,10 @@
 // M28: world-overview.ts (到達距離の純粋関数 + 俯瞰の最新値の置き場) のテスト。
 
 import { describe, it, expect } from 'vitest';
-import { computeReachDistance, setWorldOverview, getWorldOverview, type WorldOverview } from '../src/world-overview.js';
+import {
+  computeReachDistance, setWorldOverview, getWorldOverview, overviewLocalBBox,
+  type WorldOverview, type WorldChunkSummary,
+} from '../src/world-overview.js';
 
 describe('computeReachDistance (M28)', () => {
   it('点がなければ 0', () => {
@@ -27,6 +30,41 @@ describe('computeReachDistance (M28)', () => {
     const shifted = points.map((p) => ({ x: p.x + 100, y: p.y + 100 }));
     expect(computeReachDistance(shifted, { x: 100, y: 100 }))
       .toBeCloseTo(computeReachDistance(points, { x: 0, y: 0 }), 10);
+  });
+});
+
+// M28-B: 訪問済みチャンク集合 → 窓ローカル座標の bbox (カメラの動的最小
+// ズームとパン範囲の材料)。
+describe('overviewLocalBBox (M28-B)', () => {
+  function chunk(cx: number, cy: number): WorldChunkSummary {
+    return { cx, cy, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, biomass: 0 };
+  }
+
+  it('チャンクが無ければ null', () => {
+    expect(overviewLocalBBox([], 48, { x: 0, y: 0 })).toBeNull();
+  });
+
+  it('1チャンクなら「そのチャンクの領域 − 窓原点」', () => {
+    // チャンク (10, 20)、一辺 48 → 実座標 [480, 528) × [960, 1008)。
+    // 窓原点 (400, 900) を引いた窓ローカル座標になる。
+    expect(overviewLocalBBox([chunk(10, 20)], 48, { x: 400, y: 900 })).toEqual({
+      minX: 80, minY: 60, maxX: 128, maxY: 108,
+    });
+  });
+
+  it('複数チャンクは番地の min/max を覆う (maxCx+1 まで = チャンクの右下端を含む)', () => {
+    const b = overviewLocalBBox([chunk(0, 0), chunk(3, 1), chunk(-2, 2)], 48, { x: 0, y: 0 })!;
+    expect(b.minX).toBe(-2 * 48);
+    expect(b.maxX).toBe(4 * 48);
+    expect(b.minY).toBe(0);
+    expect(b.maxY).toBe(3 * 48);
+  });
+
+  it('窓原点の平行移動にそのまま追従する (窓の再センタリングでずれない)', () => {
+    const a = overviewLocalBBox([chunk(5, 5)], 48, { x: 0, y: 0 })!;
+    const b = overviewLocalBBox([chunk(5, 5)], 48, { x: 30, y: -10 })!;
+    expect(b.minX).toBe(a.minX - 30);
+    expect(b.minY).toBe(a.minY + 10);
   });
 });
 

@@ -15,6 +15,12 @@ export class Camera {
   zoom = MIN_ZOOM;
   private cx: number;
   private cy: number;
+  // M28: 「原野」だけ動的に下がる最小ズーム。有界6ステージでは常に MIN_ZOOM
+  // のまま (setWildlandBounds が呼ばれない/null で呼ばれる限り一切変わらない)。
+  private minZoom = MIN_ZOOM;
+  // M28: ズームアウト中 (span > worldSize) にパンを許す範囲 (原野の
+  // 「訪問済み世界の bbox」、窓ローカル座標)。null なら従来通り中央固定。
+  private wildlandBounds: BBox | null = null;
 
   constructor(private worldSize: number) {
     this.cx = worldSize / 2;
@@ -25,6 +31,24 @@ export class Camera {
     this.zoom = MIN_ZOOM;
     this.cx = this.worldSize / 2;
     this.cy = this.worldSize / 2;
+    this.minZoom = MIN_ZOOM;
+    this.wildlandBounds = null;
+  }
+
+  // M28: 現在の最小ズーム (原野で世界が広がるほど下がる)。ズームスライダーの
+  // 値域 (main.ts) がこれに追従する。
+  get minimumZoom(): number { return this.minZoom; }
+
+  // M28: 「原野」の訪問済み世界の bbox (窓ローカル座標) を毎フレーム供給する。
+  // 最小ズームは「bbox + 余白がちょうど収まる」値まで下がる (wildlandMinZoom)。
+  // null (有界ステージ / 俯瞰素材が未着) なら従来の [MIN_ZOOM, MAX_ZOOM] に戻る。
+  setWildlandBounds(bbox: BBox | null): void {
+    this.wildlandBounds = bbox;
+    this.minZoom = wildlandMinZoom(bbox, this.worldSize);
+    if (this.zoom < this.minZoom) {
+      this.zoom = this.minZoom;
+      this.clampCenter();
+    }
   }
 
   view(): WorldView {
@@ -36,7 +60,7 @@ export class Camera {
   // 目標ズーム値へ直接設定する (ホイール/ピンチの zoomAt はカーソル中心の
   // 相対倍率だが、スライダーは絶対値を扱うため別の入口を用意する)。
   setZoomCentered(canvasSize: number, targetZoom: number): void {
-    const factor = clamp(targetZoom, MIN_ZOOM, MAX_ZOOM) / this.zoom;
+    const factor = clamp(targetZoom, this.minZoom, MAX_ZOOM) / this.zoom;
     this.zoomAt(canvasSize, canvasSize / 2, canvasSize / 2, factor);
   }
 
@@ -50,7 +74,7 @@ export class Camera {
   // (sx, sy) の下にある世界座標を固定したままズームする (カーソル中心ズーム)。
   zoomAt(canvasSize: number, sx: number, sy: number, factor: number): void {
     const before = this.screenToWorld(canvasSize, sx, sy);
-    this.zoom = clamp(this.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    this.zoom = clamp(this.zoom * factor, this.minZoom, MAX_ZOOM);
     const after = this.screenToWorld(canvasSize, sx, sy);
     this.cx += before.x - after.x;
     this.cy += before.y - after.y;
@@ -60,7 +84,7 @@ export class Camera {
   // M6: 「個体ビュー」への切り替え。指定したワールド座標 (コロニーの位置など)
   // を中心にズームインする (ミニマップのクリックから呼ぶ想定)。
   focusOn(pos: { x: number; y: number }, zoom = 5): void {
-    this.zoom = clamp(zoom, MIN_ZOOM, MAX_ZOOM);
+    this.zoom = clamp(zoom, this.minZoom, MAX_ZOOM);
     this.cx = pos.x;
     this.cy = pos.y;
     this.clampCenter();
@@ -96,6 +120,14 @@ export class Camera {
     const span = this.worldSize / this.zoom;
     const half = span / 2;
     if (span >= this.worldSize) {
+      // M28: 「原野」でズームアウト中 (zoom < 1) は窓の外へパンできる。
+      // 中心を「訪問済み世界の bbox」の中に留める (見えるものが何もない
+      // 未生成の彼方へは行かせない)。
+      if (this.wildlandBounds) {
+        this.cx = clamp(this.cx, this.wildlandBounds.minX, this.wildlandBounds.maxX);
+        this.cy = clamp(this.cy, this.wildlandBounds.minY, this.wildlandBounds.maxY);
+        return;
+      }
       // ズームアウトしきっている場合は世界全体が映るので中央固定。
       this.cx = this.worldSize / 2;
       this.cy = this.worldSize / 2;
@@ -138,4 +170,27 @@ export function bboxCenter(bbox: BBox): { x: number; y: number } {
 // (カメラの急なジャンプを避ける減衰追従。panToward と同じ考え方)。
 export function approachSpan(currentSpan: number, targetSpan: number, t: number): number {
   return currentSpan + (targetSpan - currentSpan) * t;
+}
+
+// ── M28: 「原野」の動的な最小ズーム ──────────────────────
+//
+// M26 の下敷き (fitBBoxSpan) をここで実戦投入する: 最小ズームは「訪問済み
+// 世界の bbox + 余白がちょうど収まる」span から導く (zoom = worldSize / span
+// なので、世界が広がるほど引ける高さが上がっていく)。安全弁として span には
+// 上限を置く — bbox がどれだけ巨大化しても、これ以上引くと粗タイルすら
+// 潰れて読めなくなるため。
+
+// bbox に掛ける余白 (fitBBoxSpan の padding)。
+export const OVERVIEW_FIT_PADDING = 1.3;
+// 最小ズームの安全弁: どれだけ世界が広がっても span はこの値まで
+// (worldSize=100 なら zoom 0.05 まで) しか引けない。
+export const OVERVIEW_MAX_SPAN = 2000;
+
+// 「原野」の最小ズーム。bbox が窓 (worldSize) より小さいうちは 1 のまま
+// (fitBBoxSpan の minSpan=worldSize)、世界が広がるにつれ下がっていく。
+// bbox=null (有界ステージ / 俯瞰素材が未着) は従来の MIN_ZOOM。
+export function wildlandMinZoom(bbox: BBox | null, worldSize: number): number {
+  if (!bbox) return MIN_ZOOM;
+  const span = Math.min(OVERVIEW_MAX_SPAN, fitBBoxSpan(bbox, OVERVIEW_FIT_PADDING, worldSize));
+  return Math.min(MIN_ZOOM, worldSize / span);
 }

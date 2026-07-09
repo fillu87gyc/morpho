@@ -33,7 +33,8 @@ import { buildChartLayout, drawChart, type ChartSeries } from './chart.js';
 import { EraHistory } from './era-history.js';
 import { Notes } from './notes.js';
 import { buildReport, eraHistoryLines } from './report.js';
-import { setWorldOverview } from './world-overview.js';
+import { setWorldOverview, overviewLocalBBox } from './world-overview.js';
+import type { WildlandOverviewInput } from './render.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -103,6 +104,23 @@ minimapCanvas.addEventListener('click', (e) => {
   const rect = minimapCanvas.getBoundingClientRect();
   const px = (e.clientX - rect.left) * (minimapCanvas.width / rect.width);
   const py = (e.clientY - rect.top) * (minimapCanvas.height / rect.height);
+  // M28-B: 原野のワールドマップでは、タップした場所を俯瞰カメラで見る。
+  // 窓そのものは sim 側の前線追従なので動かせない — 窓の外は粗いタイルの
+  // まま (詳細は見えない) が仕様 (ROADMAP.md M28)。
+  if (game.ready) {
+    const snap = game.snapshot();
+    const overview = game.worldOverview();
+    if (snap.stage.id === 'wildland' && overview && snap.windowOrigin) {
+      const local = minimap.toWorldWildland(px, py, snap.windowOrigin);
+      if (local) {
+        // span ≈ 300 (数チャンクぶん) の俯瞰でその領域を見る。世界がまだ
+        // 狭ければ動的な最小ズーム (全世界が収まる高さ) で止まる。
+        camera.focusOn(local, Math.min(1, Math.max(camera.minimumZoom, 1 / 3)));
+        tracking = false;
+      }
+      return;
+    }
+  }
   const worldPos = minimap.toWorld(px, py);
   // M12: クリックした場所に一番近いコロニーを「追跡対象」として選ぶ。
   if (game.ready) {
@@ -905,9 +923,11 @@ zoomSliderEl.addEventListener('input', () => {
   tracking = false;
 });
 function stepZoom(delta: number): void {
-  const next = Math.max(1, Math.min(8, camera.zoom + delta));
+  // M28-B: 下限は固定の 1 ではなくカメラの動的な最小ズーム (原野では世界の
+  // 広がりに応じて 1 未満へ下がる。有界6ステージでは常に 1 のまま)。
+  const next = Math.max(camera.minimumZoom, Math.min(8, camera.zoom + delta));
   camera.setZoomCentered(viewportSize(), next);
-  zoomSliderEl.value = next.toFixed(1);
+  zoomSliderEl.value = next < 1 ? next.toFixed(2) : next.toFixed(1);
   tracking = false;
 }
 zoomInBtn.addEventListener('click', () => stepZoom(0.5));
@@ -1002,9 +1022,24 @@ function frame() {
     const windowShift = game.consumeWindowShift();
     if (windowShift) camera.shiftCenter(windowShift.x, windowShift.y);
     // M28: 「原野」の全世界俯瞰 (Worker から低頻度で届く) の最新値を
-    // モジュール状態 (world-overview.ts) に置くだけ。絵に起こす大局レイヤー/
-    // ワールドマップは M28-B が getWorldOverview() を import して読む。
-    setWorldOverview(game.worldOverview());
+    // モジュール状態 (world-overview.ts) に置く。
+    const overview = game.worldOverview();
+    setWorldOverview(overview);
+    // M28-B: 大局レイヤー/ワールドマップの素材。windowOrigin は snapshot と
+    // 同時刻の現在値を使う (overview.windowOrigin は最大1秒古い)。
+    const wildlandInput: WildlandOverviewInput | undefined =
+      snap.stage.id === 'wildland' && overview && snap.windowOrigin
+        ? { overview, windowOrigin: snap.windowOrigin }
+        : undefined;
+    // M28-B: カメラの最小ズーム (=どこまで引けるか) とパン範囲を「訪問済み
+    // 世界の bbox」に毎フレーム追従させる。有界6ステージでは null を渡す
+    // だけで、値域 [1, 8] は従来のまま完全に不変。
+    camera.setWildlandBounds(wildlandInput
+      ? overviewLocalBBox(wildlandInput.overview.chunks, wildlandInput.overview.chunkWorldSize, wildlandInput.windowOrigin)
+      : null);
+    // M28-B: ズームスライダーの下限も動的な最小ズームへ追従させる。
+    const minZoomStr = camera.minimumZoom < 1 ? camera.minimumZoom.toFixed(2) : '1';
+    if (zoomSliderEl.min !== minZoomStr) zoomSliderEl.min = minZoomStr;
     // M14: 時代が切り替わった節目に 🍄 を1度だけ贈る (進化の記録には
     // game.ts 側の eraLog で既に残っている、ここは通貨報酬だけを付与)。
     if (snap.era.name !== lastEraName) {
@@ -1026,17 +1061,24 @@ function frame() {
       const marker = snap.colonyMarkers[trackedColonyIndex];
       if (marker) camera.panToward(marker.centroid, 0.08);
     }
-    renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx, nightFactorFor(snap.state.tick));
-    // M16: ステージが変わった (リセット/切替) ときだけ再焼き (bakeTerrain 内部でも
-    // 同一 stageId ならスキップするが、呼び出し自体を間引く必要はない — 判定は軽い)。
-    minimap.bakeTerrain(snap.stage.id, game.env);
-    minimap.draw(snap.colonyMarkers, camera.view());
+    renderer.draw(snap.state, game.env, game.bio, snap.stage.id, snap.landmarks, camera.view(), hoverPx, nightFactorFor(snap.state.tick), wildlandInput);
+    // M28-B: 原野は「訪問済み世界の全体図 + 窓の枠」のワールドマップに
+    // 切り替える (俯瞰素材が届くまでは従来の窓ミニマップのまま)。
+    if (wildlandInput) {
+      minimap.drawWildland(wildlandInput.overview, wildlandInput.windowOrigin, camera.view());
+    } else {
+      // M16: ステージが変わった (リセット/切替) ときだけ再焼き (bakeTerrain 内部でも
+      // 同一 stageId ならスキップするが、呼び出し自体を間引く必要はない — 判定は軽い)。
+      minimap.bakeTerrain(snap.stage.id, game.env);
+      minimap.draw(snap.colonyMarkers, camera.view());
+    }
     localTimeEl.textContent = localTimeFor(snap.state.tick);
     renderIdentity();
     // M16: ホイール/ピンチ/追従で camera.zoom が変わったら、ドラッグ中でない
     // 限りスライダー表示もそれに追従させる (双方向バインド)。
     if (!zoomSliderDragging && Math.abs(Number(zoomSliderEl.value) - camera.zoom) > 0.05) {
-      zoomSliderEl.value = camera.zoom.toFixed(1);
+      // M28-B: zoom < 1 (原野の俯瞰) では 0.1 刻みだと粗すぎるので 2 桁で出す。
+      zoomSliderEl.value = camera.zoom < 1 ? camera.zoom.toFixed(2) : camera.zoom.toFixed(1);
     }
 
     // M9: 観察中の残り時間 = (targetTick - tick) / 実効tick毎秒。
