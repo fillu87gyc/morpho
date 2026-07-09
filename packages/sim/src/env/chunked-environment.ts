@@ -35,6 +35,22 @@ export interface ChunkedGridEnvironmentInit {
   };
 }
 
+// M28: 生成済みチャンク1枚ぶんの地形要約。バイオマス側の要約
+// (ChunkedScalarField.summarizeChunks) と合わせて、web 側が「大局レイヤー/
+// ワールドマップ」を組み立てるための素材になる。ここでは数値の集計だけを
+// 返し、描画の概念 (色・タイル種) は持ち込まない (ROADMAP.md
+// アーキテクチャ方針: 絵は web 側で決める)。
+export interface ChunkTerrainSummary {
+  cx: number;
+  cy: number;
+  /** 栄養の平均値 (チャンク内全セル)。 */
+  nutrientAvg: number;
+  /** 障害物セル (>0.5) の割合 (0..1)。 */
+  obstacleDensity: number;
+  /** 水域セルが1つでもあるか。 */
+  hasWater: boolean;
+}
+
 // 中心差分で勾配を取る (grid.ts の gradientField と同じ考え方)。
 const GRADIENT_STEP_CELLS = 1.0;
 
@@ -165,6 +181,39 @@ export class ChunkedGridEnvironment implements Environment {
   /** 生成済みチャンク数 (触れたことのある範囲の目安、描画/デバッグ用)。 */
   generatedChunkCount(): number {
     return this.obstacle.chunkCount();
+  }
+
+  // M28: 生成済みチャンクごとの地形要約。基準となるチャンク集合は
+  // generatedChunkCount() と同じく obstacle 側 (sampleGrowthContext は全
+  // フィールドを同時にサンプルするため、実用上 nutrients と同じ集合になる)。
+  // 各フィールドは peekChunk (副作用なし) で読む — ensureChunk だと「要約を
+  // 取るだけ」のつもりが未生成の nutrients/water チャンクを実体化させて
+  // しまい、以後の decay/diffuse 対象が変わって決定論を壊す。未生成の
+  // フィールドは 0 埋め (nutrientAvg=0 / hasWater=false) として扱う。
+  // 走査は生成済みチャンクのみ・呼び出し時のみ (毎tickの固定費にはしない)。
+  summarizeChunks(): ChunkTerrainSummary[] {
+    const out: ChunkTerrainSummary[] = [];
+    const cells = this.chunkCells * this.chunkCells;
+    for (const { cx, cy } of this.obstacle.generatedChunks()) {
+      const obstacle = this.obstacle.peekChunk(cx, cy);
+      const nutrients = this.nutrients.peekChunk(cx, cy);
+      const water = this.water.peekChunk(cx, cy);
+      let nutrientSum = 0;
+      let obstacleCells = 0;
+      let hasWater = false;
+      for (let i = 0; i < cells; i++) {
+        if (nutrients) nutrientSum += nutrients[i] ?? 0;
+        if ((obstacle?.[i] ?? 0) > 0.5) obstacleCells++;
+        if (!hasWater && (water?.[i] ?? 0) > 0.5) hasWater = true;
+      }
+      out.push({
+        cx, cy,
+        nutrientAvg: nutrientSum / cells,
+        obstacleDensity: obstacleCells / cells,
+        hasWater,
+      });
+    }
+    return out;
   }
 
   // 自然減衰。GridEnvironment.decay() と同じ式だが、これまでに生成された

@@ -10,6 +10,7 @@ import type { Genome, SimState, Vec2 } from '@morpho/sim';
 import { unpackNodes, unpackEdges } from './snapshot-codec.js';
 import type { WorldEvent } from './world-events.js';
 import { readDayMsOverride } from './time-scale.js';
+import type { WorldOverview } from './world-overview.js';
 
 const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
 
@@ -25,6 +26,9 @@ export class GameProxy {
   // M25: 直近の snapshot メッセージに乗ってきた窓シフト量。main.ts が毎フレーム
   // consumeWindowShift() で1度だけ読む (消費型、Game 本体の同名メソッドと同じ設計)。
   private pendingWindowShift: Vec2 | null = null;
+  // M28: 「原野」の全世界俯瞰の最新値。Worker から低頻度で届く (sim-worker.ts)。
+  // null = まだ届いていない、または現在のステージが有界 (worldOverview は送られない)。
+  private latestWorldOverview: WorldOverview | null = null;
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -58,6 +62,8 @@ export class GameProxy {
         }
       } else if (msg.type === 'dayCompleted') {
         this.dayCompletedFlag = true;
+      } else if (msg.type === 'worldOverview') {
+        this.latestWorldOverview = msg.overview;
       }
     };
     // M15.7: URL パラメータ/localStorage による日長の上書き (開発/e2e 用フック)。
@@ -89,6 +95,9 @@ export class GameProxy {
   reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void {
     this.send({ type: 'reset', seed, stageId, parentGenome });
     this.dayCompletedFlag = false;
+    // M28: 前ステージ (原野) の俯瞰を持ち越さない — 有界ステージへ切り替えた
+    // 場合、Worker は worldOverview を二度と送らないので、ここで消しておく。
+    this.latestWorldOverview = null;
   }
   // M9: target tick まで自動で進め、到達したら Worker が speed=0 に止める。
   // null で日境界のキャップを解除する。
@@ -109,6 +118,8 @@ export class GameProxy {
     this.pendingWindowShift = null;
     return v;
   }
+  // M28: 「原野」の全世界俯瞰の最新値 (消費型ではない — 常に最後に届いた値)。
+  worldOverview(): WorldOverview | null { return this.latestWorldOverview; }
 
   snapshot(): GameSnapshot { return this.current(); }
   events(): readonly WorldEvent[] { return this.recentEvents; }

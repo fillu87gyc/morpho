@@ -70,6 +70,11 @@ export class Ui {
   // M6: ワールドビュー (コロニー数 / 統合ネットワーク数)
   private wNetworks = el('w-networks');
   private wColonies = el('w-colonies');
+  // M28: 原野のみ表示する行 (到達距離 / 探索チャンク数)。dt/dd の hidden を
+  // まとめて切り替えるため、行を成す4要素を並べて持つ。
+  private wReach = el('w-reach');
+  private wChunks = el('w-chunks');
+  private wildlandRows = [el('w-reach-dt'), el('w-reach-dd'), el('w-chunks-dt'), el('w-chunks-dd')];
   // env balance (5 axes)
   private eLight = el('e-light');
   private eTemp = el('e-temp');
@@ -381,6 +386,17 @@ export class Ui {
     setText(this.wCt, String(s.world.coloniesTotal));
     setText(this.wNetworks, String(s.world.connectedNetworks));
     setText(this.wColonies, String(s.world.sourceColonies));
+    // M28: 原野のみ「到達距離」「探索チャンク」を出す (有界6ステージは常に
+    // 窓=世界なので意味が薄く、行ごと隠す)。伸び続ける数字を常時1つ以上
+    // 見せるための新指標 (ROADMAP.md V2)。
+    const isWildland = s.stage.id === 'wildland';
+    for (const row of this.wildlandRows) {
+      if (row.hidden !== !isWildland) row.hidden = !isWildland;
+    }
+    if (isWildland) {
+      setText(this.wReach, thou(Math.round(s.world.reachDistance)));
+      setText(this.wChunks, thou(s.world.exploredChunks));
+    }
 
     // 環境バランス (5)
     setBar(this.eLight, s.balance.light);

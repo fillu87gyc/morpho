@@ -33,6 +33,7 @@ import { buildChartLayout, drawChart, type ChartSeries } from './chart.js';
 import { EraHistory } from './era-history.js';
 import { Notes } from './notes.js';
 import { buildReport, eraHistoryLines } from './report.js';
+import { setWorldOverview } from './world-overview.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -1000,6 +1001,10 @@ function frame() {
     // state は既に新しい窓原点で平行移動済みなので、描画より前に必ず適用する)。
     const windowShift = game.consumeWindowShift();
     if (windowShift) camera.shiftCenter(windowShift.x, windowShift.y);
+    // M28: 「原野」の全世界俯瞰 (Worker から低頻度で届く) の最新値を
+    // モジュール状態 (world-overview.ts) に置くだけ。絵に起こす大局レイヤー/
+    // ワールドマップは M28-B が getWorldOverview() を import して読む。
+    setWorldOverview(game.worldOverview());
     // M14: 時代が切り替わった節目に 🍄 を1度だけ贈る (進化の記録には
     // game.ts 側の eraLog で既に残っている、ここは通貨報酬だけを付与)。
     if (snap.era.name !== lastEraName) {

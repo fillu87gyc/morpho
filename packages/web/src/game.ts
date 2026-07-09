@@ -25,6 +25,7 @@ import { UndoStack } from './undo.js';
 import { eraFor, type EraStatus } from './era.js';
 import { WorldEventLog, type WorldEvent } from './world-events.js';
 import { computeRegenAmount, REGEN_RADIUS_FRACTION } from './nutrient-regen.js';
+import { computeReachDistance, type WorldChunkSummary, type WorldOverview } from './world-overview.js';
 
 export type { StageId } from './stages.js';
 
@@ -51,6 +52,11 @@ export interface WorldInfo {
   coloniesTotal: number;   // 食料拠点の総数 (envの食料エリアの連結成分数)
   sourceColonies: number;    // M6: 大マップに配置したコロニー (群体) の総数
   connectedNetworks: number; // M6: 現在の独立ネットワーク数 (1 = 全コロニーが統合済み)
+  // M28: 母体 (初期source) から最遠ノードまでの距離。全ステージで計算する
+  // (純粋な派生値で決定論に影響しない) が、HUD 表示は原野のみ (ui.ts)。
+  reachDistance: number;
+  // M28: 探索チャンク数 (生成済みチャンク数)。有界6ステージでは常に 0。
+  exploredChunks: number;
 }
 
 export interface EvolutionLog {
@@ -105,6 +111,17 @@ const WILDLAND_CENTER: Vec2 = { x: WILDLAND_WORLD_SIZE / 2, y: WILDLAND_WORLD_SI
 // 窓の bbox が縁からこの割合以内に近づいたら再センタリングする
 // (chunk-window.ts の followWindowOrigin と同じ意味、値は経験的に選定)。
 const WILDLAND_REBAKE_MARGIN = 0.25;
+// M28: 「粘菌が占めている」とみなすバイオマスの下限。computeWorld() の
+// 窓集計 (既存6ステージ) が使ってきた 0.05 と同じ値を、原野の全世界集計
+// (チャンク横断) でも使う — 窓と世界で「面積」の定義がずれないようにする。
+const BIOMASS_AREA_THRESHOLD = 0.05;
+// M28: 原野の全世界統計 (チャンク横断走査) を再計算する tick 間隔。
+// computeWorld() は snapshotDerived (250ms毎) と checkEraTransition (12tick毎)
+// から呼ばれるため、毎回全チャンクを走査すると生成済みチャンク数に比例した
+// 固定費が乗ってしまう。growthStep 系の間引き (12tick) の倍にあたる 24tick
+// に1回だけ数え直し、間はキャッシュを返す (Day 100 実測 68チャンク規模で
+// 走査は 1ms 未満、この頻度なら tick 本体に埋もれる)。
+const WILDLAND_STATS_INTERVAL_TICKS = 24;
 
 // M6: 単一 source ではなく、大マップに複数のコロニー (群体) を離して配置する。
 // ズームアウト (zoom=1) すると全コロニーを見渡せ、ズームインすると
@@ -223,6 +240,9 @@ export class Game {
   // だけずらして「窓が動いた」ことを見た目に響かせないための差分)。
   // consumeWindowShift() で1回読むと 0 に戻る。
   private windowShiftDelta: Vec2 | null = null;
+  // M28: 原野の全世界統計 (チャンク横断走査の結果) のキャッシュ。
+  // WILDLAND_STATS_INTERVAL_TICKS に1回だけ数え直す (詳細は定数のコメント)。
+  private wildlandStatsCache: { tick: number; areaM2: number; massKg: number; exploredChunks: number } | null = null;
 
   constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome) {
     this.seed = seed;
@@ -274,12 +294,14 @@ export class Game {
       // 窓 (ローカル座標 0..WORLD) の中心に種が来るよう初期原点を決める。
       this.windowOrigin = { x: WILDLAND_CENTER.x - WORLD / 2, y: WILDLAND_CENTER.y - WORLD / 2 };
       this.windowShiftDelta = null;
+      this.wildlandStatsCache = null;
       this.rebakeWildlandWindow();
       this.landmarks = [];
     } else {
       this.chunkEnv = null; this.chunkAct = null; this.chunkBio = null;
       this.windowOrigin = { x: 0, y: 0 };
       this.windowShiftDelta = null;
+      this.wildlandStatsCache = null;
       this.state = createInitialState(seed, WORLD);
 
       // M14: 大陸ステージは worldPoints() で拠点を手続き生成する (rng は genome の
@@ -709,16 +731,6 @@ export class Game {
   }
 
   private computeWorld(connectedNetworks: number): WorldInfo {
-    // 占有面積: biomass が一定値以上のセル数。世界全体を 100×100 m² とみなす。
-    const n = this.fieldSize * this.fieldSize;
-    const cellArea = (WORLD * WORLD) / n; // m²/cell
-    let cells = 0;
-    let mass = 0;
-    for (let i = 0; i < n; i++) {
-      const v = this.bio.field.data[i] ?? 0;
-      mass += v;
-      if (v > 0.05) cells++;
-    }
     // 拠点総数は配置回数で素直に数える (computeWorld で派生しない)。
     const coloniesTotal = this.coloniesTotal;
     // 到達数: sink ノード数を独立な拠点に「圧縮」する。
@@ -728,17 +740,113 @@ export class Game {
     const sinks = this.state.nodes.filter((n) => n.type === 'sink');
     const reached = clusterCount(sinks.map((n) => n.pos), 6 /* world units */);
     const coloniesReached = Math.min(coloniesTotal, reached);
-    // 粘菌の総量 (kg 想定): biomass の総和 × 単位 (係数は体感優先で調整)。
-    // モックアップ ~4kg 規模に近付くよう、薄めの密度に倒す。
-    const massKg = +(mass * cellArea * 0.0009).toFixed(2);
+    // M28: 到達距離 = 母体 (初期source、原野では WILDLAND_CENTER) から
+    // 最遠ノードまでの距離。純粋な派生値 (rng もフィールドも触らない) なので
+    // 全ステージで計算して問題ないが、表示は原野のみ (ui.ts)。
+    const mother = this.sourcePoints[0] ?? { x: 0, y: 0 };
+    const reachDistance = computeReachDistance(this.state.nodes.map((n) => n.pos), mother);
+    // M28: 面積・総量は、原野では窓 (this.bio、理論上限 WORLD² = 10,000m²)
+    // ではなくチャンク横断の全世界集計を使う (ROADMAP.md V2: 「総面積が窓の
+    // 中しか数えていない」の解消)。既存6ステージは従来通りの窓集計で、数値は
+    // bit 一致で不変。
+    const { areaM2, massKg, exploredChunks } = this.stage.infinite
+      ? this.wildlandWorldStats()
+      : { ...this.windowBiomassStats(), exploredChunks: 0 };
     return {
-      areaM2: Math.round(cells * cellArea),
+      areaM2,
       massKg,
       networkLinks: this.state.edges.length,
       coloniesReached,
       coloniesTotal,
       sourceColonies: this.sourcePoints.length,
       connectedNetworks,
+      reachDistance,
+      exploredChunks,
+    };
+  }
+
+  // 既存6ステージの面積・総量 (従来の computeWorld 本体そのまま)。
+  // 占有面積: biomass が一定値以上のセル数。世界全体を 100×100 m² とみなす。
+  private windowBiomassStats(): { areaM2: number; massKg: number } {
+    const n = this.fieldSize * this.fieldSize;
+    const cellArea = (WORLD * WORLD) / n; // m²/cell
+    let cells = 0;
+    let mass = 0;
+    for (let i = 0; i < n; i++) {
+      const v = this.bio.field.data[i] ?? 0;
+      mass += v;
+      if (v > BIOMASS_AREA_THRESHOLD) cells++;
+    }
+    // 粘菌の総量 (kg 想定): biomass の総和 × 単位 (係数は体感優先で調整)。
+    // モックアップ ~4kg 規模に近付くよう、薄めの密度に倒す。
+    return {
+      areaM2: Math.round(cells * cellArea),
+      massKg: +(mass * cellArea * 0.0009).toFixed(2),
+    };
+  }
+
+  // M28: 原野の全世界統計。チャンク横断の走査は WILDLAND_STATS_INTERVAL_TICKS
+  // に1回だけ行い、間はキャッシュを返す (computeWorld は 250ms毎 + 12tick毎に
+  // 呼ばれるため)。面積・総量の式は窓集計 (windowBiomassStats) と同じで、
+  // セル面積だけがチャンク側の解像度 (cellWorldSize², 出荷値 1m²/cell) になる。
+  private wildlandWorldStats(): { areaM2: number; massKg: number; exploredChunks: number } {
+    const chunkEnv = this.chunkEnv, chunkBio = this.chunkBio;
+    if (!chunkEnv || !chunkBio) return { areaM2: 0, massKg: 0, exploredChunks: 0 };
+    const cached = this.wildlandStatsCache;
+    if (cached && this.state.tick >= cached.tick && this.state.tick - cached.tick < WILDLAND_STATS_INTERVAL_TICKS) {
+      return cached;
+    }
+    const cellArea = chunkBio.cellWorldSize * chunkBio.cellWorldSize; // m²/cell
+    const world = chunkBio.summarizeWorld(BIOMASS_AREA_THRESHOLD);
+    const next = {
+      tick: this.state.tick,
+      areaM2: Math.round(world.cellsAbove * cellArea),
+      massKg: +(world.total * cellArea * 0.0009).toFixed(2),
+      exploredChunks: chunkEnv.generatedChunkCount(),
+    };
+    this.wildlandStatsCache = next;
+    return next;
+  }
+
+  // M28: 「原野」の全世界俯瞰。チャンク要約 (地形 + バイオマス) と全世界統計を
+  // 1つに束ねて返す。Worker が低頻度 (sim-worker.ts) で main スレッドへ送る。
+  // sim 側の summarize* は peekChunk ベース (副作用なし) なので、これを何度
+  // 呼んでも sim の決定論は乱れない。有界6ステージでは null。
+  worldOverview(): WorldOverview | null {
+    const chunkEnv = this.chunkEnv, chunkBio = this.chunkBio;
+    if (!chunkEnv || !chunkBio) return null;
+    const terrain = chunkEnv.summarizeChunks();
+    const bio = chunkBio.summarizeChunks(BIOMASS_AREA_THRESHOLD);
+    const bioByKey = new Map(bio.map((s) => [`${s.cx}:${s.cy}`, s.total]));
+    const chunks: WorldChunkSummary[] = terrain.map((t) => ({
+      cx: t.cx, cy: t.cy,
+      nutrientAvg: t.nutrientAvg,
+      obstacleDensity: t.obstacleDensity,
+      hasWater: t.hasWater,
+      biomass: bioByKey.get(`${t.cx}:${t.cy}`) ?? 0,
+    }));
+    // バイオマス場は拡散の縁で「地形チャンク未生成のままバイオマスだけ滲んだ」
+    // チャンクを持ちうる。落とすと世界の縁が欠けるので、地形 0 扱いで含める。
+    const seen = new Set(terrain.map((t) => `${t.cx}:${t.cy}`));
+    for (const s of bio) {
+      if (seen.has(`${s.cx}:${s.cy}`)) continue;
+      chunks.push({ cx: s.cx, cy: s.cy, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, biomass: s.total });
+    }
+    const stats = this.wildlandWorldStats();
+    const mother = this.sourcePoints[0] ?? WILDLAND_CENTER;
+    return {
+      chunks,
+      // チャンク要約は実座標なので、窓相対 (ローカル座標 0..WORLD) で使える
+      // よう窓原点も一緒に届ける (受け手が実座標 - windowOrigin で変換する)。
+      windowOrigin: { x: this.windowOrigin.x, y: this.windowOrigin.y },
+      chunkWorldSize: chunkEnv.chunkCells * chunkEnv.cellWorldSize,
+      stats: {
+        areaM2: stats.areaM2,
+        massKg: stats.massKg,
+        exploredChunks: stats.exploredChunks,
+        reachDistance: computeReachDistance(this.state.nodes.map((n) => n.pos), mother),
+      },
+      tick: this.state.tick,
     };
   }
 

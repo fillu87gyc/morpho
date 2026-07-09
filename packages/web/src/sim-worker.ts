@@ -79,6 +79,13 @@ let lastDerived: DerivedSnapshot = game.snapshotDerived();
 let lastDerivedAtMs = performance.now();
 let forceDerived = false;
 
+// M28: 「原野」の全世界俯瞰。チャンク要約の走査は snapshot と桁違いに重く
+// なりうる (生成済みチャンク数に比例) ので、1秒に1回まで間引く。盤面が
+// 変わっていない間 (dirty が一度も立たなかった間) は再送もしない。
+const WORLD_OVERVIEW_INTERVAL_MS = 1000;
+let lastOverviewAtMs = 0;
+let overviewPending = true; // 起動直後・reset/apply 後は次の機会に必ず送る
+
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
@@ -154,6 +161,16 @@ function loop(): void {
     effectiveSpeed = (ticksInWindow / windowElapsed) * baseTickMs;
     ticksInWindow = 0;
     windowStartMs = now;
+  }
+  // M28: 盤面が変わった (dirty が立った) ことを覚えておき、間引き間隔ごとに
+  // 全世界俯瞰を送り直す。dirty 自体は下の snapshot 送信でクリアされるため、
+  // 別フラグに写し取っておく (間隔未達のまま dirty が消えても取りこぼさない)。
+  if (dirty) overviewPending = true;
+  if (overviewPending && now - lastOverviewAtMs >= WORLD_OVERVIEW_INTERVAL_MS) {
+    lastOverviewAtMs = now;
+    overviewPending = false;
+    const overview = game.worldOverview(); // 有界6ステージでは null (送らない)
+    if (overview) ctx.postMessage({ type: 'worldOverview', overview });
   }
   if (dirty) {
     if (forceDerived || now - lastDerivedAtMs >= DERIVED_INTERVAL_MS) {
