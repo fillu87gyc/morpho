@@ -8,6 +8,9 @@ export interface PerfFrameInfo {
   tickMs: number;
   targetSpeed: number;
   effectiveSpeed: number;
+  // M28-B: 原野の俯瞰レイヤー (タイル + 骨格線) に使った時間。draw の内訳
+  // (予算 3ms/frame の実測用)。俯瞰が出ていないフレームでは 0。
+  overviewMs?: number;
 }
 
 export class PerfHud {
@@ -39,6 +42,7 @@ export class PerfHud {
     this.el.textContent =
       `FPS ${fps}\n` +
       `draw ${info.drawMs.toFixed(2)}ms\n` +
+      (info.overviewMs !== undefined && info.overviewMs > 0 ? `ov ${info.overviewMs.toFixed(2)}ms\n` : '') +
       `tick ${info.tickMs.toFixed(2)}ms\n` +
       `speed x${info.effectiveSpeed.toFixed(1)} / x${info.targetSpeed}`;
   }

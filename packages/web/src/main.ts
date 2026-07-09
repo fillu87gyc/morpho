@@ -1150,7 +1150,7 @@ function frame() {
     renderTimeline();
 
     const perf = game.perf();
-    perfHud.render({ drawMs: performance.now() - drawT0, tickMs: perf.tickMs, targetSpeed: perf.targetSpeed, effectiveSpeed: perf.effectiveSpeed });
+    perfHud.render({ drawMs: performance.now() - drawT0, tickMs: perf.tickMs, targetSpeed: perf.targetSpeed, effectiveSpeed: perf.effectiveSpeed, overviewMs: renderer.lastOverviewMs });
   }
   requestAnimationFrame(frame);
 }
