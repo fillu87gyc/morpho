@@ -176,6 +176,116 @@ describe('近いエッジの fatigue < 遠いエッジの fatigue (対照実験)
   });
 });
 
+// ── M30-B: distanceMode='origin' (原点からのユークリッド距離) ──────────
+
+describe("distanceMode='origin' の距離キャッシュ", () => {
+  it('原点からのユークリッド距離が全ノード (孤立成分含む) に載る', () => {
+    // seedSource を使わず手組み → origins 未設定なので、まず origins を明示。
+    const state = createInitialState(1, 100);
+    state.origins = [{ x: 50, y: 50 }];
+    const S = addNode(state, 50, 50, 'source');
+    const A = addNode(state, 53, 50, 'relay');   // 距離 3
+    const B = addNode(state, 50, 46, 'relay');   // 距離 4
+    const E = addNode(state, 20, 10, 'relay');   // 孤立成分 (距離 50)
+    const F = addNode(state, 23, 10, 'relay');
+    addEdge(state, S.id, A.id);
+    addEdge(state, S.id, B.id);
+    addEdge(state, E.id, F.id);
+    const params: SimParams = { ...DEFAULT_PARAMS, distanceUpkeep: 0.002, distanceMode: 'origin' };
+    updateFlux(state, params, buildIndex(state));
+    const d = state.sourceHops!;
+    expect(d.get(S.id)).toBe(0);
+    expect(d.get(A.id)).toBeCloseTo(3, 10);
+    expect(d.get(B.id)).toBeCloseTo(4, 10);
+    // hops モードとの決定的な違い: 孤立成分にもエントリが載る
+    // (forager reclaim で切り離された前線にも距離コストが効く)。
+    expect(d.get(E.id)).toBeCloseTo(50, 10);
+    expect(d.get(F.id)).toBeCloseTo(Math.hypot(27, 40), 10);
+  });
+
+  it('複数原点なら最寄りの原点からの距離になる', () => {
+    const state = createInitialState(1, 200);
+    state.origins = [{ x: 10, y: 50 }, { x: 110, y: 50 }];
+    const near1 = addNode(state, 13, 50, 'source');  // 原点1から 3
+    const near2 = addNode(state, 106, 50, 'relay');  // 原点2から 4
+    addEdge(state, near1.id, near2.id);
+    const params: SimParams = { ...DEFAULT_PARAMS, distanceUpkeep: 0.002, distanceMode: 'origin' };
+    updateFlux(state, params, buildIndex(state));
+    expect(state.sourceHops!.get(near1.id)).toBeCloseTo(3, 10);
+    expect(state.sourceHops!.get(near2.id)).toBeCloseTo(4, 10);
+  });
+
+  it('seedSource が origins を記録し、原点は source ノードの位置と一致する', () => {
+    const state = createInitialState(5, 100);
+    seedSource(state, { x: 30, y: 70 }, 6);
+    expect(state.origins).toEqual([{ x: 30, y: 70 }]);
+    // 参照共有ではなくコピー (後からノードが動いても原点は動かない)。
+    expect(state.origins![0]).not.toBe(state.nodes[0]!.pos);
+  });
+
+  it("'origin' でもキャッシュは distanceUpdateInterval tick ごとにだけ更新される", () => {
+    const state = createInitialState(1, 100);
+    state.origins = [{ x: 50, y: 50 }];
+    const S = addNode(state, 50, 50, 'source');
+    const params: SimParams = {
+      ...DEFAULT_PARAMS, distanceUpkeep: 0.002, distanceMode: 'origin', distanceUpdateInterval: 60,
+    };
+    state.tick = 1;
+    updateFlux(state, params, buildIndex(state));
+    const first = state.sourceHops!;
+    expect(first).toBeDefined();
+    // 間隔の途中は同じキャッシュ (参照ごと不変)。
+    const G = addNode(state, 60, 50, 'relay');
+    addEdge(state, S.id, G.id);
+    state.tick = 2;
+    updateFlux(state, params, buildIndex(state));
+    expect(state.sourceHops).toBe(first);
+    // 間隔の倍数 tick で組み直され、新ノードの距離が載る。
+    state.tick = 60;
+    updateFlux(state, params, buildIndex(state));
+    expect(state.sourceHops).not.toBe(first);
+    expect(state.sourceHops!.get(G.id)).toBeCloseTo(10, 10);
+  });
+});
+
+describe("distanceMode='origin' の対照実験 (fatigue 勾配)", () => {
+  // hops モードの一本鎖テストと同じ構造で、モードだけ 'origin' にする。
+  // 鎖の 1 hop = 3 world unit なので、K は hops の推奨値を 3 で割った規模。
+  const HOPS = 30;
+  function runChain(distanceUpkeep: number) {
+    const env = new GridEnvironment({ worldSize: 200, fieldSize: 96 });
+    env.placeFood({ x: 10 + HOPS * 3, y: 50 }, 6, 1.2);
+    const rng = createRNG(11);
+    const act = new ActivityField(200, 64);
+    const bio = new BiomassField(200, 64);
+    const state = createInitialState(11, 200);
+    state.origins = [{ x: 10, y: 50 }];
+    let prev = addNode(state, 10, 50, 'source');
+    for (let i = 1; i <= HOPS; i++) {
+      const n = addNode(state, 10 + i * 3, 50, i === HOPS ? 'sink' : 'relay');
+      addEdge(state, prev.id, n.id);
+      prev = n;
+    }
+    const params: SimParams = {
+      ...DEFAULT_PARAMS, distanceUpkeep, distanceMode: 'origin',
+      growthProbability: 0, branchProbabilityBase: 0, lateralBudProbability: 0,
+    };
+    run(state, env, act, bio, params, rng, new EventBus(), 300);
+    return state;
+  }
+
+  it('有効時は遠端の fatigue が母体近傍より明確に高く、近傍はほぼ無効時のまま', () => {
+    const on = runChain(0.05 / 3); // hops K=0.05 相当を world unit へ再スケール
+    const off = runChain(0);
+    expect(on.edges.length).toBe(HOPS);
+    const nearOn = on.edges[0]!, farOn = on.edges[HOPS - 1]!;
+    const nearOff = off.edges[0]!, farOff = off.edges[HOPS - 1]!;
+    expect(farOn.fatigue).toBeGreaterThan(nearOn.fatigue + 0.5);
+    expect(farOn.fatigue).toBeGreaterThan(farOff.fatigue + 0.5);
+    expect(Math.abs(nearOn.fatigue - nearOff.fatigue)).toBeLessThan(0.05);
+  });
+});
+
 describe('有効時の決定論', () => {
   it('同じ seed 2回で最終状態と距離キャッシュが bit 一致する', () => {
     const build = () => {
@@ -196,6 +306,25 @@ describe('有効時の決定論', () => {
     expect([...a.sourceHops!.entries()].sort()).toEqual([...b.sourceHops!.entries()].sort());
     // 実際に距離コストが働いている前提での比較であること (h>0 のノードが
     // 存在する) を確認する。
+    expect(Math.max(...a.sourceHops!.values())).toBeGreaterThan(0);
+  });
+
+  it("distanceMode='origin' でも同じ seed 2回で bit 一致する", () => {
+    const build = () => {
+      const env = new GridEnvironment({ worldSize: 100, fieldSize: 96 });
+      env.placeFood({ x: 25, y: 50 }, 7, 1.2);
+      env.placeFood({ x: 75, y: 50 }, 7, 1.2);
+      const rng = createRNG(42);
+      const act = new ActivityField(100, 64);
+      const bio = new BiomassField(100, 64);
+      const state = createInitialState(42, 100);
+      seedSource(state, { x: 50, y: 50 }, 6);
+      run(state, env, act, bio, { ...DEFAULT_PARAMS, distanceUpkeep: 0.006, distanceMode: 'origin' }, rng, new EventBus(), 900);
+      return state;
+    };
+    const a = build(), b = build();
+    expect(fingerprint(a)).toEqual(fingerprint(b));
+    expect([...a.sourceHops!.entries()].sort()).toEqual([...b.sourceHops!.entries()].sort());
     expect(Math.max(...a.sourceHops!.values())).toBeGreaterThan(0);
   });
 });

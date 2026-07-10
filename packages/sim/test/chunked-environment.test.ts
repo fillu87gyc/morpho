@@ -56,6 +56,48 @@ describe('ChunkedGridEnvironment', () => {
       expect(a.nutrients.sample(wx, wy)).toBeCloseTo(b.nutrients.sample(wx, wy), 6);
     }
   });
+
+  // ── M30: バイオーム表現のための地形パッチ (毒素/湿度/水域) ──
+  it('generateTerrain の toxin/moisture/water パッチが各フィールドへ反映される', () => {
+    const env = new ChunkedGridEnvironment({
+      worldSize: 100_000,
+      worldSeed: 9,
+      chunkCells: 32,
+      cellWorldSize: 1,
+      baseMoisture: 0.3,
+      generateTerrain: () => ({
+        toxinPatches: [{ x: 8, y: 8, radius: 4, amount: 0.6 }],
+        moisturePatches: [{ x: 24, y: 8, radius: 4, amount: -0.2 }], // 乾燥地帯
+        waterPatches: [{ x: 16, y: 24, radius: 3 }],
+      }),
+    });
+    // 毒素の染み
+    expect(env.toxin.sample(8, 8)).toBeGreaterThan(0.3);
+    // 乾燥地帯 (base 0.3 から下がる)
+    expect(env.moisture.sample(24, 8)).toBeLessThan(0.3);
+    // 水域: water と obstacle の両方に立ち (通行不能)、周囲が湿る
+    expect(env.water.sampleNearest(16, 24)).toBe(1);
+    expect(env.obstacle.sampleNearest(16, 24)).toBe(1);
+    expect(env.moisture.sample(16, 20)).toBeGreaterThan(0.3);
+  });
+
+  it('新パッチを返さない generateTerrain では毒素0・湿度base・水なし (M25 と互換)', () => {
+    const env = new ChunkedGridEnvironment({
+      worldSize: 100_000,
+      worldSeed: 10,
+      chunkCells: 32,
+      cellWorldSize: 1,
+      baseMoisture: 0.32,
+      generateTerrain: () => ({
+        foodPatches: [{ x: 16, y: 16, radius: 4, amount: 1 }],
+      }),
+    });
+    // 実体化を促してから読む (sample は実体化する)。
+    expect(env.nutrients.sample(16, 16)).toBeGreaterThan(0);
+    expect(env.toxin.sample(16, 16)).toBe(0);
+    expect(env.moisture.sample(16, 16)).toBeCloseTo(0.32, 6);
+    expect(env.water.sampleNearest(16, 16)).toBe(0);
+  });
 });
 
 describe('ChunkedGridEnvironment を使った実際の成長 (M25 の核心)', () => {

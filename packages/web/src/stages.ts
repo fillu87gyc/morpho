@@ -5,15 +5,21 @@
 // (アーキテクチャ方針: sim はステートレスに保つ)。
 
 import { type GridEnvironment, type SeededRNG, type SimParams, type Vec2 } from '@morpho/sim';
+import { biomeAt, type BiomeId } from './biomes.js';
 
 export type StageId = 'petri' | 'cave' | 'desert' | 'ruins' | 'wetland' | 'continent' | 'wildland';
 
 // M25: 「原野」用のチャンク単位の地形生成 (無限ワールド)。既存6ステージの
 // generateTerrain (GridEnvironment 全体を一度だけ焼く) とは前提が違う —
 // ChunkedGridEnvironment がチャンクを初めて触れた瞬間に1度ずつ呼ばれる。
+// M30: バイオーム表現のため toxin/moisture/water を追加 (sim 側の
+// ChunkedGridEnvironmentInit.generateTerrain と同じ形)。
 export interface ChunkTerrainResult {
   obstaclePatches?: { x: number; y: number; radius: number }[];
   foodPatches?: { x: number; y: number; radius: number; amount: number }[];
+  toxinPatches?: { x: number; y: number; radius: number; amount: number }[];
+  moisturePatches?: { x: number; y: number; radius: number; amount: number }[];
+  waterPatches?: { x: number; y: number; radius: number }[];
 }
 
 // M14: 大陸ステージ専用。source (拠点の種となるコロニー核) と
@@ -299,6 +305,92 @@ function generateContinentTerrain(env: GridEnvironment, rng: SeededRNG, worldSiz
 // 「原野」のチャンク一辺のセル数 (ChunkedGridEnvironment の chunkCells と
 // chunkTerrain のローカル座標範囲を揃えるための共有定数)。
 export const WILDLAND_CHUNK_CELLS = 48;
+
+// M30: 原野の実座標系の広さと開始点。growth.ts の worldMargin 境界判定に
+// 実用上ひっかからない程度に大きい値 (実質「無限」)。game.ts と main.ts
+// (採種時の実座標復元) が同じ値を共有できるよう、ここで定義する。
+export const WILDLAND_WORLD_SIZE = 1_000_000;
+export const WILDLAND_CENTER: Vec2 = { x: WILDLAND_WORLD_SIZE / 2, y: WILDLAND_WORLD_SIZE / 2 };
+
+// 開始点を含むチャンク番地。開始地点の周囲 (Chebyshev 1チャンク以内) は
+// ノイズの結果に依らず「母体の森」として豊かに固定する — 初手が荒地や
+// 毒地帯で即詰みになる seed を作らないための救済 (M31 の「極小スタート」
+// はこの上に別途設計する)。
+const WILDLAND_HOME_CX = Math.floor(WILDLAND_CENTER.x / WILDLAND_CHUNK_CELLS);
+const WILDLAND_HOME_CY = Math.floor(WILDLAND_CENTER.y / WILDLAND_CHUNK_CELLS);
+
+// M30: 原野のチャンク地形をバイオームで生成する。純粋なノイズ分類は
+// biomes.ts (vitest 対象)、ここは「バイオーム → どんなパッチを湧かすか」。
+// rng はチャンクごとに (worldSeed, cx, cy) から決定的に引き直される
+// (chunked-environment.ts) ので、バイオームごとに消費数が違っても他の
+// チャンクへ影響しない。
+export function wildlandChunkTerrain(coord: { cx: number; cy: number }, rng: SeededRNG, worldSeed: number): ChunkTerrainResult {
+  const cells = WILDLAND_CHUNK_CELLS;
+  const p = () => rng.range(4, cells - 4); // チャンク内のランダム点 (縁は避ける)
+  const home = Math.max(Math.abs(coord.cx - WILDLAND_HOME_CX), Math.abs(coord.cy - WILDLAND_HOME_CY)) <= 1;
+  const biome: BiomeId = home ? 'forest' : biomeAt(coord.cx, coord.cy, worldSeed);
+  switch (biome) {
+    case 'forest': {
+      // 豊かな森: 餌パッチ多め (2つ) + 湿潤。M25→M29 の一様地形 (全チャンク
+      // 1パッチ, amount 0.9-1.3) より少し豊か。
+      return {
+        foodPatches: [
+          { x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(1.0, 1.4) },
+          { x: p(), y: p(), radius: rng.range(3, 5), amount: rng.range(0.8, 1.1) },
+        ],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 16), amount: rng.range(0.10, 0.18) }],
+        obstaclePatches: rng.next() < 0.15 ? [{ x: p(), y: p(), radius: rng.range(2, 3.5) }] : [],
+      };
+    }
+    case 'barrens': {
+      // 痩せた荒地: 餌なし〜稀 (30% で小さな飛び石が1つ)。乾いている。
+      // 横断の旅を生む主役 — 前線はここで一旦止まり、reclaim の這い出しで
+      // 飛び石を伝って渡る。飛び石ゼロにすると連続した荒地で完全に詰む
+      // (ハーネス実測、ROADMAP.md M30 実装メモ)。
+      return {
+        foodPatches: rng.next() < 0.30
+          ? [{ x: p(), y: p(), radius: rng.range(2.5, 3.5), amount: rng.range(0.35, 0.55) }]
+          : [],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(12, 20), amount: -rng.range(0.06, 0.12) }],
+        obstaclePatches: rng.next() < 0.2 ? [{ x: p(), y: p(), radius: rng.range(2, 3) }] : [],
+      };
+    }
+    case 'rocky': {
+      // 岩場: 障害物多・餌少。通れるが遠回りになる。
+      const rocks = 3 + Math.floor(rng.next() * 3); // 3〜5
+      return {
+        obstaclePatches: Array.from({ length: rocks }, () => ({ x: p(), y: p(), radius: rng.range(2.5, 5) })),
+        foodPatches: rng.next() < 0.6
+          ? [{ x: p(), y: p(), radius: rng.range(3, 4.5), amount: rng.range(0.6, 0.9) }]
+          : [],
+      };
+    }
+    case 'toxic': {
+      // 毒の窪地: 毒素 + 餌豊か (リスクリワード)。toxinPenalty (と genome の
+      // toxinResistance) が働くので、系統によっては素通りできる。
+      return {
+        toxinPatches: [
+          { x: p(), y: p(), radius: rng.range(5, 8), amount: rng.range(0.35, 0.55) },
+          { x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(0.25, 0.4) },
+        ],
+        foodPatches: [
+          { x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(1.2, 1.6) },
+          { x: p(), y: p(), radius: rng.range(3, 5), amount: rng.range(0.9, 1.2) },
+        ],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 14), amount: rng.range(0.08, 0.15) }],
+      };
+    }
+    case 'waterside': {
+      // 水辺: 水域 (通行不能) + 湿潤 + 中程度の餌。
+      const lakes = 1 + (rng.next() < 0.5 ? 1 : 0);
+      return {
+        waterPatches: Array.from({ length: lakes }, () => ({ x: p(), y: p(), radius: rng.range(3, 6) })),
+        foodPatches: [{ x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(0.9, 1.3) }],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 16), amount: rng.range(0.12, 0.2) }],
+      };
+    }
+  }
+}
 
 export const STAGES: Record<StageId, StageConfig> = {
   petri: {

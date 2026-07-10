@@ -61,17 +61,29 @@ export interface SimParams {
 
   // ── 距離のコスト勾配 (M30 無限ワールド用) ──
   // 「母体から近い組織は消費が緩やか、遠征している組織は早く消耗する」
-  // (ROADMAP ビジョン第4項)。母体 (source ノード) からのグラフ距離 (hop 数) が
-  // h のエッジは、fatigue の増分が (1 + distanceUpkeep×h) 倍、流れによる回復が
-  // 1/(1 + distanceUpkeep×h) 倍になる — 効果は連続的で、母体近傍 (h が小さい)
-  // では実質ゼロ。伸びすぎた遠征枝は疲労が回復で追いつかなくなり、activity と
-  // radius が落ちて自然に枯れて戻る (無制限な一方向暴走への自然なブレーキ)。
-  // 距離は毎tickの厳密最短路ではなく、flux が毎tick回しているマルチソース BFS
-  // (flux.ts) に distanceUpdateInterval tick ごとに便乗して hop 深さを記録し、
-  // state.sourceHops へキャッシュする (二重計算なし・RNG 不使用 = seed 決定的)。
-  // 0 (既定) で無効 = 既存6ステージは bit 一致で不変 (forageReclaimThreshold 方式)。
-  distanceUpkeep: number;         // 距離1hopあたりの維持係数。0 = 無効 (既定)
+  // (ROADMAP ビジョン第4項)。母体からの距離が h のエッジは、fatigue の増分が
+  // (1 + distanceUpkeep×h) 倍、流れによる回復が 1/(1 + distanceUpkeep×h) 倍に
+  // なる — 効果は連続的で、母体近傍 (h が小さい) では実質ゼロ。伸びすぎた
+  // 遠征枝は疲労が回復で追いつかなくなり、activity と radius が落ちて自然に
+  // 枯れて戻る (無制限な一方向暴走への自然なブレーキ)。
+  // 距離 h の定義は distanceMode で選ぶ:
+  //   - 'hops' (既定、M30-A): 母体 (source ノード) からのグラフ距離 (hop 数)。
+  //     flux が毎tick回しているマルチソース BFS (flux.ts) に distanceUpdate-
+  //     Interval tick ごとに便乗して hop 深さを記録する (二重計算なし)。
+  //     forager reclaim (M25) で母体から切り離された孤立成分には載らない
+  //     (= 距離コストが効くのは連結コアのみ) という既知の限界がある。
+  //   - 'origin' (M30-B): 原点 (createInitialState/seedSource 時点の初期 source
+  //     位置。複数なら最寄り) からのユークリッド距離 (ワールド単位)。孤立
+  //     成分にも等しく効き、ビジョンの文言 (スタート位置からの空間距離) に
+  //     一致する。1 hop ≈ growthStep (数ワールド単位) なので、distanceUpkeep
+  //     は 'hops' の推奨値 (0.005/hop) を growthStep で割った程度 (≈0.0015/unit)
+  //     へ再スケールすること。
+  // どちらも距離キャッシュは state.sourceHops (RNG 不使用 = seed 決定的)。
+  // distanceUpkeep=0 (既定) で無効 = 既存6ステージは bit 一致で不変
+  // (forageReclaimThreshold 方式)。
+  distanceUpkeep: number;         // 距離単位あたりの維持係数。0 = 無効 (既定)
   distanceUpdateInterval: number; // 距離キャッシュを更新する間隔 (tick)。distanceUpkeep=0 なら参照されない
+  distanceMode: 'hops' | 'origin'; // 距離の定義。'hops' = グラフ距離 (既定)、'origin' = 原点からのユークリッド距離
 
   // ── 環境スコア ──────────────────────
   foodReachThreshold: number;
@@ -149,6 +161,7 @@ export const DEFAULT_PARAMS: SimParams = {
   // 12 tick ごとに数 hop しか動かさないので、60 tick の遅れは十分小さい)。
   distanceUpkeep: 0,
   distanceUpdateInterval: 60,
+  distanceMode: 'hops',
 
   foodReachThreshold: 0.55,
   nutrientBias: 2.5,

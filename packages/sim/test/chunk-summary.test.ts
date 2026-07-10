@@ -57,6 +57,15 @@ describe('ChunkedGridEnvironment.summarizeChunks (M28)', () => {
     expect(lake.nutrientAvg).toBe(0);
   });
 
+  it('M30: 毒素の平均 (toxinAvg) が対応するチャンクに反映される', () => {
+    const env = makeEnv();
+    env.placeToxin({ x: 16, y: 16 }, 4, 0.8);
+    env.placeStone({ x: CHUNK * 2 + 16, y: 16 }, 2); // 毒のない対照チャンク
+    const byKey = new Map(env.summarizeChunks().map((s) => [`${s.cx}:${s.cy}`, s]));
+    expect(byKey.get('0:0')!.toxinAvg).toBeGreaterThan(0);
+    expect(byKey.get('2:0')!.toxinAvg).toBe(0);
+  });
+
   it('負のチャンク座標でも正しい番地に要約が返る', () => {
     const env = makeEnv();
     env.placeStone({ x: -CHUNK + 16, y: -CHUNK + 16 }, 3);

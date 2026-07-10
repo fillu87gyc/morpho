@@ -36,10 +36,12 @@ export function updateActivity(
   const dormant = dormantSetOf(state, params);
   const cw = params.dormancyCellWorld;
 
-  // M30: 距離のコスト勾配。母体 (source) からのグラフ距離 h の hop キャッシュ
-  // (flux BFS が低頻度で記録、flux.ts) を引き、遠いエッジほど fatigue の増分を
-  // 増やし回復を減らす。既定 (distanceUpkeep=0) では hops が undefined になり
-  // 従来と同一の式を通る = bit 一致で不変。
+  // M30: 距離のコスト勾配。母体からの距離キャッシュ (flux.ts が低頻度で記録。
+  // distanceMode='hops' なら hop 数、'origin' なら原点からのユークリッド距離)
+  // を引き、遠いエッジほど fatigue の増分を増やし回復を減らす。式はどちらの
+  // モードでも同一 (係数 distanceUpkeep をモードに応じて再スケールする)。
+  // 既定 (distanceUpkeep=0) では hops が undefined になり従来と同一の式を通る
+  // = bit 一致で不変。
   const hops = params.distanceUpkeep > 0 ? state.sourceHops : undefined;
 
   // 自身の activity を場に書き込む (伝播の源泉)
