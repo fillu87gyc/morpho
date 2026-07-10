@@ -47,12 +47,17 @@ function lerp3(a: [number, number, number], b: [number, number, number], t: numb
 }
 
 // 訪問済みチャンク1枚のタイル色。栄養の平均で地面の明度を、水域の有無で
-// 水色を、障害物密度で岩色を決める (ROADMAP.md M28 の大局レイヤー仕様)。
+// 水色を、障害物密度で岩色を、毒素の平均で毒の紫を決める (ROADMAP.md M28 の
+// 大局レイヤー仕様 + M30 のバイオーム)。バイオームはこの4軸に自然に映る:
+// 豊かな森 = 明るい苔、痩せた荒地 = 暗い苔、岩場 = 無彩色、水辺 = 青、
+// 毒の窪地 = 紫がかった明るい地面。
 export function chunkTileColor(c: WorldChunkSummary): [number, number, number] {
   const kNut = Math.min(1, Math.max(0, c.nutrientAvg / NUTRIENT_AVG_FULL));
   let rgb = lerp3(TILE_GROUND_POOR, TILE_GROUND_RICH, kNut);
   const kRock = Math.min(1, Math.max(0, c.obstacleDensity / OBSTACLE_DENSITY_FULL));
   if (kRock > 0) rgb = lerp3(rgb, TILE_ROCK, kRock * 0.7);
+  const kTox = Math.min(1, Math.max(0, (c.toxinAvg ?? 0) / TOXIN_AVG_FULL));
+  if (kTox > 0) rgb = lerp3(rgb, TILE_TOXIN, kTox * 0.65);
   if (c.hasWater) rgb = lerp3(rgb, TILE_WATER, 0.6);
   return [Math.round(rgb[0]), Math.round(rgb[1]), Math.round(rgb[2])];
 }
