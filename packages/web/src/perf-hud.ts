@@ -11,6 +11,12 @@ export interface PerfFrameInfo {
   // M28-B: 原野の俯瞰レイヤー (タイル + 骨格線) に使った時間。draw の内訳
   // (予算 3ms/frame の実測用)。俯瞰が出ていないフレームでは 0。
   overviewMs?: number;
+  // M29: 実効ペース「日/分」(直近の実測、Worker 側で計測)。長時間セッション
+  // での劣化 (「×24 なのに実際は何日/分か」) を絶対値で読むための行。
+  daysPerMin?: number;
+  // M29: 休眠の観測値。休眠が動いていないステージではどちらも 0 (行を出さない)。
+  dormantCells?: number;
+  evictedChunks?: number;
 }
 
 export class PerfHud {
@@ -44,7 +50,11 @@ export class PerfHud {
       `draw ${info.drawMs.toFixed(2)}ms\n` +
       (info.overviewMs !== undefined && info.overviewMs > 0 ? `ov ${info.overviewMs.toFixed(2)}ms\n` : '') +
       `tick ${info.tickMs.toFixed(2)}ms\n` +
-      `speed x${info.effectiveSpeed.toFixed(1)} / x${info.targetSpeed}`;
+      `speed x${info.effectiveSpeed.toFixed(1)} / x${info.targetSpeed}` +
+      (info.daysPerMin !== undefined ? `\npace ${info.daysPerMin.toFixed(2)} 日/分` : '') +
+      (info.dormantCells || info.evictedChunks
+        ? `\ndormant ${info.dormantCells ?? 0} cells / evict ${info.evictedChunks ?? 0}`
+        : '');
   }
 }
 

@@ -199,3 +199,42 @@ test('M28: 成長後にズームアウトすると訪問済みチャンクのタ
   expect(corner).toBe(0);
   expect(errors).toEqual([]);
 });
+
+// ── M29: 休眠 + 稠密化抑制 — 実効ペースが劣化しない ─────────────
+
+test('M29: ×24 で60秒回しても日の進みが極端に鈍化しない (前半30秒 vs 後半30秒)', async ({ page }) => {
+  // 60秒の実測 + 起動/切替のマージン。
+  test.setTimeout(120_000);
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+
+  const dayNow = async (): Promise<number> =>
+    Number(((await page.locator('#day').textContent()) ?? '0').trim());
+
+  await page.click('#speed-btn-24');
+  const d0 = await dayNow();
+  await page.waitForTimeout(30_000);
+  const d1 = await dayNow();
+  await page.waitForTimeout(30_000);
+  const d2 = await dayNow();
+
+  const firstHalf = d1 - d0;
+  const secondHalf = d2 - d1;
+  // M29 前の出荷構成では、窓内が迷路化 (エッジ約7,000本) して tick コストが
+  // 日を追うごとに膨らみ、後半のペースは前半の 1/4 以下まで落ちていた
+  // (第5回実測: 2.1秒/日 → 45〜60秒/日)。M29 (休眠 + evict + 横芽の絞り) 後は
+  // tick コストが前線サイズ比例で頭打ちになるため、後半も前半と同程度の
+  // ペースを保つ。CI の負荷ゆらぎは前後半に等しく乗るので比で判定し、
+  // しきい値は実測 (~0.9-1.0) に対して 0.5 と保守的に取る (フレーク耐性)。
+  expect(firstHalf).toBeGreaterThanOrEqual(3);
+  expect(secondHalf / firstHalf).toBeGreaterThan(0.5);
+  expect(errors).toEqual([]);
+});

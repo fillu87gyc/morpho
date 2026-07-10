@@ -1,0 +1,66 @@
+# M29-B: 出荷構成相当 (Game を直接駆動 = applyGenome(PETRI_PARAMS, genome) +
+# wildland paramOverrides + 窓の焼き直し込み) での対照実験。
+# ハーネス: scratchpad/sim-shipped.mjs (Game(1234, 'wildland') を BATCH=12 tick で駆動)。
+# すべて同一 seed=1234。span = ノード bbox の長辺 (ワールド単位)。
+# live/evicted/touched = 実体化 / 圧縮解放済み / 累計 (踏破) チャンク数。
+# ×24 の tick 予算は 25ms/tick (1日 = 6s = 240 tick)。
+#
+# 結論: 採用は v2 (休眠推奨値 + lateralBudBiomassThreshold 0.20→0.55,
+# lateralBudProbability 0.30→0.12)。Day 40 の対照で v1 (休眠のみ) に対し
+# エッジ 8,729→1,529 (-82%)、span 677→613 (-9%) — 「エッジ数の増加 < span の
+# 増加」へ配分が反転し、tick コストも予算内 (13ms) に収まる。
+# 休眠セル一辺は 24 を採用 (48 との対照 v6: 同 span で 31ms/tick と倍以上遅い)。
+
+## v0: 現行出荷 (M29-B 前 = forageReclaimThreshold:0.3 のみ)。Day 8 で崩壊。
+{"day":2,"nodes":481,"edges":474,"span":138.6,"live":16,"evicted":0,"touched":16,"dormant":0,"msPerTick":10.93}
+{"day":4,"nodes":1938,"edges":1957,"span":229.6,"live":24,"evicted":0,"touched":24,"dormant":0,"msPerTick":33.57}
+{"day":6,"nodes":5905,"edges":6009,"span":351.6,"live":52,"evicted":0,"touched":52,"dormant":0,"msPerTick":102.21}
+{"day":8,"nodes":12331,"edges":12527,"span":498.7,"live":90,"evicted":0,"touched":90,"dormant":0,"msPerTick":274.3}
+ABORT: tick cost exploded
+
+## v1: v0 + 休眠推奨値 (checkInterval 60 / cellWorld 24 / frontier 4 / margin 1 / evict)。
+## tick は頭打ちになるがエッジ総数は増え続け、×24 予算 (25ms) を超過。
+{"day":4,"nodes":1337,"edges":1310,"span":210.3,"live":14,"evicted":9,"touched":23,"dormant":33,"msPerTick":13.69}
+{"day":8,"nodes":2725,"edges":2660,"span":296.6,"live":16,"evicted":19,"touched":35,"dormant":79,"msPerTick":27.82}
+{"day":12,"nodes":3717,"edges":3600,"span":334,"live":18,"evicted":28,"touched":46,"dormant":105,"msPerTick":30.29}
+{"day":16,"nodes":4871,"edges":4624,"span":383.1,"live":22,"evicted":37,"touched":59,"dormant":161,"msPerTick":32.57}
+{"day":20,"nodes":5771,"edges":5404,"span":445.4,"live":23,"evicted":45,"touched":68,"dormant":185,"msPerTick":33.41}
+{"day":24,"nodes":5975,"edges":5572,"span":445.4,"live":25,"evicted":47,"touched":72,"dormant":210,"msPerTick":35.68}
+{"day":28,"nodes":6867,"edges":6309,"span":529.5,"live":21,"evicted":65,"touched":86,"dormant":256,"msPerTick":32.93}
+{"day":32,"nodes":7680,"edges":6990,"span":633.5,"live":22,"evicted":75,"touched":97,"dormant":295,"msPerTick":31.94}
+{"day":36,"nodes":8859,"edges":8052,"span":677.3,"live":20,"evicted":91,"touched":111,"dormant":345,"msPerTick":37.08}
+{"day":40,"nodes":9625,"edges":8729,"span":677.3,"live":21,"evicted":103,"touched":124,"dormant":379,"msPerTick":33.91}
+
+## v2: v1 + lateralBudBiomassThreshold 0.55 / lateralBudProbability 0.12 (採用)。Day 100 まで。
+{"day":5,"nodes":249,"edges":220,"span":234.4,"live":16,"evicted":4,"touched":20,"dormant":19,"msPerTick":9.12}
+{"day":10,"nodes":448,"edges":393,"span":262.8,"live":16,"evicted":11,"touched":27,"dormant":40,"msPerTick":8.55}
+{"day":15,"nodes":716,"edges":642,"span":332.6,"live":17,"evicted":20,"touched":37,"dormant":60,"msPerTick":11.33}
+{"day":20,"nodes":1073,"edges":951,"span":421.5,"live":14,"evicted":32,"touched":46,"dormant":95,"msPerTick":11.11}
+{"day":25,"nodes":1231,"edges":1071,"span":464.2,"live":23,"evicted":30,"touched":53,"dormant":111,"msPerTick":13.16}
+{"day":30,"nodes":1426,"edges":1226,"span":489.2,"live":23,"evicted":35,"touched":58,"dormant":127,"msPerTick":13.78}
+{"day":35,"nodes":1568,"edges":1348,"span":555.4,"live":20,"evicted":47,"touched":67,"dormant":161,"msPerTick":11.76}
+{"day":40,"nodes":1793,"edges":1529,"span":613.1,"live":20,"evicted":53,"touched":73,"dormant":171,"msPerTick":13.16}
+{"day":45,"nodes":1794,"edges":1531,"span":625.8,"live":17,"evicted":62,"touched":79,"dormant":197,"msPerTick":13.76}
+{"day":50,"nodes":2010,"edges":1727,"span":660.6,"live":22,"evicted":60,"touched":82,"dormant":207,"msPerTick":14.1}
+{"day":55,"nodes":2093,"edges":1797,"span":660.6,"live":22,"evicted":65,"touched":87,"dormant":218,"msPerTick":12.68}
+{"day":60,"nodes":2277,"edges":1937,"span":660.6,"live":21,"evicted":72,"touched":93,"dormant":235,"msPerTick":12.64}
+{"day":65,"nodes":2353,"edges":2012,"span":660.6,"live":21,"evicted":80,"touched":101,"dormant":262,"msPerTick":14.38}
+{"day":70,"nodes":2554,"edges":2196,"span":660.6,"live":16,"evicted":91,"touched":107,"dormant":277,"msPerTick":12.89}
+{"day":75,"nodes":2701,"edges":2323,"span":660.6,"live":18,"evicted":92,"touched":110,"dormant":288,"msPerTick":13.56}
+{"day":80,"nodes":2874,"edges":2459,"span":660.6,"live":23,"evicted":91,"touched":114,"dormant":296,"msPerTick":14.88}
+{"day":85,"nodes":2847,"edges":2447,"span":660.6,"live":21,"evicted":95,"touched":116,"dormant":312,"msPerTick":14.81}
+{"day":90,"nodes":3077,"edges":2651,"span":660.6,"live":19,"evicted":101,"touched":120,"dormant":339,"msPerTick":14.81}
+{"day":95,"nodes":3231,"edges":2776,"span":660.6,"live":23,"evicted":102,"touched":125,"dormant":346,"msPerTick":15.22}
+{"day":100,"nodes":3264,"edges":2798,"span":660.6,"live":23,"evicted":106,"touched":129,"dormant":365,"msPerTick":16.06}
+
+## v3: v2 + gradientBias 0.7 / noiseAmount 0.2 — 却下 (勾配は局所の餌へ向かう
+## ベクトルなので強めると前線が餌に絡まり、span 412 と v2 より伸びない)。
+{"day":40,"nodes":1449,"edges":1247,"span":412.3,"live":23,"evicted":32,"touched":55,"dormant":134,"msPerTick":11.86}
+
+## v5: 横芽の絞りを穏やかに (0.35 / 0.18) — 却下 (span は v2 と同等 610 だが
+## エッジが 2,779 と v2 の 1.8 倍で、絵の迷路化が残る方向)。
+{"day":40,"nodes":3234,"edges":2779,"span":610.7,"live":17,"evicted":65,"touched":82,"dormant":244,"msPerTick":17.34}
+
+## v6: v2 と同じだが dormancyCellWorld=48 (チャンク 1:1) — 却下 (awake 領域が
+## 粗くなり Day 40 で 31ms/tick と ×24 予算超過。span は 594 と同等)。
+{"day":40,"nodes":2700,"edges":2393,"span":594,"live":32,"evicted":76,"touched":108,"dormant":88,"msPerTick":31.09}

@@ -409,7 +409,34 @@ export const STAGES: Record<StageId, StageConfig> = {
     baseTemperature: 0.5,
     // sim/test/forage-reclaim.test.ts で実証済みの値。0 (既定・無効) だと
     // 前線が sink で詰まり Day24 相当で完全停止する (ROADMAP.md M25)。
-    paramOverrides: { forageReclaimThreshold: 0.3 },
+    paramOverrides: {
+      forageReclaimThreshold: 0.3,
+      // M29: 成熟領域の休眠 + チャンク evict。前線 (最新 born 上位4セル +
+      // margin 1セル) 以外のエッジは更新を止め、awake から遠いチャンクは
+      // 平均値へ圧縮して解放する。値は sim 直接駆動の実測
+      // (docs/playtest-2026-07-09-infinite/sim-100day-dormancy.txt) で
+      // span を維持しつつチャンク数が頭打ちになった推奨値。既存6ステージは
+      // dormancyCheckInterval=0 (既定) のままなので bit 一致で不変。
+      dormancyCheckInterval: 60,
+      // 休眠セル一辺。チャンク一辺 (WILDLAND_CHUNK_CELLS=48 × 1) のちょうど
+      // 半分 = 1チャンクが 2×2 セルに整数分割される。48 (1:1) との対照実験では
+      // 24 の方が前線の awake 領域を細かく絞れて Day 40 で 13ms/tick vs 31ms/tick
+      // (span はほぼ同じ 613 vs 594)。evict の判定はチャンク中心セル ±1 なので
+      // セルがチャンクより細かくても awake に重なるチャンクを誤って解放しない。
+      dormancyCellWorld: 24,
+      dormancyFrontierCells: 4,
+      dormancyFrontierMargin: 1,
+      dormancyEvict: true,
+      // M29: 稠密化の抑制。出荷構成 (applyGenome(PETRI_PARAMS, genome)) は
+      // 皿サイズの「面を膜で埋める」チューニングで、原野では横芽が前進より
+      // 速く、窓の中が迷路化していた (第5回実測: Day 16 でエッジ6,908本、
+      // 実効45〜60秒/日)。横芽の条件を DEFAULT 寄りへ絞ると、Day 40 の
+      // 対照実験 (同一 seed、Game 直接駆動) でエッジ 8,729→1,529 (-82%) に
+      // 対して span は 677→613 (-9%) に留まり、「エッジ数の増加 < span の
+      // 増加」へ配分が反転する (ROADMAP.md M29 の実装メモ参照)。
+      lateralBudBiomassThreshold: 0.55,
+      lateralBudProbability: 0.12,
+    },
     foodAmountMultiplier: 1.0,
     nutrientDecayPerTick: 0.0006,
     moistureRelaxPerTick: 0.0009,

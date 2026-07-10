@@ -12,7 +12,7 @@ import type { WorldEvent } from './world-events.js';
 import { readDayMsOverride } from './time-scale.js';
 import type { WorldOverview } from './world-overview.js';
 
-const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
+const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0, daysPerMin: 0, dormantCells: 0, evictedChunks: 0 };
 
 export class GameProxy {
   private worker: Worker;

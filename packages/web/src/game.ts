@@ -13,7 +13,7 @@ import {
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, createStepCache, computeTraits,
   createGenome, createChildGenome, applyGenome, computeIndividuality, classifyIndividual,
   ChunkedGridEnvironment, ChunkedActivityField, ChunkedBiomassField,
-  bakeChunkWindow, bakeScalarFieldWindow, followWindowOrigin,
+  bakeChunkWindow, bakeScalarFieldWindow, followWindowOrigin, wakeDormantArea,
   type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
   type Genome, type Individuality, type IndividualTypeInfo, type StepCache,
 } from '@morpho/sim';
@@ -367,6 +367,15 @@ export class Game {
     return d;
   }
 
+  // M29: perf HUD (`?debug`) 用の休眠カウンタ。どちらも O(1) の読み出しで、
+  // 有界6ステージ (休眠無効・chunkEnv=null) では常に 0。
+  dormancyCounters(): { dormantCells: number; evictedChunks: number } {
+    return {
+      dormantCells: this.state.dormantCells?.size ?? 0,
+      evictedChunks: this.chunkEnv?.evictedChunkCount() ?? 0,
+    };
+  }
+
   setTool(t: Tool): void { this.tool = t; }
   setBrush(r: number): void { this.brushRadius = r; }
   setSpeed(s: number): void { this.speed = Math.max(0, s | 0); }
@@ -568,6 +577,11 @@ export class Game {
     if (!env) return;
     const r = this.brushRadius;
     const real: Vec2 = { x: pos.x + this.windowOrigin.x, y: pos.y + this.windowOrigin.y };
+    // M29: プレイヤーの介入は休眠領域を起こす (起床経路その3)。起こして
+    // おかないと、撒いた餌や毒に周囲のエッジが checkInterval を過ぎても
+    // 反応しない (休眠セル内は activity 更新も成長もスキップされるため)。
+    // 休眠無効 (既定) の有界ステージではこの経路に入らないので影響なし。
+    wakeDormantArea(this.state, this.params, real, r);
     switch (this.tool) {
       case 'food':
         env.placeFood(real, r, 0.7);
@@ -808,7 +822,9 @@ export class Game {
       tick: this.state.tick,
       areaM2: Math.round(world.cellsAbove * cellArea),
       massKg: +(world.total * cellArea * 0.0009).toFixed(2),
-      exploredChunks: chunkEnv.generatedChunkCount(),
+      // M29: evict (実体解放) で generatedChunkCount() は減るようになった。
+      // 「探索チャンク」は踏破の累計なので、evict 済みも含む touched を数える。
+      exploredChunks: chunkEnv.touchedChunkCount(),
     };
     this.wildlandStatsCache = next;
     return next;

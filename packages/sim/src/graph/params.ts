@@ -125,7 +125,7 @@ export const DEFAULT_PARAMS: SimParams = {
   // 休眠は既定で無効 (checkInterval=0)。他の値は有効化時の推奨初期値で、
   // 無効時は一切参照されない (既存6ステージは bit 一致で不変)。
   dormancyCheckInterval: 0,
-  dormancyCellWorld: 24,     // 原野のチャンク一辺 (chunkCells=24 × cellWorldSize=1) と揃えてある
+  dormancyCellWorld: 24,     // 原野のチャンク一辺 (48) の半分 = 1チャンクが 2×2 セルに整数分割される (M29-B 実測で 48 より速く span 同等)
   dormancyFrontierCells: 4,  // 実測 (docs/playtest-2026-07-09-infinite/sim-100day-dormancy.txt) で span を維持しつつチャンク数が頭打ちになった値
   dormancyFrontierMargin: 1,
   dormancyEvict: false,

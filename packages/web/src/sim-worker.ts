@@ -57,6 +57,9 @@ let lastTickMs = 0;
 let ticksInWindow = 0;
 let windowStartMs = performance.now();
 let effectiveSpeed = 0;
+// M29: 実効ペース「日/分」。effectiveSpeed (倍率) と違い dayMs に依存しない
+// 絶対値なので、「×24 なのに実際は何日/分出ているか」を HUD で直読みできる。
+let daysPerMin = 0;
 const EFFECTIVE_SPEED_WINDOW_MS = 500;
 
 // M8 P2: 時間予算スケジューラ。「speed 倍を毎 16ms 必ず全部回す」のではなく、
@@ -159,6 +162,8 @@ function loop(): void {
   if (windowElapsed >= EFFECTIVE_SPEED_WINDOW_MS) {
     // 「×1 (1 tick = baseTickMs ms) で進めた場合」を基準にした倍率 (M15.7)。
     effectiveSpeed = (ticksInWindow / windowElapsed) * baseTickMs;
+    // M29: 同じ実測ウィンドウから「日/分」も出す (ticks/ms → 日/分)。
+    daysPerMin = (ticksInWindow / windowElapsed) * 60_000 / TICKS_PER_DAY;
     ticksInWindow = 0;
     windowStartMs = now;
   }
@@ -195,7 +200,7 @@ function loop(): void {
       snapshot: wire,
       events: game.events(),
       evolution: game.evolution(),
-      perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed },
+      perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed, daysPerMin, ...game.dormancyCounters() },
       // M25: この snapshot が反映する tick() 呼び出し群の間に窓が動いた量。
       // dirty (=この回で実際に snapshot を送る) のときだけ消費する —
       // 送らない回で消費すると、次に実際に送られる snapshot にその分の

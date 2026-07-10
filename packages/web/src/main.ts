@@ -1150,7 +1150,12 @@ function frame() {
     renderTimeline();
 
     const perf = game.perf();
-    perfHud.render({ drawMs: performance.now() - drawT0, tickMs: perf.tickMs, targetSpeed: perf.targetSpeed, effectiveSpeed: perf.effectiveSpeed, overviewMs: renderer.lastOverviewMs });
+    perfHud.render({
+      drawMs: performance.now() - drawT0, tickMs: perf.tickMs, targetSpeed: perf.targetSpeed,
+      effectiveSpeed: perf.effectiveSpeed, overviewMs: renderer.lastOverviewMs,
+      // M29: 実効「日/分」と休眠カウンタ (Worker 実測、worker-protocol.ts)。
+      daysPerMin: perf.daysPerMin, dormantCells: perf.dormantCells, evictedChunks: perf.evictedChunks,
+    });
   }
   requestAnimationFrame(frame);
 }

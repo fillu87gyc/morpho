@@ -37,6 +37,12 @@ export interface PerfInfo {
   tickMs: number;        // 直近の game.tick() 呼び出しの 1 sim tick あたりの平均コスト
   targetSpeed: number;   // スライダーで指定された速度倍率
   effectiveSpeed: number; // 実際に進んでいる速度倍率 (直近ウィンドウの実測)
+  // M29: 実効ペース「日/分」(直近ウィンドウの実測)。×24 が本当に出ていれば
+  // 公称 10 日/分 (dayMs=144,000ms 時)。長時間セッションでの劣化を絶対値で読む。
+  daysPerMin: number;
+  // M29: 休眠の観測値。休眠無効 (既存6ステージ) では常に 0。
+  dormantCells: number;  // 休眠中の空間セル数 (state.dormantCells.size)
+  evictedChunks: number; // 平均値へ圧縮解放されたフィールドチャンク数
 }
 
 // M8 P2: SimState のうち小さなスカラーだけを残した部分。nodes/edges は
