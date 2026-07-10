@@ -44,6 +44,11 @@ function chunkIndexOf(totalCell: number, chunkCells: number): { chunk: number; l
 
 export class ChunkedFieldGrid {
   private chunks = new Map<string, Float32Array>();
+  // M29: evict されたチャンクの要約値 (平均)。実体 (Float32Array) は解放
+  // 済みで、再訪 (ensureChunk) 時にこの平均で塗り戻して復元する。数値1個
+  // なので、evict 済みチャンクがいくら溜まってもメモリ/走査コストは無視
+  // できる (diffuse/decay の走査対象 = chunks には含まれない)。
+  private evicted = new Map<string, number>();
   readonly chunkCells: number;
   readonly cellWorldSize: number;
   private generator?: ChunkGenerator;
@@ -54,9 +59,14 @@ export class ChunkedFieldGrid {
     this.generator = opts.generate;
   }
 
-  /** 現在メモリ上に存在するチャンク数 (触れたことのある範囲の目安)。 */
+  /** 現在メモリ上に実体があるチャンク数 (evict 済みは含まない)。 */
   chunkCount(): number {
     return this.chunks.size;
+  }
+
+  /** M29: evict 済み (要約値だけ保持) のチャンク数。 */
+  evictedChunkCount(): number {
+    return this.evicted.size;
   }
 
   hasChunk(cx: number, cy: number): boolean {
@@ -70,16 +80,62 @@ export class ChunkedFieldGrid {
     return this.chunks.get(chunkKey(cx, cy)) ?? null;
   }
 
-  /** 無ければ決定的に生成して返す。既存チャンクはキャッシュを返すだけ。 */
+  /** 無ければ決定的に生成して返す。既存チャンクはキャッシュを返すだけ。
+   * M29: evict 済みチャンクは要約値 (平均) で塗り戻して復元する — 近似だが
+   * 決定的 (同じ evict 履歴からは常に同じ復元結果になる)。 */
   ensureChunk(cx: number, cy: number): Float32Array {
     const key = chunkKey(cx, cy);
     let data = this.chunks.get(key);
     if (!data) {
       data = new Float32Array(this.chunkCells * this.chunkCells);
-      this.generator?.({ cx, cy }, data, this.chunkCells);
+      const mean = this.evicted.get(key);
+      if (mean !== undefined) {
+        if (mean !== 0) data.fill(mean);
+        this.evicted.delete(key);
+      } else {
+        this.generator?.({ cx, cy }, data, this.chunkCells);
+      }
       this.chunks.set(key, data);
     }
     return data;
+  }
+
+  /** M29: チャンクの実体を平均値1個へ圧縮して解放する。実体が無ければ
+   * (未生成/evict 済み) 何もしない。 */
+  evictChunk(cx: number, cy: number): boolean {
+    const key = chunkKey(cx, cy);
+    const data = this.chunks.get(key);
+    if (!data) return false;
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i] ?? 0;
+    this.evicted.set(key, sum / data.length);
+    this.chunks.delete(key);
+    return true;
+  }
+
+  /** M29: 指定ワールド座標を含むチャンクを evict する (座標変換つき)。 */
+  evictChunkAt(worldX: number, worldY: number): boolean {
+    const w = this.chunkCells * this.cellWorldSize;
+    return this.evictChunk(Math.floor(worldX / w), Math.floor(worldY / w));
+  }
+
+  /** M29: evict 済みチャンクの要約値 (平均)。evict されていなければ null。 */
+  evictedMean(cx: number, cy: number): number | null {
+    return this.evicted.get(chunkKey(cx, cy)) ?? null;
+  }
+
+  /** M29: evict 済みチャンクの座標一覧 (要約集計用)。 */
+  evictedChunks(): ChunkCoord[] {
+    return [...this.evicted.keys()].map((k) => {
+      const [cx, cy] = k.split(':').map(Number);
+      return { cx: cx!, cy: cy! };
+    });
+  }
+
+  /** M29: チャンク中心のワールド座標 (休眠判定側の座標変換用)。 */
+  chunkCenterWorld(coord: ChunkCoord): { x: number; y: number } {
+    const w = this.chunkCells * this.cellWorldSize;
+    return { x: (coord.cx + 0.5) * w, y: (coord.cy + 0.5) * w };
   }
 
   private cellAt(totalCellX: number, totalCellY: number): number {
@@ -174,7 +230,9 @@ export class ChunkedFieldGrid {
 
   /** チャンクのデータ全体を置き換える (diffuse の二段階コミットで使う)。 */
   setChunkData(cx: number, cy: number, data: Float32Array): void {
-    this.chunks.set(chunkKey(cx, cy), data);
+    const key = chunkKey(cx, cy);
+    this.evicted.delete(key); // 実体を直接与えられたら要約値は破棄する
+    this.chunks.set(key, data);
   }
 
   /** biomass-field.ts の depositSegment と等価 (線分 a→b に沿った膜、
@@ -230,7 +288,8 @@ export class ChunkedFieldGrid {
     }
   }
 
-  /** 現在生成済みのチャンク座標一覧 (描画/デバッグ用)。 */
+  /** 現在実体があるチャンクの座標一覧 (evict 済みは含まない)。diffuse/decay
+   * の走査対象はこれ = コストは実体チャンク数 (前線サイズ) にだけ比例する。 */
   generatedChunks(): ChunkCoord[] {
     return [...this.chunks.keys()].map((k) => {
       const [cx, cy] = k.split(':').map(Number);

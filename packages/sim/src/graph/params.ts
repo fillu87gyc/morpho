@@ -45,6 +45,20 @@ export interface SimParams {
   // 正の値を入れて「前線が尽きない」forager ループを成立させる (ROADMAP M25)。
   forageReclaimThreshold: number;
 
+  // ── 休眠 (dormancy, M29 無限ワールド用) ──
+  // 前線から遠く構造変化が止まった領域を、チャンク相当の空間セル単位で
+  // 「休眠」させる: 休眠セル内のエッジは activity/fatigue/radius 更新と
+  // Activity/Biomass フィールドへの deposit をスキップし、輸送 (flux) の
+  // 通り道としてだけ生き続ける。growth (reclaim 含む) も休眠セルのノードを
+  // 触らない。判定は bornAt (構造の変化) だけの純関数で RNG を使わないため
+  // seed 決定的。dormancyCheckInterval=0 (既定) で全機構が無効 = 既存
+  // 6ステージは bit 一致で不変 (M25 の forageReclaimThreshold 方式)。
+  dormancyCheckInterval: number;  // N tick ごとに休眠判定を行う。0 = 無効 (既定)
+  dormancyCellWorld: number;      // 休眠セルの一辺 (ワールド単位)。フィールドのチャンク一辺と揃えると evict がセルと 1:1 に対応する
+  dormancyFrontierCells: number;  // 前線として起きていられるセル数の上限 (最も新しく生まれたノードのセルから数える)
+  dormancyFrontierMargin: number; // 前線セルから Chebyshev 距離でこのセル数以内は起きたまま (起床の余白)
+  dormancyEvict: boolean;         // 休眠チャンクのフィールド実体を要約値 (平均) へ圧縮して解放する (対応実装がある場合のみ)
+
   // ── 環境スコア ──────────────────────
   foodReachThreshold: number;
   nutrientBias: number;
@@ -107,6 +121,14 @@ export const DEFAULT_PARAMS: SimParams = {
   alpha: 0.30,
   beta: 0.06,
   forageReclaimThreshold: 0, // 既定は無効 (既存ステージは sink を戻さない)
+
+  // 休眠は既定で無効 (checkInterval=0)。他の値は有効化時の推奨初期値で、
+  // 無効時は一切参照されない (既存6ステージは bit 一致で不変)。
+  dormancyCheckInterval: 0,
+  dormancyCellWorld: 24,     // 原野のチャンク一辺 (chunkCells=24 × cellWorldSize=1) と揃えてある
+  dormancyFrontierCells: 12, // 前線アンカー12セル + margin 1 で最大 ~100 セルが起きられる
+  dormancyFrontierMargin: 1,
+  dormancyEvict: false,
 
   foodReachThreshold: 0.55,
   nutrientBias: 2.5,

@@ -178,9 +178,49 @@ export class ChunkedGridEnvironment implements Environment {
     this.moisture.stampGaussian(pos.x, pos.y, radius * 1.8, 0.3);
   }
 
-  /** 生成済みチャンク数 (触れたことのある範囲の目安、描画/デバッグ用)。 */
+  /** 実体があるチャンク数 (evict 済みは含まない、描画/デバッグ用)。 */
   generatedChunkCount(): number {
     return this.obstacle.chunkCount();
+  }
+
+  /** M29: evict 済み (要約値だけ保持) のチャンク数。 */
+  evictedChunkCount(): number {
+    return this.obstacle.evictedChunkCount();
+  }
+
+  /** M29: 触れたことのあるチャンク数 (実体 + evict 済み)。「探索チャンク」
+   * 統計は evict で減らないよう、こちらを使うこと。 */
+  touchedChunkCount(): number {
+    return this.obstacle.chunkCount() + this.obstacle.evictedChunkCount();
+  }
+
+  // 全フィールドのグリッド (evict/集計でまとめて回すため)。
+  private allGrids(): ChunkedFieldGrid[] {
+    return [this.nutrients, this.moisture, this.brightness, this.obstacle, this.temperature, this.toxin, this.water];
+  }
+
+  // M29: 休眠判定 (graph/dormancy.ts) が呼ぶ evict 対応 (Environment の
+  // optional メソッド)。座標集合はフィールドごとに異なりうる (place* は
+  // 一部のフィールドしか実体化しない) ので、全フィールドの和集合を返す。
+  materializedChunkCenters(): Vec2[] {
+    const seen = new Set<string>();
+    const out: Vec2[] = [];
+    for (const g of this.allGrids()) {
+      for (const c of g.generatedChunks()) {
+        const key = `${c.cx}:${c.cy}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(g.chunkCenterWorld(c));
+      }
+    }
+    return out;
+  }
+
+  /** M29: 指定ワールド座標を含むチャンクを全フィールドまとめて evict する。
+   * 各フィールドは平均値へ圧縮され、再訪時に平均で塗り戻される (決定的な
+   * 近似 — 食料パッチの形は失われ、平均濃度の土地として復元される)。 */
+  evictChunkAt(worldX: number, worldY: number): void {
+    for (const g of this.allGrids()) g.evictChunkAt(worldX, worldY);
   }
 
   // M28: 生成済みチャンクごとの地形要約。基準となるチャンク集合は
@@ -194,7 +234,13 @@ export class ChunkedGridEnvironment implements Environment {
   summarizeChunks(): ChunkTerrainSummary[] {
     const out: ChunkTerrainSummary[] = [];
     const cells = this.chunkCells * this.chunkCells;
-    for (const { cx, cy } of this.obstacle.generatedChunks()) {
+    // M29: evict 済みチャンクも座標集合に含める — 大局レイヤー/ワールド
+    // マップ (M28) のタイルが evict で消えないようにするため。フィールド
+    // ごとに実体があれば従来どおり走査し、evict 済みなら要約値 (平均) から
+    // 近似する: obstacle は 0/1 の場なので平均 = 密度そのもの、water は
+    // 平均 > 0 なら「水域セルがあった」とみなせる。
+    const coords = [...this.obstacle.generatedChunks(), ...this.obstacle.evictedChunks()];
+    for (const { cx, cy } of coords) {
       const obstacle = this.obstacle.peekChunk(cx, cy);
       const nutrients = this.nutrients.peekChunk(cx, cy);
       const water = this.water.peekChunk(cx, cy);
@@ -208,16 +254,19 @@ export class ChunkedGridEnvironment implements Environment {
       }
       out.push({
         cx, cy,
-        nutrientAvg: nutrientSum / cells,
-        obstacleDensity: obstacleCells / cells,
-        hasWater,
+        nutrientAvg: nutrients ? nutrientSum / cells : (this.nutrients.evictedMean(cx, cy) ?? 0),
+        obstacleDensity: obstacle ? obstacleCells / cells : (this.obstacle.evictedMean(cx, cy) ?? 0),
+        hasWater: water ? hasWater : (this.water.evictedMean(cx, cy) ?? 0) > 0,
       });
     }
     return out;
   }
 
-  // 自然減衰。GridEnvironment.decay() と同じ式だが、これまでに生成された
-  // チャンクだけを対象にする (未探索領域は生成すらされていないので対象外)。
+  // 自然減衰。GridEnvironment.decay() と同じ式だが、実体のあるチャンク
+  // だけを対象にする (未探索領域は生成すらされていないので対象外)。
+  // M29: evict 済みチャンクの要約値も減衰させない — 休眠中の土地は時間が
+  // 凍っている扱い (枯れかけの餌場が休眠中に守られる = 将来の栄養再生と
+  // 同じ向きの近似)。走査コストは実体チャンク数 (前線サイズ) にだけ比例する。
   decay(nutrientRate: number, moistureRelaxRate: number, tempRelaxRate = 0, toxinDecayRate = 0): void {
     decayChunks(this.nutrients, (v) => Math.max(0, v * (1 - nutrientRate)));
     decayChunks(this.moisture, (v) => v + (this.baseMoisture - v) * moistureRelaxRate);

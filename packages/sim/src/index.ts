@@ -29,6 +29,8 @@ export * from './graph/traits.js';
 export * from './graph/genome.js';
 export * from './graph/individuality.js';
 export * from './graph/step.js';
+// M29: 成熟領域の休眠 (起床 API は web 側のツール配線 M29-B が使う)。
+export * from './graph/dormancy.js';
 
 // 膜系シミュレーション (graph とは独立した別モデル)
 export * from './membrane/membrane.js';

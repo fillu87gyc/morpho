@@ -52,6 +52,11 @@ export interface SimState {
   nextNodeId: NodeId;
   nextEdgeId: EdgeId;
   worldSize: number;
+  // M29: 休眠中の空間セル (graph/dormancy.ts の packDormancyCell でパック
+  // したキー)。params.dormancyCheckInterval=0 (既定) では常に undefined。
+  // 構造 (nodes/edges の bornAt) から決定的に再計算できる派生量なので、
+  // 保存/転送は不要 — 欠けていても次回の休眠判定で復元される。
+  dormantCells?: Set<number>;
 }
 
 // ── 観測量 (analytical) ──────────────────────────────

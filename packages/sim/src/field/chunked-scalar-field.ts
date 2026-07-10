@@ -106,9 +106,30 @@ export class ChunkedScalarField {
     for (const { cx, cy, data } of out) this.grid.setChunkData(cx, cy, data);
   }
 
-  /** 現在メモリ上に存在するチャンク数 (描画/デバッグ用)。 */
+  /** 現在メモリ上に実体があるチャンク数 (evict 済みは含まない)。 */
   generatedChunkCount(): number {
     return this.grid.chunkCount();
+  }
+
+  /** M29: evict 済み (要約値だけ保持) のチャンク数。 */
+  evictedChunkCount(): number {
+    return this.grid.evictedChunkCount();
+  }
+
+  /** M29: 触れたことのあるチャンク数 (実体 + evict 済み)。探索統計用。 */
+  touchedChunkCount(): number {
+    return this.grid.chunkCount() + this.grid.evictedChunkCount();
+  }
+
+  // M29: 休眠判定 (graph/dormancy.ts) が呼ぶ evict 対応 (ActivityFieldLike の
+  // optional メソッド)。実体チャンクを平均値へ圧縮して解放し、diffuse の走査
+  // 対象から外す。再訪時は平均で塗り戻される (決定的な近似)。
+  materializedChunkCenters(): Vec2[] {
+    return this.grid.generatedChunks().map((c) => this.grid.chunkCenterWorld(c));
+  }
+
+  evictChunkAt(worldX: number, worldY: number): void {
+    this.grid.evictChunkAt(worldX, worldY);
   }
 
   // M28: 生成済みチャンクごとの要約 (総和 + threshold 超過セル数)。
@@ -127,6 +148,15 @@ export class ChunkedScalarField {
         if (v > threshold) cellsAbove++;
       }
       out.push({ cx, cy, total, cellsAbove });
+    }
+    // M29: evict 済みチャンクも要約値 (平均) から近似で数える — 世界統計
+    // (HUD の総面積/総量、M28) が evict でいきなり痩せないようにするため。
+    // cellsAbove は「平均が threshold 超なら全セル / でなければ 0」の粗い
+    // 近似 (evict 済み領域はそもそも一様に塗り戻される前提と整合する)。
+    const cellCount = this.chunkCells * this.chunkCells;
+    for (const { cx, cy } of this.grid.evictedChunks()) {
+      const mean = this.grid.evictedMean(cx, cy) ?? 0;
+      out.push({ cx, cy, total: mean * cellCount, cellsAbove: mean > threshold ? cellCount : 0 });
     }
     return out;
   }
