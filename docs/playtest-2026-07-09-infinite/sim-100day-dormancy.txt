@@ -1,0 +1,59 @@
+# M29 休眠 + チャンク evict の before/after 実測 (2026-07-10)
+# 手法: 原野相当の構成 (seed 99、チャンク食料 + 35% 障害物、forageReclaimThreshold=0.3、
+#       chunkCells=24 / cellWorldSize=1) で step() を直接 24,000 tick (= Day 100 相当) 駆動し、
+#       5日おきにサンプリング。sim-100day-samples.txt と同一構成 + bus.drain() 毎tick。
+# before: 休眠無効 (既定パラメタ)。after: dormancyCheckInterval=60, dormancyCellWorld=24,
+#         dormancyFrontierCells=4, dormancyFrontierMargin=1, dormancyEvict=true。
+# 列: envChunks/actChunks/bioChunks = 実体チャンク数 (diffuse/decay の走査対象)、
+#     envEvicted = 要約値へ圧縮済み、dormantCells = 休眠セル数。
+#
+# 結論: before は実体チャンクが 68 まで単調増加し ms/tick も 0.69→4.64 と漸増し続ける。
+#       after は実体チャンクが Day 45 以降 17〜32 の帯で頭打ち (evict 済みが 108 まで増える =
+#       走査コストが前線サイズに比例し総経過時間に比例しない)。ms/tick は Day 60 以降
+#       2.0〜3.5 の帯で横ばい (振れは前線が旧領域へ戻った際の復元によるもの)。
+#       span は 338.8 vs 191.8 と after の方がむしろ広い (休眠が内向きの稠密化を抑え、
+#       前線への配分が増えるため)。
+
+# dormancy=off
+{"day":5,"nodes":38,"edges":36,"span":"26.4","envChunks":3,"envEvicted":0,"actChunks":3,"bioChunks":3,"dormantCells":0,"msPerTick":0.69}
+{"day":10,"nodes":32,"edges":27,"span":"40.1","envChunks":6,"envEvicted":0,"actChunks":7,"bioChunks":7,"dormantCells":0,"msPerTick":0.82}
+{"day":15,"nodes":40,"edges":36,"span":"47.6","envChunks":8,"envEvicted":0,"actChunks":8,"bioChunks":8,"dormantCells":0,"msPerTick":0.73}
+{"day":20,"nodes":60,"edges":58,"span":"83.7","envChunks":11,"envEvicted":0,"actChunks":11,"bioChunks":11,"dormantCells":0,"msPerTick":0.92}
+{"day":25,"nodes":50,"edges":46,"span":"71.1","envChunks":14,"envEvicted":0,"actChunks":14,"bioChunks":14,"dormantCells":0,"msPerTick":1.28}
+{"day":30,"nodes":41,"edges":23,"span":"79.4","envChunks":22,"envEvicted":0,"actChunks":21,"bioChunks":22,"dormantCells":0,"msPerTick":1.48}
+{"day":35,"nodes":67,"edges":64,"span":"53.9","envChunks":22,"envEvicted":0,"actChunks":21,"bioChunks":22,"dormantCells":0,"msPerTick":1.21}
+{"day":40,"nodes":55,"edges":50,"span":"76.0","envChunks":23,"envEvicted":0,"actChunks":22,"bioChunks":23,"dormantCells":0,"msPerTick":1.48}
+{"day":45,"nodes":50,"edges":48,"span":"115.4","envChunks":24,"envEvicted":0,"actChunks":23,"bioChunks":24,"dormantCells":0,"msPerTick":1.62}
+{"day":50,"nodes":66,"edges":62,"span":"92.2","envChunks":27,"envEvicted":0,"actChunks":27,"bioChunks":27,"dormantCells":0,"msPerTick":1.56}
+{"day":55,"nodes":108,"edges":84,"span":"144.2","envChunks":33,"envEvicted":0,"actChunks":32,"bioChunks":33,"dormantCells":0,"msPerTick":2.55}
+{"day":60,"nodes":157,"edges":135,"span":"142.8","envChunks":37,"envEvicted":0,"actChunks":37,"bioChunks":37,"dormantCells":0,"msPerTick":2.47}
+{"day":65,"nodes":104,"edges":89,"span":"144.4","envChunks":42,"envEvicted":0,"actChunks":42,"bioChunks":42,"dormantCells":0,"msPerTick":2.67}
+{"day":70,"nodes":92,"edges":79,"span":"138.7","envChunks":43,"envEvicted":0,"actChunks":44,"bioChunks":44,"dormantCells":0,"msPerTick":2.69}
+{"day":75,"nodes":80,"edges":69,"span":"91.6","envChunks":46,"envEvicted":0,"actChunks":47,"bioChunks":47,"dormantCells":0,"msPerTick":2.47}
+{"day":80,"nodes":85,"edges":70,"span":"124.3","envChunks":46,"envEvicted":0,"actChunks":47,"bioChunks":47,"dormantCells":0,"msPerTick":2.86}
+{"day":85,"nodes":153,"edges":135,"span":"165.5","envChunks":49,"envEvicted":0,"actChunks":50,"bioChunks":51,"dormantCells":0,"msPerTick":3.26}
+{"day":90,"nodes":200,"edges":174,"span":"218.8","envChunks":57,"envEvicted":0,"actChunks":57,"bioChunks":59,"dormantCells":0,"msPerTick":4.07}
+{"day":95,"nodes":173,"edges":139,"span":"189.7","envChunks":66,"envEvicted":0,"actChunks":66,"bioChunks":68,"dormantCells":0,"msPerTick":4.23}
+{"day":100,"nodes":224,"edges":205,"span":"191.8","envChunks":68,"envEvicted":0,"actChunks":68,"bioChunks":70,"dormantCells":0,"msPerTick":4.64}
+
+# dormancy=on (interval=60 cell=24 frontierCells=4 margin=1 evict=on)
+{"day":5,"nodes":38,"edges":36,"span":"26.4","envChunks":3,"envEvicted":0,"actChunks":3,"bioChunks":3,"dormantCells":0,"msPerTick":0.97}
+{"day":10,"nodes":32,"edges":27,"span":"40.1","envChunks":6,"envEvicted":0,"actChunks":7,"bioChunks":7,"dormantCells":0,"msPerTick":1.11}
+{"day":15,"nodes":40,"edges":36,"span":"47.6","envChunks":8,"envEvicted":0,"actChunks":8,"bioChunks":8,"dormantCells":0,"msPerTick":1.04}
+{"day":20,"nodes":60,"edges":58,"span":"83.7","envChunks":11,"envEvicted":0,"actChunks":11,"bioChunks":11,"dormantCells":1,"msPerTick":1.33}
+{"day":25,"nodes":85,"edges":82,"span":"95.3","envChunks":14,"envEvicted":0,"actChunks":14,"bioChunks":14,"dormantCells":2,"msPerTick":2.04}
+{"day":30,"nodes":81,"edges":66,"span":"124.8","envChunks":18,"envEvicted":2,"actChunks":17,"bioChunks":18,"dormantCells":3,"msPerTick":2.33}
+{"day":35,"nodes":97,"edges":76,"span":"140.8","envChunks":23,"envEvicted":5,"actChunks":21,"bioChunks":23,"dormantCells":3,"msPerTick":2.31}
+{"day":40,"nodes":116,"edges":96,"span":"146.4","envChunks":24,"envEvicted":8,"actChunks":23,"bioChunks":23,"dormantCells":8,"msPerTick":2.23}
+{"day":45,"nodes":128,"edges":104,"span":"179.2","envChunks":29,"envEvicted":18,"actChunks":28,"bioChunks":28,"dormantCells":16,"msPerTick":2.6}
+{"day":50,"nodes":198,"edges":153,"span":"205.9","envChunks":30,"envEvicted":30,"actChunks":31,"bioChunks":31,"dormantCells":13,"msPerTick":3.44}
+{"day":55,"nodes":213,"edges":167,"span":"234.0","envChunks":30,"envEvicted":39,"actChunks":30,"bioChunks":30,"dormantCells":22,"msPerTick":3.24}
+{"day":60,"nodes":222,"edges":170,"span":"248.9","envChunks":23,"envEvicted":54,"actChunks":22,"bioChunks":23,"dormantCells":27,"msPerTick":3.5}
+{"day":65,"nodes":253,"edges":201,"span":"286.9","envChunks":17,"envEvicted":77,"actChunks":18,"bioChunks":18,"dormantCells":37,"msPerTick":3.12}
+{"day":70,"nodes":255,"edges":186,"span":"276.3","envChunks":21,"envEvicted":77,"actChunks":21,"bioChunks":22,"dormantCells":38,"msPerTick":2.75}
+{"day":75,"nodes":222,"edges":162,"span":"283.9","envChunks":17,"envEvicted":90,"actChunks":17,"bioChunks":17,"dormantCells":40,"msPerTick":2.44}
+{"day":80,"nodes":240,"edges":173,"span":"333.1","envChunks":24,"envEvicted":91,"actChunks":26,"bioChunks":26,"dormantCells":35,"msPerTick":1.95}
+{"day":85,"nodes":251,"edges":177,"span":"338.8","envChunks":17,"envEvicted":103,"actChunks":15,"bioChunks":17,"dormantCells":40,"msPerTick":2.72}
+{"day":90,"nodes":296,"edges":209,"span":"338.8","envChunks":29,"envEvicted":99,"actChunks":29,"bioChunks":29,"dormantCells":48,"msPerTick":3.46}
+{"day":95,"nodes":347,"edges":249,"span":"338.8","envChunks":23,"envEvicted":110,"actChunks":23,"bioChunks":24,"dormantCells":48,"msPerTick":2.83}
+{"day":100,"nodes":393,"edges":295,"span":"338.8","envChunks":27,"envEvicted":108,"actChunks":28,"bioChunks":28,"dormantCells":55,"msPerTick":3.27}

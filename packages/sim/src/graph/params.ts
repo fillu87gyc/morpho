@@ -126,7 +126,7 @@ export const DEFAULT_PARAMS: SimParams = {
   // 無効時は一切参照されない (既存6ステージは bit 一致で不変)。
   dormancyCheckInterval: 0,
   dormancyCellWorld: 24,     // 原野のチャンク一辺 (chunkCells=24 × cellWorldSize=1) と揃えてある
-  dormancyFrontierCells: 12, // 前線アンカー12セル + margin 1 で最大 ~100 セルが起きられる
+  dormancyFrontierCells: 4,  // 実測 (docs/playtest-2026-07-09-infinite/sim-100day-dormancy.txt) で span を維持しつつチャンク数が頭打ちになった値
   dormancyFrontierMargin: 1,
   dormancyEvict: false,
 
