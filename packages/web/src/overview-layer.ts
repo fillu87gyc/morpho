@@ -25,6 +25,8 @@ const TILE_GROUND_RICH: [number, number, number] = [86, 112, 70];
 const TILE_ROCK: [number, number, number] = [124, 120, 108];
 // 水域を含むチャンクの水色 (minimap.ts の MINIMAP_WATER と同系)。
 const TILE_WATER: [number, number, number] = [52, 100, 156];
+// M30: 毒の窪地バイオームの毒色 (render.ts の毒素ヒートマップと同系の紫)。
+const TILE_TOXIN: [number, number, number] = [138, 82, 158];
 // バイオマスの光 (render.ts の TUBE_GLOW と同系の金色)。
 export const OVERVIEW_BIOMASS_GLOW: [number, number, number] = [255, 214, 110];
 
@@ -34,6 +36,9 @@ export const OVERVIEW_BIOMASS_GLOW: [number, number, number] = [255, 214, 110];
 const NUTRIENT_AVG_FULL = 0.02;
 // 障害物パッチ1つ (radius 2〜5) ≈ 密度 0.005〜0.03。
 const OBSTACLE_DENSITY_FULL = 0.04;
+// M30: 毒の窪地の toxinPatches (radius 4〜8, amount 0.25〜0.55 ×2) で
+// toxinAvg はおよそ 0.01〜0.05。この規模で紫が振り切る。
+const TOXIN_AVG_FULL = 0.03;
 // バイオマス総和がこの規模でほぼ最大光度に達する (指数飽和の時定数)。
 const BIOMASS_GLOW_SCALE = 60;
 

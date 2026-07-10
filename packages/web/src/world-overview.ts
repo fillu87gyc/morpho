@@ -26,6 +26,8 @@ export interface WorldChunkSummary {
   obstacleDensity: number;
   /** 水域セルの有無。 */
   hasWater: boolean;
+  /** M30: 毒素の平均値 (毒の窪地バイオームの俯瞰表示用)。 */
+  toxinAvg: number;
   /** バイオマスの総和。 */
   biomass: number;
 }
