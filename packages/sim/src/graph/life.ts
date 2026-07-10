@@ -36,6 +36,12 @@ export function updateActivity(
   const dormant = dormantSetOf(state, params);
   const cw = params.dormancyCellWorld;
 
+  // M30: 距離のコスト勾配。母体 (source) からのグラフ距離 h の hop キャッシュ
+  // (flux BFS が低頻度で記録、flux.ts) を引き、遠いエッジほど fatigue の増分を
+  // 増やし回復を減らす。既定 (distanceUpkeep=0) では hops が undefined になり
+  // 従来と同一の式を通る = bit 一致で不変。
+  const hops = params.distanceUpkeep > 0 ? state.sourceHops : undefined;
+
   // 自身の activity を場に書き込む (伝播の源泉)
   for (const e of state.edges) {
     if (e.activity < 0.1) continue;
@@ -89,7 +95,19 @@ export function updateActivity(
     // 高温側 (最適+許容域を超えた分) でのみ疲労が増しやすくなる。
     const heatExcess = Math.max(0, ctx.temperature - (params.tempOptimal + params.tempTolerance));
     const fatigueMult = 1 + heatExcess * 2;
-    e.fatigue += e.activity * params.fatigueGrow * fatigueMult - fluxN * params.fatigueRecover;
+    if (hops) {
+      // M30: エッジの距離 = 両端点の hop の小さい方 (source 寄りの端で測る)。
+      // キャッシュ更新後に生まれた新ノードはエントリを持たないので、親側の
+      // 端点の値で代用する (両方無ければ 0 = 猶予。次回更新で正しい値になる)。
+      const ha = hops.get(e.from), hb = hops.get(e.to);
+      const h = ha === undefined ? (hb ?? 0) : hb === undefined ? ha : ha < hb ? ha : hb;
+      // 効果は連続的: 母体近傍 (h ≈ 0) では f ≈ 1 で実質ゼロ、遠征先では
+      // 消耗が f 倍・回復が 1/f 倍になり、疲労の収支が距離とともに悪化する。
+      const f = 1 + params.distanceUpkeep * h;
+      e.fatigue += e.activity * params.fatigueGrow * fatigueMult * f - (fluxN * params.fatigueRecover) / f;
+    } else {
+      e.fatigue += e.activity * params.fatigueGrow * fatigueMult - fluxN * params.fatigueRecover;
+    }
     if (e.fatigue < 0) e.fatigue = 0;
     if (e.fatigue > 3) e.fatigue = 3;
 

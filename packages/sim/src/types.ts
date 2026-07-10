@@ -57,6 +57,12 @@ export interface SimState {
   // 構造 (nodes/edges の bornAt) から決定的に再計算できる派生量なので、
   // 保存/転送は不要 — 欠けていても次回の休眠判定で復元される。
   dormantCells?: Set<number>;
+  // M30: 母体 (source) からのグラフ距離 (hop 数) キャッシュ。flux のマルチ
+  // ソース BFS (graph/flux.ts) が params.distanceUpdateInterval tick ごとに
+  // 記録する。params.distanceUpkeep=0 (既定) では常に undefined。dormantCells
+  // と同じく構造から決定的に再計算できる派生量なので、保存/転送は不要。
+  // source から到達できないノード (孤立成分) はエントリを持たない。
+  sourceHops?: Map<NodeId, number>;
 }
 
 // ── 観測量 (analytical) ──────────────────────────────
