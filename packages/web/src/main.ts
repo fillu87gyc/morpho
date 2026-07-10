@@ -87,7 +87,7 @@ let tracking = false;
 
 // 系統に採取済みの種があれば、初回起動から継承した個体で始める
 // (M5: セッションをまたいで系統樹を続けられる)。
-const game = new GameProxy(lineage.current()?.genome);
+const game = new GameProxy(lineage.current()?.genome, lineage.current()?.mutationBoost);
 
 const renderer = new CanvasRenderer(canvas, {
   worldSize: game.worldSize,
@@ -145,7 +145,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
   onTool: (t) => game.setTool(t),
   onBrush: (r) => game.setBrush(r),
   onReset: () => {
-    game.reset(undefined, undefined, lineage.current()?.genome);
+    game.reset(undefined, undefined, lineage.current()?.genome, lineage.current()?.mutationBoost);
     timeline.reset();
     camera.reset();
     fitCanvas();
@@ -166,7 +166,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
   },
   onResetView: () => camera.reset(),
   onStageChange: (id) => {
-    game.reset(undefined, id, lineage.current()?.genome);
+    game.reset(undefined, id, lineage.current()?.genome, lineage.current()?.mutationBoost);
     timeline.reset();
     camera.reset();
     fitCanvas();
@@ -190,6 +190,23 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
   onHarvestSeed: () => {
     const snap = game.snapshot();
     if (snap.day < HARVEST_MIN_DAY) return;
+    // M30: 原野で採種すると、母体 (スタート地点) から最も遠い前線ノードの
+    // 到達距離とそこのバイオームで変異幅の倍率が決まる (biomes.ts の
+    // wildMutationBoost)。遠征の果て・荒地/毒の窪地で採った種ほど、次の
+    // 世代の個性が大きく揺らぐ = 「遠くへ行く理由」を個性側にも作る。
+    // snapshot のノード座標は窓ローカルなので windowOrigin で実座標へ戻す
+    // (有界6ステージは windowOrigin が無く、boost は記録しない = 従来通り)。
+    let mutationBoost: number | undefined;
+    if (snap.stage.id === 'wildland' && snap.windowOrigin) {
+      let best = 0, bx = WILDLAND_CENTER.x, by = WILDLAND_CENTER.y;
+      for (const n of snap.state.nodes) {
+        const x = n.pos.x + snap.windowOrigin.x, y = n.pos.y + snap.windowOrigin.y;
+        const d = Math.hypot(x - WILDLAND_CENTER.x, y - WILDLAND_CENTER.y);
+        if (d > best) { best = d; bx = x; by = y; }
+      }
+      const biome = biomeAt(Math.floor(bx / WILDLAND_CHUNK_CELLS), Math.floor(by / WILDLAND_CHUNK_CELLS), snap.state.seed);
+      mutationBoost = wildMutationBoost(best, biome);
+    }
     const entry = lineage.harvest({
       genome: snap.genome,
       typeId: snap.typeInfo.id,
@@ -199,6 +216,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
       day: snap.day,
       stageId: snap.stage.id,
       stageName: snap.stage.name,
+      mutationBoost,
     });
     // M18: 系統樹ノードのサムネイル。採種時点の姿を撮り IndexedDB へ保存する
     // (renderThumbnail() は blob URL の Promise を返すため、生の Blob が
@@ -227,7 +245,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
   onStartFromLineage: (id) => {
     const ancestor = lineage.startFrom(id);
     if (!ancestor) return;
-    game.reset(undefined, ancestor.stageId, ancestor.genome);
+    game.reset(undefined, ancestor.stageId, ancestor.genome, ancestor.mutationBoost);
     timeline.reset();
     camera.reset();
     fitCanvas();
