@@ -17,7 +17,7 @@ import {
   type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
   type Genome, type Individuality, type IndividualTypeInfo, type StepCache,
 } from '@morpho/sim';
-import { STAGES, WILDLAND_CHUNK_CELLS, type StageId, type StageConfig } from './stages.js';
+import { STAGES, WILDLAND_CHUNK_CELLS, WILDLAND_WORLD_SIZE, WILDLAND_CENTER, type StageId, type StageConfig } from './stages.js';
 import { computeQuests, type QuestStatus } from './quests.js';
 import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 import { TICKS_PER_DAY } from './day-loop.js';
@@ -104,15 +104,13 @@ export const WORLD = 100;
 export const FIELD = 96;
 
 // M25: 「原野」(半無限ワールド) 専用の定数。
-// WILDLAND_WORLD_SIZE は growth.ts の worldMargin 境界判定に実用上ひっかから
-// ない程度に大きい値 (実質「無限」)。窓の一辺は既存ステージと同じ WORLD を
+// WILDLAND_WORLD_SIZE/WILDLAND_CENTER は M30 で stages.ts へ移した (main.ts の
+// 採種時の実座標復元と共有するため)。窓の一辺は既存ステージと同じ WORLD を
 // 使う — Camera/Minimap が起動時に一度だけ game.worldSize (=WORLD) で構築
 // され、以後ステージを切り替えても再構築されない前提を尊重するため、
 // 「原野」もこの同じ WORLD をローカル座標系の広さとして扱う (窓が前線を
 // 追って実座標側を平行移動することで、無限に広い土地を同じ大きさの窓から
 // 覗き続ける)。
-const WILDLAND_WORLD_SIZE = 1_000_000;
-const WILDLAND_CENTER: Vec2 = { x: WILDLAND_WORLD_SIZE / 2, y: WILDLAND_WORLD_SIZE / 2 };
 // 窓の bbox が縁からこの割合以内に近づいたら再センタリングする
 // (chunk-window.ts の followWindowOrigin と同じ意味、値は経験的に選定)。
 const WILDLAND_REBAKE_MARGIN = 0.25;
@@ -249,22 +247,25 @@ export class Game {
   // WILDLAND_STATS_INTERVAL_TICKS に1回だけ数え直す (詳細は定数のコメント)。
   private wildlandStatsCache: { tick: number; areaM2: number; massKg: number; exploredChunks: number } | null = null;
 
-  constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome) {
+  constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome, parentMutationBoost?: number) {
     this.seed = seed;
-    this.reset(seed, stageId, parentGenome);
+    this.reset(seed, stageId, parentGenome, parentMutationBoost);
   }
 
   // parentGenome を渡すと「種の採取」(M5) で継承した親の遺伝子を元に、
   // ステージの過酷さに応じて変異させた子の Genome で始める。
   // 省略時は従来通り seed から独立に新規生成する。
-  reset(seed = (Math.random() * 1e9) | 0, stageId: StageId = this.stage?.id ?? 'petri', parentGenome?: Genome): void {
+  // M30: parentMutationBoost は採種時に記録された変異幅の倍率 (原野で母体から
+  // 遠く/過酷なバイオームで採った種ほど大きい、biomes.ts の wildMutationBoost)。
+  // ステージの過酷さ由来の mutationScaleFor に乗じる。省略時 1 (補正なし)。
+  reset(seed = (Math.random() * 1e9) | 0, stageId: StageId = this.stage?.id ?? 'petri', parentGenome?: Genome, parentMutationBoost?: number): void {
     this.seed = seed;
     this.stage = STAGES[stageId];
     this.rng = createRNG(seed);
     // その個体固有の遺伝パラメータを rng から決定的に引く (地形生成より先に
     // 引いて、常に同じ順番で消費されるようにする)。
     this.genome = parentGenome
-      ? createChildGenome(parentGenome, this.rng, mutationScaleFor(this.stage))
+      ? createChildGenome(parentGenome, this.rng, mutationScaleFor(this.stage) * (parentMutationBoost ?? 1))
       : createGenome(this.rng);
     this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
     this.undo = new UndoStack(10);
@@ -845,6 +846,7 @@ export class Game {
       nutrientAvg: t.nutrientAvg,
       obstacleDensity: t.obstacleDensity,
       hasWater: t.hasWater,
+      toxinAvg: t.toxinAvg,
       biomass: bioByKey.get(`${t.cx}:${t.cy}`) ?? 0,
     }));
     // バイオマス場は拡散の縁で「地形チャンク未生成のままバイオマスだけ滲んだ」
@@ -852,7 +854,7 @@ export class Game {
     const seen = new Set(terrain.map((t) => `${t.cx}:${t.cy}`));
     for (const s of bio) {
       if (seen.has(`${s.cx}:${s.cy}`)) continue;
-      chunks.push({ cx: s.cx, cy: s.cy, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, biomass: s.total });
+      chunks.push({ cx: s.cx, cy: s.cy, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, toxinAvg: 0, biomass: s.total });
     }
     const stats = this.wildlandWorldStats();
     const mother = this.sourcePoints[0] ?? WILDLAND_CENTER;

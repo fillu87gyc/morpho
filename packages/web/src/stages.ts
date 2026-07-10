@@ -528,26 +528,32 @@ export const STAGES: Record<StageId, StageConfig> = {
       // 増加」へ配分が反転する (ROADMAP.md M29 の実装メモ参照)。
       lateralBudBiomassThreshold: 0.55,
       lateralBudProbability: 0.12,
+      // M30: 距離のコスト勾配。「母体から近い組織は消費が緩やか、遠征して
+      // いる組織は早く消耗する」(ビジョン第4項)。'origin' = スタート地点
+      // からのユークリッド距離で、forager reclaim が母体から切り離した
+      // 孤立前線にも等しく効く (M30-A の hop 距離の既知の限界を解消)。
+      // K は hop 版の推奨値 0.005/hop を 1 hop ≈ growthStep 3.6 world unit
+      // で再スケールした 0.0015/unit。対照実験 (seed 1234, Day 100,
+      // ROADMAP.md M30 実装メモ) で「遠征枝が伸びて→枯れて→別方向へ」の
+      // 収縮と再拡張が観察でき、span は K=0 と同規模を保つ。
+      distanceUpkeep: 0.0015,
+      distanceUpdateInterval: 60,
+      distanceMode: 'origin',
     },
     foodAmountMultiplier: 1.0,
     nutrientDecayPerTick: 0.0006,
     moistureRelaxPerTick: 0.0009,
     tempRelaxPerTick: 0.0009,
-    toxinDecayPerTick: 0.0015,
+    // M30: 毒の窪地バイオームが数日で無害化しないよう、原野だけ毒素の自然
+    // 分解を遅くする (0.0015 → 半減期約2日 だったのを約7日へ)。チャンクは
+    // 前線が触れた瞬間に生成されるので、到達時点では常に「湧きたて」の毒。
+    toxinDecayPerTick: 0.0004,
     infinite: true,
     // 無限ステージでは使わない (chunkTerrain が代わりを務める)。型を満たす
     // だけの no-op。
     generateTerrain: () => [],
-    chunkTerrain: (_coord, rng, _worldSeed): ChunkTerrainResult => {
-      const cells = WILDLAND_CHUNK_CELLS;
-      const obstaclePatches = rng.next() < 0.35
-        ? [{ x: rng.range(4, cells - 4), y: rng.range(4, cells - 4), radius: rng.range(2, 5) }]
-        : [];
-      const foodPatches = [{
-        x: rng.range(4, cells - 4), y: rng.range(4, cells - 4),
-        radius: rng.range(4, 6), amount: rng.range(0.9, 1.3),
-      }];
-      return { obstaclePatches, foodPatches };
-    },
+    // M30: バイオーム地形 (上の wildlandChunkTerrain)。M25〜M29 の一様地形
+    // (全チャンク必ず餌1パッチ) を置き換える。
+    chunkTerrain: wildlandChunkTerrain,
   },
 };
