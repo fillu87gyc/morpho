@@ -7,7 +7,7 @@ import { chunkTileColor, biomassGlowAlpha, OVERVIEW_VOID_COLOR } from '../src/ov
 import type { WorldChunkSummary } from '../src/world-overview.js';
 
 function chunk(over: Partial<WorldChunkSummary> = {}): WorldChunkSummary {
-  return { cx: 0, cy: 0, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, biomass: 0, ...over };
+  return { cx: 0, cy: 0, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, toxinAvg: 0, biomass: 0, ...over };
 }
 
 describe('chunkTileColor (M28-B)', () => {
@@ -32,6 +32,15 @@ describe('chunkTileColor (M28-B)', () => {
     const rocky = chunkTileColor(chunk({ nutrientAvg: 0.02, obstacleDensity: 0.1 }));
     // 岩色は R が強い (緑の地面より赤みがある) — 岩で赤成分が増える。
     expect(rocky[0]).toBeGreaterThan(plain[0]);
+  });
+
+  it('M30: 毒の窪地 (toxinAvg が高い) は紫に寄る (R が増え、G より B が強まる)', () => {
+    const plain = chunkTileColor(chunk({ nutrientAvg: 0.02 }));
+    const toxic = chunkTileColor(chunk({ nutrientAvg: 0.02, toxinAvg: 0.03 }));
+    expect(toxic[0]).toBeGreaterThan(plain[0]); // 紫の赤み
+    expect(toxic[2]).toBeGreaterThan(plain[2]); // 紫の青み
+    // 苔の緑 (plain は G 優勢) と見分けがつく: 毒地では B が G に迫る/超える。
+    expect(toxic[2] - toxic[1]).toBeGreaterThan(plain[2] - plain[1]);
   });
 
   it('値は常に 0..255 の整数', () => {

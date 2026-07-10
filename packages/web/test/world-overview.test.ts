@@ -37,7 +37,7 @@ describe('computeReachDistance (M28)', () => {
 // ズームとパン範囲の材料)。
 describe('overviewLocalBBox (M28-B)', () => {
   function chunk(cx: number, cy: number): WorldChunkSummary {
-    return { cx, cy, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, biomass: 0 };
+    return { cx, cy, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, toxinAvg: 0, biomass: 0 };
   }
 
   it('チャンクが無ければ null', () => {
@@ -71,7 +71,7 @@ describe('overviewLocalBBox (M28-B)', () => {
 describe('worldOverview の最新値の置き場 (M28)', () => {
   it('set したものが get で返り、null で消せる', () => {
     const overview: WorldOverview = {
-      chunks: [{ cx: 0, cy: 0, nutrientAvg: 0.1, obstacleDensity: 0, hasWater: false, biomass: 1.5 }],
+      chunks: [{ cx: 0, cy: 0, nutrientAvg: 0.1, obstacleDensity: 0, hasWater: false, toxinAvg: 0, biomass: 1.5 }],
       windowOrigin: { x: 100, y: 200 },
       chunkWorldSize: 48,
       stats: { areaM2: 12, massKg: 0.05, exploredChunks: 3, reachDistance: 42 },
