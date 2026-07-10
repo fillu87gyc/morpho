@@ -8,7 +8,9 @@ import type { WorldEvent } from './world-events.js';
 import type { WorldOverview } from './world-overview.js';
 
 export type ToWorkerMessage =
-  | { type: 'reset'; seed?: number; stageId?: StageId; parentGenome?: Genome }
+  // M30: parentMutationBoost = 採種時に記録された変異幅の倍率 (原野で母体から
+  // 遠く/過酷なバイオームで採った種ほど大きい)。省略時 1 (補正なし)。
+  | { type: 'reset'; seed?: number; stageId?: StageId; parentGenome?: Genome; parentMutationBoost?: number }
   | { type: 'setSpeed'; speed: number }
   | { type: 'setTool'; tool: Tool }
   | { type: 'setBrush'; radius: number }

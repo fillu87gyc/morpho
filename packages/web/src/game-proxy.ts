@@ -38,8 +38,9 @@ export class GameProxy {
   fastForward = false;
 
   // parentGenome を渡すと、Worker 起動直後の初期個体をその継承先で始める
-  // (M5: 系統樹の続きをセッションをまたいで再開する)。
-  constructor(parentGenome?: Genome) {
+  // (M5: 系統樹の続きをセッションをまたいで再開する)。parentMutationBoost は
+  // その種の採種時に記録された変異幅の倍率 (M30、lineage.ts 参照)。
+  constructor(parentGenome?: Genome, parentMutationBoost?: number) {
     this.worker = new Worker(new URL('./sim-worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent<FromWorkerMessage>) => {
       const msg = e.data;
@@ -69,7 +70,7 @@ export class GameProxy {
     // M15.7: URL パラメータ/localStorage による日長の上書き (開発/e2e 用フック)。
     // reset より前に送り、起動直後の tick から新しいペースを使う。
     this.send({ type: 'setDayMs', ms: readDayMsOverride() });
-    if (parentGenome) this.send({ type: 'reset', parentGenome });
+    if (parentGenome) this.send({ type: 'reset', parentGenome, parentMutationBoost });
   }
 
   // Worker からの初回スナップショットが届くまでは描画できない。
@@ -92,8 +93,8 @@ export class GameProxy {
   // 浮いた予算をtickに全振りするよう Worker に伝える。
   setFastForward(v: boolean): void { this.fastForward = v; this.send({ type: 'setFastForward', enabled: v }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
-  reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void {
-    this.send({ type: 'reset', seed, stageId, parentGenome });
+  reset(seed?: number, stageId?: StageId, parentGenome?: Genome, parentMutationBoost?: number): void {
+    this.send({ type: 'reset', seed, stageId, parentGenome, parentMutationBoost });
     this.dayCompletedFlag = false;
     // M28: 前ステージ (原野) の俯瞰を持ち越さない — 有界ステージへ切り替えた
     // 場合、Worker は worldOverview を二度と送らないので、ここで消しておく。
