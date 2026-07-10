@@ -35,6 +35,8 @@ import { Notes } from './notes.js';
 import { buildReport, eraHistoryLines } from './report.js';
 import { setWorldOverview, overviewLocalBBox } from './world-overview.js';
 import type { WildlandOverviewInput } from './render.js';
+import { biomeAt, wildMutationBoost } from './biomes.js';
+import { WILDLAND_CENTER, WILDLAND_CHUNK_CELLS } from './stages.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');

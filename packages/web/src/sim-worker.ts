@@ -92,7 +92,7 @@ let overviewPending = true; // 起動直後・reset/apply 後は次の機会に�
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
-    case 'reset': game.reset(msg.seed, msg.stageId, msg.parentGenome); dirty = true; forceDerived = true; break;
+    case 'reset': game.reset(msg.seed, msg.stageId, msg.parentGenome, msg.parentMutationBoost); dirty = true; forceDerived = true; break;
     case 'setSpeed': game.setSpeed(msg.speed); break;
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;
