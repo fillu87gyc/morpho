@@ -68,6 +68,17 @@
         <span id="day-loop-remaining" class="day-loop-remaining" hidden>残り <span id="day-loop-remaining-n">--:--</span></span>
       </div>
 
+      <!-- M32: 皿 (チュートリアル) が成熟期に到達したら、本編「原野」への
+           推奨動線を一度だけ案内するコーチマーク。モーダルでブロックせず、
+           閉じるまで軽く出続ける (onboarding.ts の shouldSuggestWildland)。 -->
+      <div id="wildland-coachmark" class="wildland-coachmark" hidden>
+        <p>皿の成熟期に到達した。次は本編「原野」で、果てのない世界を育ててみよう。</p>
+        <div class="wildland-coachmark-actions">
+          <button id="wildland-coachmark-go" class="harvest-btn">原野へ ▶</button>
+          <button id="wildland-coachmark-dismiss" title="この案内を閉じる">閉じる</button>
+        </div>
+      </div>
+
       <main class="stage">
         <aside class="panel left">
           <!-- M19: ドロワーのスライドイン。オーバーレイ本体 (.panel) は
@@ -77,17 +88,28 @@
           <div class="drawer-content">
           <section class="card">
             <h2>メインクエスト</h2>
-            <div class="quest-item">
+            <!-- M32: 「拠点をすべてつなぐ/大陸の85%を探索する」は原野では
+                 意味を持たない (開始直後100%/0%固定) ため、原野では隠して
+                 wild-reach/wild-biomes に切り替える (ui.ts が hidden を切替)。 -->
+            <div class="quest-item" id="q-connect-item">
               <div class="quest-head"><span class="quest-title">拠点をすべてつなぐ</span><span class="num" id="q-connect-n">0%</span></div>
               <div class="progress"><div id="q-connect-bar" class="bar"></div></div>
             </div>
-            <div class="quest-item">
+            <div class="quest-item" id="q-explore-item">
               <div class="quest-head"><span class="quest-title">大陸の85%を探索する</span><span class="num" id="q-explore-n">0%</span></div>
               <div class="progress"><div id="q-explore-bar" class="bar"></div></div>
             </div>
             <div class="quest-item" id="q-continent-item" hidden>
               <div class="quest-head"><span class="quest-title">大陸全体に栄養を届けよう</span><span class="num" id="q-continent-n">0%</span></div>
               <div class="progress"><div id="q-continent-bar" class="bar"></div></div>
+            </div>
+            <div class="quest-item" id="q-wild-reach-item" hidden>
+              <div class="quest-head"><span class="quest-title">母体から500先へ到達しよう</span><span class="num" id="q-wild-reach-n">0%</span></div>
+              <div class="progress"><div id="q-wild-reach-bar" class="bar"></div></div>
+            </div>
+            <div class="quest-item" id="q-wild-biomes-item" hidden>
+              <div class="quest-head"><span class="quest-title">3つのバイオームに根を張ろう</span><span class="num" id="q-wild-biomes-n">0%</span></div>
+              <div class="progress"><div id="q-wild-biomes-bar" class="bar"></div></div>
             </div>
           </section>
 
@@ -365,14 +387,18 @@
 
           <section class="card actions">
             <label class="stage-select-label" for="stage-select">ステージ</label>
+            <!-- M32: 「皿 (チュートリアル) → 原野 (本編)」の推奨動線を、並びと
+                 ラベルで明示する。有界6ステージは「チュートリアル & チャレンジ集」
+                 として位置づけ直した (ROADMAP.md M32)。原野を先頭に置きつつ、
+                 デフォルト起動は変わらず皿のまま (main.ts の Game 既定値)。 -->
             <select id="stage-select">
-              <option value="petri">皿</option>
-              <option value="cave">洞窟</option>
-              <option value="desert">砂漠</option>
-              <option value="ruins">都市跡</option>
-              <option value="wetland">湿地</option>
-              <option value="continent">大陸</option>
-              <option value="wildland">原野 (実験・果てなし)</option>
+              <option value="wildland">原野 (本編)</option>
+              <option value="petri">皿 (チュートリアル)</option>
+              <option value="cave">洞窟 (チャレンジ)</option>
+              <option value="desert">砂漠 (チャレンジ)</option>
+              <option value="ruins">都市跡 (チャレンジ)</option>
+              <option value="wetland">湿地 (チャレンジ)</option>
+              <option value="continent">大陸 (チャレンジ)</option>
             </select>
             <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>

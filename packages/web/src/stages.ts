@@ -63,7 +63,14 @@ export interface StageConfig {
   chunkTerrain?(coord: { cx: number; cy: number }, rng: SeededRNG, worldSeed: number): ChunkTerrainResult;
 }
 
-export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland', 'continent'];
+// M32: 原野 (半無限ワールド) を図鑑/系統樹の対象ステージへ加える。
+// catalogue.ts の STANDARD_ENTRIES は「5タイプ × STAGE_ORDER」で決まるため、
+// この1行の追加だけで図鑑の枠 (37→42) が増える。既存の id 文字列
+// (`${typeId}:${stageId}`) は配列の並び順に依存しないので、既存6ステージの
+// 図鑑エントリの id・localStorage との対応関係は完全に不変 (末尾への追加のみ)。
+// 「37枠の拡張 vs 原野専用の別枠」の判断は ROADMAP.md M32 実装メモを参照 —
+// この配列を素直に拡張する方を選んだ (実装が単純・既存データを一切壊さない)。
+export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland', 'continent', 'wildland'];
 
 function dist(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -442,7 +449,8 @@ export const STAGES: Record<StageId, StageConfig> = {
   petri: {
     id: 'petri',
     name: '皿',
-    description: '起伏の少ない、育成の基本となる培養皿。',
+    // M32: 「皿 (チュートリアル) → 原野 (本編)」の推奨動線を説明文にも明示する。
+    description: '起伏の少ない、育成の基本を学べる培養皿 (チュートリアル)。慣れたら原野へ。',
     baseMoisture: 0.3,
     baseBrightness: 0.2,
     baseTemperature: 0.5,
@@ -541,7 +549,9 @@ export const STAGES: Record<StageId, StageConfig> = {
   wildland: {
     id: 'wildland',
     name: '原野',
-    description: '果てのない野原。歩けば歩くほど、その先にも大地が続いている。',
+    // M32: 原野が本編であることを説明文でも明示する (有界6ステージは
+    // チュートリアル & チャレンジ集として位置づけ直した、ROADMAP.md M32)。
+    description: '果てのない野原 — 本編はここ。歩けば歩くほど、その先にも大地が続いている。',
     baseMoisture: 0.32,
     baseBrightness: 0.22,
     baseTemperature: 0.5,

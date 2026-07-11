@@ -150,6 +150,22 @@ body { overflow: hidden; }
 .day-loop-remaining { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .day-loop-remaining span { color: var(--accent); font-weight: 600; }
 
+/* M32: 皿 (チュートリアル) の成熟期到達で原野 (本編) を勧めるコーチマーク。
+   モーダルではなく通常フローに置く軽いバナー (day-loop-bar と同系統)。 */
+.wildland-coachmark {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 8px calc(20px + env(safe-area-inset-right)) 8px calc(20px + env(safe-area-inset-left));
+  border-bottom: 1px solid var(--panel-edge);
+  background: var(--panel);
+}
+.wildland-coachmark[hidden] { display: none; }
+.wildland-coachmark p { margin: 0; font-size: 13px; color: var(--text); }
+.wildland-coachmark-actions { display: flex; gap: 8px; }
+.wildland-coachmark-actions .harvest-btn { width: auto; padding: 6px 14px; margin-bottom: 0; }
+.wildland-coachmark-actions button:not(.harvest-btn) {
+  width: auto; padding: 6px 10px; background: transparent; color: var(--text-dim);
+}
+
 /* M9: 「今日の成長」結果パネル */
 .modal-overlay {
   position: fixed; inset: 0; z-index: 50;

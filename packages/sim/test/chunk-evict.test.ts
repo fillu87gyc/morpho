@@ -113,4 +113,17 @@ describe('要約 (summarize*) は evict をまたいで連続する (M28 の世�
     expect(env.evictedChunkCount()).toBe(1);
     expect(env.touchedChunkCount()).toBe(1);
   });
+
+  // M32: 「発見バイオーム数」など座標だけで決まる派生指標を安く求めるための
+  // 軽量 API。evict 済みも含めて座標だけを返す (セルデータは読まない)。
+  it('touchedChunkCoords は実体 + evict 済みチャンクの座標を返す (evict 後も座標は残る)', () => {
+    const env = new ChunkedGridEnvironment({ worldSize: 1000, worldSeed: 9, chunkCells: 8, cellWorldSize: 1 });
+    env.sampleGrowthContext({ x: 4, y: 4 }); // (0,0)
+    env.sampleGrowthContext({ x: 12, y: 4 }); // (1,0)
+    expect(env.touchedChunkCoords()).toHaveLength(2);
+    env.evictChunkAt(4, 4);
+    const coords = env.touchedChunkCoords();
+    expect(coords).toHaveLength(2);
+    expect(coords).toEqual(expect.arrayContaining([{ cx: 0, cy: 0 }, { cx: 1, cy: 0 }]));
+  });
 });

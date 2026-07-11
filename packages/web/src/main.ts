@@ -9,7 +9,7 @@ import { Camera } from './camera.js';
 import { Minimap } from './minimap.js';
 import { Encyclopedia, TOTAL_TYPE_COUNT } from './encyclopedia.js';
 import { Achievements, ACHIEVEMENT_DEFS } from './achievements.js';
-import { allChallenges, DailyChallengeTracker } from './challenges.js';
+import { allChallenges, DailyChallengeTracker, WildDailyChallengeTracker } from './challenges.js';
 import { Scoreboard } from './scoreboard.js';
 import { Lineage, HARVEST_MIN_DAY } from './lineage.js';
 import { PinchTracker } from './pinch.js';
@@ -26,7 +26,10 @@ import { CatalogueThumbs } from './catalogue-thumbs.js';
 import { LineageThumbs } from './lineage-thumbs.js';
 import { allCatalogueEntries, type CatalogueContext } from './catalogue.js';
 import { localTimeFor, nightFactorFor } from './daytime.js';
-import { ONBOARDING_STEPS, hasSeenOnboarding, markOnboardingSeen } from './onboarding.js';
+import {
+  ONBOARDING_STEPS, hasSeenOnboarding, markOnboardingSeen,
+  hasSeenWildlandSuggestion, markWildlandSuggestionSeen, shouldSuggestWildland,
+} from './onboarding.js';
 import { detectMutation, detectNewTraitChips, newTraitChipText } from './mutation-events.js';
 import type { EvolutionLog } from './game.js';
 import { buildChartLayout, drawChart, type ChartSeries } from './chart.js';
@@ -46,6 +49,9 @@ if (!canvas) throw new Error('#canvas not found');
 const encyclopedia = new Encyclopedia();
 const achievements = new Achievements();
 const challenges = new DailyChallengeTracker();
+// M32: 原野専用の「期限のない反復チャレンジ」。有界6ステージの
+// DailyChallengeTracker (生涯で一度だけの初回達成) とは独立に持つ。
+const wildDailyChallenge = new WildDailyChallengeTracker();
 const scoreboard = new Scoreboard();
 const lineage = new Lineage();
 const album = new Album();
@@ -333,6 +339,22 @@ if (!hasSeenOnboarding()) {
   onboardingEl.hidden = false;
   renderOnboardingStep();
 }
+
+// ── M32: 「皿 (チュートリアル) → 原野 (本編)」コーチマーク ──────────────
+// 皿の成熟期到達時に一度だけ出す (frame() 内、上の shouldSuggestWildland 呼び出し
+// で hidden = false にする)。閉じる/原野へ移動のどちらでも二度と出さない。
+const wildlandCoachmarkEl = document.getElementById('wildland-coachmark') as HTMLElement;
+function dismissWildlandCoachmark(): void {
+  wildlandCoachmarkEl.hidden = true;
+  markWildlandSuggestionSeen();
+}
+document.getElementById('wildland-coachmark-go')?.addEventListener('click', () => {
+  const stageSelect = document.getElementById('stage-select') as HTMLSelectElement;
+  stageSelect.value = 'wildland';
+  stageSelect.dispatchEvent(new Event('change', { bubbles: true }));
+  dismissWildlandCoachmark();
+});
+document.getElementById('wildland-coachmark-dismiss')?.addEventListener('click', () => dismissWildlandCoachmark());
 
 // ── M17: 統計グラフ ────────────────────────────────────
 // dayReport (直近60日) の3軸スコア + 質量 (右軸) を canvas 折れ線チャートで見せる。
@@ -1262,11 +1284,30 @@ function frame() {
     });
 
     // M11: 3種すべてを常時チェックし、初回達成のものだけ 🍃 報酬を付与する。
-    for (const chal of allChallenges()) {
-      if (challenges.isCompleted(chal.kind)) continue;
-      if (!chal.isComplete({ connectProgress, day: snap.day, networkLinks: snap.world.networkLinks, toxin: snap.balance.toxin })) continue;
-      challenges.complete(chal.kind, snap.day, snap.state.seed);
-      wallet.earn('wakaba', 8, `チャレンジ「${chal.title}」達成`);
+    // M32: この3種は connectProgress ベース (fastest/cheapest/clean) で、
+    // 原野では coloniesTotal が最初の餌場1つで即 1 になるため開始直後に
+    // 自動達成しうる (ROADMAP.md M32 受け入れ基準に反する) — 原野では
+    // チェックしない。代わりに期限のない反復チャレンジ (wildDailyChallenge)
+    // を判定する。
+    let wildChallengeStatus: ReturnType<typeof wildDailyChallenge.update> | undefined;
+    if (snap.stage.id === 'wildland') {
+      wildChallengeStatus = wildDailyChallenge.update({ day: snap.day, exploredChunks: snap.world.exploredChunks });
+      if (wildChallengeStatus.justCompleted) {
+        wallet.earn('wakaba', 5, `チャレンジ「${wildChallengeStatus.title}」達成`);
+      }
+    } else {
+      for (const chal of allChallenges()) {
+        if (challenges.isCompleted(chal.kind)) continue;
+        if (!chal.isComplete({ connectProgress, day: snap.day, networkLinks: snap.world.networkLinks, toxin: snap.balance.toxin })) continue;
+        challenges.complete(chal.kind, snap.day, snap.state.seed);
+        wallet.earn('wakaba', 8, `チャレンジ「${chal.title}」達成`);
+      }
+    }
+
+    // M32: 「皿 (チュートリアル) → 原野 (本編)」の推奨動線。皿で成熟期に
+    // 到達した最初の瞬間だけコーチマークを出す (一度出したら二度と出さない)。
+    if (shouldSuggestWildland(snap.stage.id, snap.era.name, hasSeenWildlandSuggestion())) {
+      wildlandCoachmarkEl.hidden = false;
     }
 
     const newlyUnlocked = achievements.check({
@@ -1286,7 +1327,7 @@ function frame() {
     // M11: 実績解除は希少通貨 🍄 の報酬源。
     for (const id of newlyUnlocked) wallet.earn('horoishi', 1, `実績「${id}」解除`);
 
-    ui.render(camera.view(), localEvoLog);
+    ui.render(camera.view(), localEvoLog, wildChallengeStatus);
     timeline.maybeCapture(snap.day, () => renderer.renderThumbnail(snap.state, snap.env, snap.bio, snap.stage.id, snap.landmarks, 96));
     renderTimeline();
 

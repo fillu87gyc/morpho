@@ -296,4 +296,43 @@ export class ChunkedFieldGrid {
       return { cx: cx!, cy: cy! };
     });
   }
+
+  // ── M32: 「直前1手」Undo ──────────────────────────────────
+  // web 側の undo.ts (dense FieldLike 向け recordBefore/undo) はチャンクの
+  // Map 構造に直接は使えない。ここではワールド座標 + マージンのグローバル
+  // セル矩形をキャプチャ/復元する等価な仕組みを、チャンク境界をまたいでも
+  // 正しく動くよう用意する (captureRegion は ensureChunk 経由で読むため、
+  // 直後に stampX するチャンクと同じ実体化が起きるだけで副作用の増加はない)。
+
+  /** worldX,worldY を中心に marginWorld ぶんの矩形 (グローバルセル座標) を
+   * 現在値のままキャプチャする。呼び出し側のスタンプ関数が実際に触れる範囲
+   * より広めに取っても安全 (余分に記録したセルは restoreRegion 時に
+   * 「同じ値へ戻す」だけの no-op になる、undo.ts の recordBefore と同じ考え方)。 */
+  captureRegion(worldX: number, worldY: number, marginWorld: number): FieldPatch {
+    const s = this.cellWorldSize;
+    const ccx = worldX / s, ccy = worldY / s, m = marginWorld / s;
+    const gx0 = Math.floor(ccx - m), gx1 = Math.ceil(ccx + m);
+    const gy0 = Math.floor(ccy - m), gy1 = Math.ceil(ccy + m);
+    const w = gx1 - gx0 + 1, h = gy1 - gy0 + 1;
+    const before = new Float32Array(w * h);
+    let k = 0;
+    for (let ty = gy0; ty <= gy1; ty++) {
+      for (let tx = gx0; tx <= gx1; tx++) before[k++] = this.cellAt(tx, ty);
+    }
+    return { gx0, gy0, gx1, gy1, before };
+  }
+
+  /** captureRegion() で撮ったパッチを書き戻す。 */
+  restoreRegion(patch: FieldPatch): void {
+    let k = 0;
+    for (let ty = patch.gy0; ty <= patch.gy1; ty++) {
+      for (let tx = patch.gx0; tx <= patch.gx1; tx++) this.setCell(tx, ty, patch.before[k++]!);
+    }
+  }
+}
+
+/** captureRegion()/restoreRegion() の受け渡し用パッチ (グローバルセル座標)。 */
+export interface FieldPatch {
+  gx0: number; gy0: number; gx1: number; gy1: number;
+  before: Float32Array;
 }

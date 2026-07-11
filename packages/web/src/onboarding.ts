@@ -23,3 +23,29 @@ export function hasSeenOnboarding(storage: Pick<Storage, 'getItem'> = localStora
 export function markOnboardingSeen(storage: Pick<Storage, 'setItem'> = localStorage): void {
   storage.setItem(STORAGE_KEY, '1');
 }
+
+// M32: 「皿 (チュートリアル) → 原野 (本編)」の推奨動線。皿の成熟期到達を
+// 「本編を勧めるタイミング」として使う (ROADMAP.md M32)。一度出したら
+// (原野へ移動した/閉じたのどちらでも) 二度と出さない — 既にプレイ済みの人に
+// 毎回同じ案内を出すのはノイズになるため。純粋関数として切り出し、
+// main.ts が毎フレーム呼んでも DOM/localStorage を汚さない (呼び出し側が
+// markWildlandSuggestionSeen() を1回呼ぶまでは何度呼んでも同じ判定を返す)。
+
+const WILDLAND_SUGGEST_KEY = 'morpho.wildlandSuggested.v1';
+
+export function hasSeenWildlandSuggestion(storage: Pick<Storage, 'getItem'> = localStorage): boolean {
+  return storage.getItem(WILDLAND_SUGGEST_KEY) === '1';
+}
+
+export function markWildlandSuggestionSeen(storage: Pick<Storage, 'setItem'> = localStorage): void {
+  storage.setItem(WILDLAND_SUGGEST_KEY, '1');
+}
+
+// stageId: 現在のステージ。eraName: 現在の時代名。alreadySuggested: この
+// セッションまたは過去のセッションで既に案内済みか (hasSeenWildlandSuggestion
+// の結果を渡す)。「皿で成熟期に到達し、まだ案内していない」ときだけ true。
+// 原野そのものや、皿以外の有界ステージでは出さない (皿 = チュートリアルの
+// ゴールとして原野を勧める、という導線を明確に保つ)。
+export function shouldSuggestWildland(stageId: string, eraName: string, alreadySuggested: boolean): boolean {
+  return !alreadySuggested && stageId === 'petri' && eraName === '成熟期';
+}

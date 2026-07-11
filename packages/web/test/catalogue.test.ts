@@ -25,10 +25,31 @@ function ctx(overrides: Partial<CatalogueContext> = {}): CatalogueContext {
 }
 
 describe('catalogue', () => {
-  it('全部で37種になる (5タイプ×6ステージ + 特殊7種、M14で大陸ステージが加わった)', () => {
-    expect(CATALOGUE_TOTAL).toBe(37);
-    expect(allCatalogueEntries().length).toBe(37);
-    expect(new Set(allCatalogueEntries().map((e) => e.id)).size).toBe(37);
+  // M32: 原野を STAGE_ORDER に加えたことで 5タイプ×7ステージ+特殊7種 = 42種に
+  // 拡張した (以前は 37種 = 5×6+7)。既存6ステージぶんの id・名称は不変
+  // (末尾に wildland ぶんが追加されただけ) であることを次のテストで守る。
+  it('全部で42種になる (5タイプ×7ステージ + 特殊7種、M32で原野が加わった)', () => {
+    expect(CATALOGUE_TOTAL).toBe(42);
+    expect(allCatalogueEntries().length).toBe(42);
+    expect(new Set(allCatalogueEntries().map((e) => e.id)).size).toBe(42);
+  });
+
+  it('原野ぶんの標準エントリ (5タイプ) が図鑑に収録される (M32)', () => {
+    const ids = allCatalogueEntries().map((e) => e.id);
+    for (const typeId of ['thick-connector', 'spreader', 'efficient', 'resilient', 'balanced'] as const) {
+      const id = standardCatalogueId(typeId, 'wildland');
+      expect(ids).toContain(id);
+      expect(catalogueEntry(id)!.name).toContain('げんやの');
+    }
+  });
+
+  it('既存6ステージぶんの標準エントリの id・名称は M32 以前と完全に不変', () => {
+    expect(catalogueEntry(standardCatalogueId('thick-connector', 'petri'))).toEqual({
+      id: 'thick-connector:petri', name: 'さらのねばりのこ', description: '皿で育った太くつなぐ型の個体。',
+    });
+    expect(catalogueEntry(standardCatalogueId('spreader', 'continent'))).toEqual({
+      id: 'spreader:continent', name: 'たいりくのひろがりのこ', description: '大陸で育った広がり型の個体。',
+    });
   });
 
   it('標準条件では型×ステージの1件だけが該当する', () => {

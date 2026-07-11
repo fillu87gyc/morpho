@@ -1,0 +1,13 @@
+{"label":"t0","atMs":1783779609294,"day":"0","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"2","chunks":"9","chalProgress":"0/1","encyProgress":"0/42","sizuku":"120"}
+{"label":"t15s","atMs":1783779624323,"day":"2","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"9","chunks":"9","chalProgress":"0/1","encyProgress":"0/42","sizuku":"132"}
+{"label":"t30s","atMs":1783779639348,"day":"4","era":"胞子期","eraEta":"次の時代まで あと 01:01","reach":"40","chunks":"12","chalProgress":"0/1","encyProgress":"4/42","sizuku":"150"}
+{"label":"t45s","atMs":1783779654378,"day":"7","era":"胞子期","eraEta":"次の時代まで あと 00:50","reach":"27","chunks":"12","chalProgress":"0/1","encyProgress":"4/42","sizuku":"168"}
+{"label":"t60s","atMs":1783779669409,"day":"10","era":"胞子期","eraEta":"次の時代まで あと 03:17","reach":"23","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"186"}
+{"label":"t75s","atMs":1783779684432,"day":"12","era":"胞子期","eraEta":"次の時代まで あと 16:09","reach":"19","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"198"}
+{"label":"t90s","atMs":1783779699475,"day":"15","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"28","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"216"}
+{"label":"t105s","atMs":1783779714517,"day":"17","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"14","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"228"}
+{"label":"t120s","atMs":1783779729537,"day":"20","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"10","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"246"}
+{"label":"t135s","atMs":1783779744579,"day":"22","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"10","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"258"}
+{"label":"t150s","atMs":1783779759597,"day":"25","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"42","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"276"}
+{"label":"final","atMs":1783779760694,"day":"25","era":"胞子期","eraEta":"次の時代まで 条件: 母体の森の外へ","reach":"43","chunks":"12","chalProgress":"0/1","encyProgress":"5/42","sizuku":"276"}
+console errors: []

@@ -124,3 +124,45 @@ describe('ChunkedFieldGrid の遅延生成', () => {
     expect(gridB.sampleNearest(4, 0)).toBe(grid.sampleNearest(4, 0));
   });
 });
+
+// M32: 原野の「直前1手」Undo が使う captureRegion/restoreRegion。
+describe('ChunkedFieldGrid.captureRegion/restoreRegion (M32)', () => {
+  it('スタンプ前の値を復元できる', () => {
+    const grid = new ChunkedFieldGrid({ chunkCells: 16, cellWorldSize: 1 });
+    grid.stampGaussian(10, 10, 4, 0.5); // 事前の地形 (復元後も残るべき)
+    const before = grid.sampleNearest(10, 10);
+
+    const patch = grid.captureRegion(10, 10, 8);
+    grid.stampGaussian(10, 10, 4, 0.9); // プレイヤーの一手
+    expect(grid.sampleNearest(10, 10)).not.toBeCloseTo(before, 5);
+
+    grid.restoreRegion(patch);
+    expect(grid.sampleNearest(10, 10)).toBeCloseTo(before, 5);
+  });
+
+  it('チャンク境界をまたぐキャプチャも正しく復元する', () => {
+    const grid = new ChunkedFieldGrid({ chunkCells: 8, cellWorldSize: 1 });
+    grid.stampObstacle(0, 0, 20);
+    const before = grid.sampleNearest(7.5, 3);
+    expect(grid.chunkCount()).toBeGreaterThan(1);
+
+    const patch = grid.captureRegion(8, 3, 6); // x=8 の境界をまたぐ矩形
+    grid.stampGaussian(8, 3, 3, 1.0);
+    grid.restoreRegion(patch);
+    expect(grid.sampleNearest(7.5, 3)).toBeCloseTo(before, 5);
+    expect(grid.sampleNearest(8.5, 3)).toBeCloseTo(before, 5);
+  });
+
+  it('捕まえた矩形の外側は復元の影響を受けない', () => {
+    const grid = new ChunkedFieldGrid({ chunkCells: 16, cellWorldSize: 1 });
+    grid.stampGaussian(50, 50, 3, 0.7); // captureRegion の範囲外に既存の地形
+    const farBefore = grid.sampleNearest(50, 50);
+
+    const patch = grid.captureRegion(10, 10, 5);
+    grid.stampGaussian(10, 10, 3, 0.6);
+    grid.stampGaussian(50, 50, 3, 0.3); // 範囲外への変更 (undo 対象ではない)
+    grid.restoreRegion(patch);
+    // 範囲外の変更は undo で戻らない (キャプチャしていないため)。
+    expect(grid.sampleNearest(50, 50)).not.toBeCloseTo(farBefore, 5);
+  });
+});

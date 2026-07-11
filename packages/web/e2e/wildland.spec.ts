@@ -370,3 +370,79 @@ test('M31: 俯瞰でマクロツールへ切り替わり、購入・適用で残
   await expect.poll(async () => canvasChecksum(page), { timeout: 10_000 }).not.toBe(checksumBefore);
   expect(errors).toEqual([]);
 });
+
+// ── M32: 原野を本編に — 目標系と記録系の全面接続 ───────────────────
+
+test('M32: 原野の時代が実際に進む (拠点数ベースの旧条件では止まらない)', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+  await expect(page.locator('#era')).toHaveText('胞子期');
+
+  await page.click('#speed-btn-24');
+  // M25〜M31 の時代判定 (eraFor、拠点数ベース) だと「もう1拠点に到達」が
+  // 構造的に満たせず拡散期で恒久停止していた (ROADMAP.md V9)。M32 の
+  // wildlandEraFor は到達距離・探索チャンク数・発見バイオーム数で刻むため、
+  // 実際に胞子期から先へ進む。
+  await expect.poll(async () => page.locator('#era').textContent(), { timeout: 120_000 })
+    .not.toBe('胞子期');
+  expect(errors).toEqual([]);
+});
+
+test('M32: 開始直後に自動達成されるチャレンジが無い', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+    localStorage.setItem('morpho.dayMs.v1', '144000'); // ほぼ tick が進まない (開始直後を観測)
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+  await page.click('#speed-btn-pause');
+
+  // 有界6ステージの3種 (拠点数ベースの connectProgress に依存する
+  // fastest/cheapest/clean) は隠され、原野専用の反復チャレンジ1件に
+  // 切り替わる。開始直後はまだ何も達成していない (0/1、「挑戦中」表示)。
+  await expect(page.locator('#chal-progress')).toHaveText('0/1');
+  await expect(page.locator('#chal-list li')).toHaveCount(1);
+  await expect(page.locator('#chal-list .challenge-status')).not.toHaveClass(/done/);
+  // 実プレイ検証で見つけた回帰の再発防止: 未達成なのに文言だけ「達成✓」に
+  // なっていないか (class は正しく外れていても、テキストが食い違っていた
+  // ことがあった)。
+  await expect(page.locator('#chal-list .challenge-status')).not.toHaveText(/達成/);
+  expect(errors).toEqual([]);
+});
+
+test('M32: 図鑑に原野個体が収録される (42枠、原野ぶんの標準エントリを含む)', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+    localStorage.setItem('morpho.dayMs.v1', '3840'); // 旧 tick レート相当、日進行を速める
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+
+  // M32: STAGE_ORDER に原野が加わり、図鑑は37枠→42枠に拡張された。
+  await expect(page.locator('#ency-progress')).toHaveText('0/42');
+  await expect(page.locator('.ency-slot')).toHaveCount(42);
+
+  await page.click('#speed-btn-24');
+  // 図鑑への記録は Day 3 以降 (main.ts、育ちが浅いうちは個性が定まらない)。
+  await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(3);
+  await expect.poll(async () => page.locator('.ency-slot.discovered').count(), { timeout: 30_000 }).toBeGreaterThan(0);
+  await expect(page.locator('#ency-progress')).not.toHaveText('0/42');
+  expect(errors).toEqual([]);
+});

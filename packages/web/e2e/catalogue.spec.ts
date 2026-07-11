@@ -1,4 +1,5 @@
-// M13: 図鑑グリッド (37枠、M14で大陸ステージが加わり32→37) と実績バッジグリッドの e2e。
+// M13: 図鑑グリッド (37枠、M14で大陸ステージが加わり32→37、M32で原野が加わり37→42)
+// と実績バッジグリッドの e2e。
 
 import { test, expect, type Page } from './fixtures.js';
 
@@ -30,7 +31,7 @@ async function setSpeedMax(page: Page): Promise<void> {
   await page.click('#speed-btn-24');
 }
 
-test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見してサムネイルとカウントが更新される', async ({ page }) => {
+test('図鑑は42枠のグリッドで始まり、Day3を超えると1枠発見してサムネイルとカウントが更新される', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => {
     localStorage.setItem('morpho.onboarded.v1', '1');
@@ -40,8 +41,10 @@ test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見�
   await page.goto('/');
   await waitForReady(page);
 
-  await expect(page.locator('#ency-progress')).toHaveText('0/37');
-  await expect(page.locator('.ency-slot')).toHaveCount(37);
+  // M32: 原野が STAGE_ORDER に加わり、5タイプ×7ステージ+特殊7種 = 42枠になった
+  // (以前は 5×6+7=37枠)。
+  await expect(page.locator('#ency-progress')).toHaveText('0/42');
+  await expect(page.locator('.ency-slot')).toHaveCount(42);
   await expect(page.locator('.ency-slot.discovered')).toHaveCount(0);
 
   await setSpeedMax(page);
@@ -49,7 +52,7 @@ test('図鑑は37枠のグリッドで始まり、Day3を超えると1枠発見�
     .toBeGreaterThanOrEqual(3);
 
   await expect.poll(async () => page.locator('.ency-slot.discovered').count(), { timeout: 10_000 }).toBeGreaterThan(0);
-  await expect(page.locator('#ency-progress')).not.toHaveText('0/37');
+  await expect(page.locator('#ency-progress')).not.toHaveText('0/42');
   await expect.poll(
     async () => page.locator('.ency-slot.discovered .ency-thumb img').count(),
     { timeout: 10_000 },

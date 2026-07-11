@@ -6,14 +6,19 @@ import type { Tool, StageId, EvolutionLog } from './game.js';
 import type { GameProxy } from './game-proxy.js';
 import type { Encyclopedia } from './encyclopedia.js';
 import { ACHIEVEMENT_DEFS, type Achievements } from './achievements.js';
-import { allChallenges, isChallengeExpired, type DailyChallengeTracker } from './challenges.js';
+import {
+  allChallenges, isChallengeExpired, type DailyChallengeTracker, type WildDailyChallengeStatus,
+} from './challenges.js';
 import type { Scoreboard } from './scoreboard.js';
 import { HARVEST_MIN_DAY, type Lineage } from './lineage.js';
 import type { Album } from './album.js';
 import { allCatalogueEntries } from './catalogue.js';
 import type { CatalogueThumbs } from './catalogue-thumbs.js';
 import { starsOf, typeDescriptionFor } from './trait-labels.js';
-import { estimateEraEta, describeEraBlocker, type EraSample, type EraInput } from './era.js';
+import {
+  estimateEraEta, describeEraBlocker, describeWildlandEraBlocker, WILDLAND_ERA_ETA_SMOOTHING_ALPHA,
+  type EraSample, type EraInput, type WildlandEraInput,
+} from './era.js';
 import { formatMMSS, TICKS_PER_DAY } from './day-loop.js';
 import { filterByArea, type WorldEvent } from './world-events.js';
 import type { WorldView } from './camera.js';
@@ -48,8 +53,10 @@ export class Ui {
   private eraRing = el('era-ring');
   private stageName = el('stage-name');
   // メインクエスト (固定2本) + M6 ワールド目標 (コロニー統合)
+  private qConnectItem = el('q-connect-item');
   private qConnectBar = el('q-connect-bar');
   private qConnectN = el('q-connect-n');
+  private qExploreItem = el('q-explore-item');
   private qExploreBar = el('q-explore-bar');
   private qExploreN = el('q-explore-n');
   private qUniteBar = el('q-unite-bar');
@@ -58,6 +65,13 @@ export class Ui {
   private qContinentItem = el('q-continent-item');
   private qContinentBar = el('q-continent-bar');
   private qContinentN = el('q-continent-n');
+  // M32: 原野のみ表示するクエスト (connect-all/explore-70 の置き換え)
+  private qWildReachItem = el('q-wild-reach-item');
+  private qWildReachBar = el('q-wild-reach-bar');
+  private qWildReachN = el('q-wild-reach-n');
+  private qWildBiomesItem = el('q-wild-biomes-item');
+  private qWildBiomesBar = el('q-wild-biomes-bar');
+  private qWildBiomesN = el('q-wild-biomes-n');
   // M11: チャレンジ一覧 (3種常時表示)
   private chalList = el('chal-list');
   private chalProgress = el('chal-progress');
@@ -280,20 +294,31 @@ export class Ui {
 
   // M17: extraEvo は main.ts 側で検出した突然変異・形質獲得イベント
   // (mutation-events.ts、web 側派生で sim 無改修) を「進化の記録」に合流させる。
-  render(view?: WorldView, extraEvo: EvolutionLog[] = []): void {
+  // M32: wildChallenge は main.ts 側の WildDailyChallengeTracker.update() の
+  // 結果 (原野のときだけ渡す)。報酬付与の副作用は main.ts の責務のまま、
+  // ui.ts はここから読み取った表示だけを行う。
+  render(view?: WorldView, extraEvo: EvolutionLog[] = [], wildChallenge?: WildDailyChallengeStatus): void {
     const s = this.game.snapshot();
+    const isWildland = s.stage.id === 'wildland';
     setText(this.day, String(s.day));
     setText(this.era, s.era.name);
     this.eraRing.style.setProperty('--era-progress', String(s.era.progress));
     this.eraRing.title = `次の時代まで ${pct(s.era.progress)}`;
-    this.renderEraEta(s.era.name, s.era.progress, {
-      coloniesReached: s.world.coloniesReached,
-      massKg: s.world.massKg,
-      connectedNetworks: s.world.connectedNetworks,
-      sourceColonies: s.world.sourceColonies,
-      exploration: s.traits.exploration,
-      day: s.day,
-    });
+    // M32: 時代の残り時間予測 (ETA) は有界6ステージ (eraFor 系) と原野
+    // (wildlandEraFor 系) で入力の形が違うため、ここで「残条件テキスト」と
+    // 「ETA の平滑化係数」だけを分岐して renderEraEta へ渡す (ETA の
+    // サンプリング/表示ロジック自体は共通、既存6ステージの経路は不変)。
+    const blockerText = isWildland
+      ? describeWildlandEraBlocker({
+        reachDistance: s.world.reachDistance, exploredChunks: s.world.exploredChunks,
+        biomesDiscovered: s.world.biomesDiscovered, day: s.day,
+      } satisfies WildlandEraInput)
+      : describeEraBlocker({
+        coloniesReached: s.world.coloniesReached, massKg: s.world.massKg,
+        connectedNetworks: s.world.connectedNetworks, sourceColonies: s.world.sourceColonies,
+        exploration: s.traits.exploration, day: s.day,
+      } satisfies EraInput);
+    this.renderEraEta(s.era.name, s.era.progress, isWildland, blockerText);
     setText(this.stageName, s.stage.name);
     this.stageName.title = s.stage.description;
     if (this.lastStageId !== s.stage.id) {
@@ -302,7 +327,11 @@ export class Ui {
       if (stageSelect.value !== s.stage.id) stageSelect.value = s.stage.id;
     }
 
-    // メインクエスト (固定2本)
+    // メインクエスト (固定2本)。M32: 原野では意味を持たない
+    // (開始直後100%/0%固定、ROADMAP.md V9) ため隠し、wild-reach/wild-biomes に
+    // 切り替える。値の計算自体は従来通り毎フレーム行う (既存6ステージ不変)。
+    if (this.qConnectItem.hidden !== isWildland) this.qConnectItem.hidden = isWildland;
+    if (this.qExploreItem.hidden !== isWildland) this.qExploreItem.hidden = isWildland;
     const connectQuest = s.quests.find((q) => q.id === 'connect-all');
     const exploreQuest = s.quests.find((q) => q.id === 'explore-70');
     if (connectQuest) {
@@ -312,6 +341,14 @@ export class Ui {
     if (exploreQuest) {
       setBar(this.qExploreBar, exploreQuest.progress);
       setText(this.qExploreN, pct(exploreQuest.progress));
+    }
+    if (this.qWildReachItem.hidden !== !isWildland) this.qWildReachItem.hidden = !isWildland;
+    if (this.qWildBiomesItem.hidden !== !isWildland) this.qWildBiomesItem.hidden = !isWildland;
+    if (isWildland) {
+      const wildReach = s.quests.find((q) => q.id === 'wild-reach');
+      const wildBiomes = s.quests.find((q) => q.id === 'wild-biomes');
+      if (wildReach) { setBar(this.qWildReachBar, wildReach.progress); setText(this.qWildReachN, pct(wildReach.progress)); }
+      if (wildBiomes) { setBar(this.qWildBiomesBar, wildBiomes.progress); setText(this.qWildBiomesN, pct(wildBiomes.progress)); }
     }
     const uniteQuest = s.quests.find((q) => q.id === 'unite-colonies');
     if (uniteQuest) {
@@ -339,42 +376,41 @@ export class Ui {
     }
     setText(this.lineageGen, `現在 ${this.trackers.lineage.nextGeneration()}代目`);
 
-    // M11: チャレンジ一覧 (3種常時表示、達成状況が変わったときだけ書き換える)
-    // M27: 期限切れ状態も day に応じて変わるので key に含める。
-    const chalKey = allChallenges().map((c) => {
-      const done = this.trackers.challenges.isCompleted(c.kind);
-      return `${c.kind}:${done}:${isChallengeExpired(c, s.day, done)}`;
-    }).join(',');
-    if (this.lastChalKey !== chalKey) {
-      this.lastChalKey = chalKey;
-      const completed = allChallenges().filter((c) => this.trackers.challenges.isCompleted(c.kind)).length;
-      setText(this.chalProgress, `${completed}/3`);
-      this.chalList.innerHTML = '';
-      for (const chal of allChallenges()) {
-        const done = this.trackers.challenges.isCompleted(chal.kind);
-        const expired = isChallengeExpired(chal, s.day, done);
-        const li = document.createElement('li');
-        const title = document.createElement('div');
-        title.className = 'challenge-title';
-        const titleText = document.createElement('span');
-        titleText.textContent = chal.title;
-        title.appendChild(titleText);
-        const desc = document.createElement('div');
-        desc.className = 'challenge-desc';
-        desc.textContent = chal.description;
-        const goal = document.createElement('div');
-        goal.className = 'challenge-goal';
-        goal.textContent = chal.goal;
-        const status = document.createElement('span');
-        status.className = 'challenge-status';
-        status.classList.toggle('done', done);
-        status.classList.toggle('expired', expired);
-        status.textContent = done ? '達成済み ✓' : expired ? 'この皿では期限切れ — 次の皿で挑戦' : '挑戦中…';
-        li.appendChild(title);
-        li.appendChild(desc);
-        li.appendChild(goal);
-        li.appendChild(status);
-        this.chalList.appendChild(li);
+    // M11: チャレンジ一覧。有界6ステージは従来通り3種常時表示 (達成状況が
+    // 変わったときだけ書き換える、M27: 期限切れ状態も day に応じて変わるので
+    // key に含める)。M32: 原野では拠点数ベースの3種 (connectProgress に依存
+    // する fastest/cheapest/clean は原野でも開始直後に自動達成しうる —
+    // ROADMAP.md M32 受け入れ基準に反する) を隠し、期限のない反復チャレンジ
+    // 1種 (wildChallenge、main.ts の WildDailyChallengeTracker) に切り替える。
+    if (isWildland) {
+      const w = wildChallenge;
+      const key = `wild:${w ? `${w.progress.toFixed(3)}:${w.done}` : 'pending'}`;
+      if (this.lastChalKey !== key) {
+        this.lastChalKey = key;
+        setText(this.chalProgress, w?.done ? '1/1' : '0/1');
+        this.chalList.innerHTML = '';
+        if (w) {
+          // 達成済みのときだけ「日が変わるとリセット」を明示する (反復
+          // チャレンジであることを伝える) — 未達成時は既定の「挑戦中…」。
+          const statusOverride = w.done ? '達成 ✓ (日が変わるとリセット)' : undefined;
+          this.chalList.appendChild(this.buildChallengeLi(w.title, w.description, w.goal, w.done, false, statusOverride));
+        }
+      }
+    } else {
+      const chalKey = allChallenges().map((c) => {
+        const done = this.trackers.challenges.isCompleted(c.kind);
+        return `${c.kind}:${done}:${isChallengeExpired(c, s.day, done)}`;
+      }).join(',');
+      if (this.lastChalKey !== chalKey) {
+        this.lastChalKey = chalKey;
+        const completed = allChallenges().filter((c) => this.trackers.challenges.isCompleted(c.kind)).length;
+        setText(this.chalProgress, `${completed}/3`);
+        this.chalList.innerHTML = '';
+        for (const chal of allChallenges()) {
+          const done = this.trackers.challenges.isCompleted(chal.kind);
+          const expired = isChallengeExpired(chal, s.day, done);
+          this.chalList.appendChild(this.buildChallengeLi(chal.title, chal.description, chal.goal, done, expired));
+        }
       }
     }
 
@@ -388,8 +424,8 @@ export class Ui {
     setText(this.wColonies, String(s.world.sourceColonies));
     // M28: 原野のみ「到達距離」「探索チャンク」を出す (有界6ステージは常に
     // 窓=世界なので意味が薄く、行ごと隠す)。伸び続ける数字を常時1つ以上
-    // 見せるための新指標 (ROADMAP.md V2)。
-    const isWildland = s.stage.id === 'wildland';
+    // 見せるための新指標 (ROADMAP.md V2)。isWildland は render() 冒頭で
+    // 算出済みのものをそのまま使う (M32)。
     for (const row of this.wildlandRows) {
       if (row.hidden !== !isWildland) row.hidden = !isWildland;
     }
@@ -708,7 +744,13 @@ export class Ui {
   // M16: 時代の残り時間予測。2.5秒に1点、progress を実時間軸でサンプリング
   // する (毎フレームは不要 — sim tick の粒度からしても過剰)。時代名が変わった
   // ら履歴をリセットし、切替直後の古い速度で誤った ETA を出さないようにする。
-  private renderEraEta(eraName: string, progress: number, input: EraInput): void {
+  // M32: isWildland のときだけ estimateEraEta に平滑化係数を渡す (原野は
+  // M30 の距離コスト勾配で progress が一時的に後退することがあり、素の
+  // 外挿だと ETA が短時間で往復する — ROADMAP.md V9)。blockerText は
+  // 呼び出し側 (render()) が有界/原野いずれかの describe*EraBlocker で
+  // 事前に組み立てたテキスト。既存6ステージの経路 (isWildland=false) は
+  // smoothingAlpha を渡さない = estimateEraEta の挙動は完全不変。
+  private renderEraEta(eraName: string, progress: number, isWildland: boolean, blockerText: string): void {
     if (this.lastEraNameForEta !== eraName) {
       this.lastEraNameForEta = eraName;
       this.eraSamples = [];
@@ -720,12 +762,42 @@ export class Ui {
       this.eraSamples.push({ atMs: now, progress });
       if (this.eraSamples.length > this.ERA_SAMPLE_MAX) this.eraSamples.shift();
     }
-    const etaMs = estimateEraEta(this.eraSamples);
+    const etaMs = estimateEraEta(this.eraSamples, isWildland ? WILDLAND_ERA_ETA_SMOOTHING_ALPHA : undefined);
     // M27: ETA が見積もれず「—」になるときは、代わりに残条件をそのまま示す
     // (「胞子期のまま—」のような手がかりゼロの表示にしない)。
     const text = etaMs === null
-      ? `次の時代まで ${describeEraBlocker(input) || '—'}`
+      ? `次の時代まで ${blockerText || '—'}`
       : `次の時代まで あと ${formatMMSS(etaMs / 1000)}`;
     setText(this.eraEtaEl, text);
+  }
+
+  // M32: チャレンジ一覧 li の DOM 組み立て (有界6ステージ/原野で共有)。
+  // statusOverride を渡すと done/expired の既定文言より優先する
+  // (原野の反復チャレンジ「達成 ✓ (日が変わるとリセット)」用)。
+  private buildChallengeLi(
+    title: string, description: string, goal: string, done: boolean, expired: boolean, statusOverride?: string,
+  ): HTMLLIElement {
+    const li = document.createElement('li');
+    const titleRow = document.createElement('div');
+    titleRow.className = 'challenge-title';
+    const titleText = document.createElement('span');
+    titleText.textContent = title;
+    titleRow.appendChild(titleText);
+    const desc = document.createElement('div');
+    desc.className = 'challenge-desc';
+    desc.textContent = description;
+    const goalEl = document.createElement('div');
+    goalEl.className = 'challenge-goal';
+    goalEl.textContent = goal;
+    const status = document.createElement('span');
+    status.className = 'challenge-status';
+    status.classList.toggle('done', done);
+    status.classList.toggle('expired', expired);
+    status.textContent = statusOverride ?? (done ? '達成済み ✓' : expired ? 'この皿では期限切れ — 次の皿で挑戦' : '挑戦中…');
+    li.appendChild(titleRow);
+    li.appendChild(desc);
+    li.appendChild(goalEl);
+    li.appendChild(status);
+    return li;
   }
 }

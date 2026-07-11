@@ -245,6 +245,14 @@ export class ChunkedGridEnvironment implements Environment {
     return this.obstacle.chunkCount() + this.obstacle.evictedChunkCount();
   }
 
+  /** M32: 触れたことのあるチャンクの番地一覧 (実体 + evict 済み)。
+   * summarizeChunks() と違ってセルデータは読まない (peekChunk 済みのフィールド
+   * 走査をしない) ぶん軽量 — 「発見バイオーム数」のような、座標だけで決まる
+   * 派生指標 (biomeAt は (cx,cy,worldSeed) の純粋関数) を安く求めるための API。 */
+  touchedChunkCoords(): { cx: number; cy: number }[] {
+    return [...this.obstacle.generatedChunks(), ...this.obstacle.evictedChunks()];
+  }
+
   // 全フィールドのグリッド (evict/集計でまとめて回すため)。
   private allGrids(): ChunkedFieldGrid[] {
     return [this.nutrients, this.moisture, this.brightness, this.obstacle, this.temperature, this.toxin, this.water];
