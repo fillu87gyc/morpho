@@ -3,6 +3,7 @@
 // 取りこぼし・タイポをコンパイル時に検出できる。
 
 import type { Tool, GameSnapshot, EvolutionLog, StageId } from './game.js';
+import type { MacroToolId } from './macro-tools.js';
 import type { Genome, Vec2 } from '@morpho/sim';
 import type { WorldEvent } from './world-events.js';
 import type { WorldOverview } from './world-overview.js';
@@ -15,6 +16,9 @@ export type ToWorkerMessage =
   | { type: 'setTool'; tool: Tool }
   | { type: 'setBrush'; radius: number }
   | { type: 'apply'; pos: Vec2 }
+  // M31: 大局介入 (マクロツール、原野の俯瞰専用)。pos は窓ローカル座標、
+  // dir は「肥沃な帯」のドラッグベクトル (ワールド単位、正規化前)。
+  | { type: 'applyMacro'; tool: MacroToolId; pos: Vec2; dir?: Vec2 }
   // M8 P4: 早送りモード。描画/スナップショット送信の頻度を10fpsまで落とし、
   // 浮いた予算をtickに全振りする (sim-worker.ts のループ間隔と
   // TickScheduler の予算/借金上限を切り替える)。

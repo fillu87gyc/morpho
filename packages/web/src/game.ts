@@ -18,6 +18,11 @@ import {
   type Genome, type Individuality, type IndividualTypeInfo, type StepCache,
 } from '@morpho/sim';
 import { STAGES, WILDLAND_CHUNK_CELLS, WILDLAND_WORLD_SIZE, WILDLAND_CENTER, type StageId, type StageConfig } from './stages.js';
+import {
+  MACRO_TOOLS, corridorPatchCenters, normalizeMacroDir, macroRemainingDays, shouldReapplyMacro,
+  CORRIDOR_PATCH_RADIUS, CORRIDOR_LENGTH,
+  type MacroToolId, type ActiveMacroEffect, type MacroEffectView,
+} from './macro-tools.js';
 import { computeQuests, type QuestStatus } from './quests.js';
 import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 import { TICKS_PER_DAY } from './day-loop.js';
@@ -82,6 +87,9 @@ export interface FastSnapshot {
   // 集計時点の値 (最大1秒古い) なので、描画は必ずこちら (snapshot と同時刻の
   // 現在値) を使うこと。有界6ステージでは undefined。
   windowOrigin?: Vec2;
+  // M31: 働いている大局介入 (マクロツール) の可視化用ビュー (窓ローカル座標 +
+  // 残り日数)。原野のみ。有界6ステージでは undefined。
+  macroEffects?: MacroEffectView[];
 }
 
 export interface DerivedSnapshot {
@@ -118,6 +126,35 @@ const WILDLAND_REBAKE_MARGIN = 0.25;
 // 窓集計 (既存6ステージ) が使ってきた 0.05 と同じ値を、原野の全世界集計
 // (チャンク横断) でも使う — 窓と世界で「面積」の定義がずれないようにする。
 const BIOMASS_AREA_THRESHOLD = 0.05;
+// M31: 原野の「発芽前」(seedling) パラメタ上書き。極小スタートの Day 0〜3 に
+// 手動介入の意味を濃くするための食料ゲート: 胞子は生まれつき growthProbability/
+// growthActivityThreshold が厳しく、探索の波 (youth 駆動の自走拡大) がほぼ
+// 立ち上がらない。**2つ目の餌場に根を張った瞬間** (下の WILDLAND_GERMINATION_
+// CLUSTERS) に出荷パラメタ (M29/M30 でチューニング済み) へ切り替わり、以後は
+// 従来通り自走する — 「餌を置けば明確に応える」を、餌が sim 的に意味を持つ
+// 形 (sink → flux → 発芽) で作る。判定は state のみの純粋な派生 (rng 不使用)
+// で決定論を乱さない。既存6ステージはこの経路に一切入らない。
+const WILDLAND_SEEDLING_OVERRIDES: Partial<SimParams> = {
+  // 探索の波を鈍らせる (出荷値 0.85/0.20)。ゼロにはしない — 見守り放置でも
+  // 数日かけて隣の餌へ這い着き、自力で発芽できる速度は残す。
+  growthProbability: 0.4,
+  growthActivityThreshold: 0.35,
+  // 餌への感受性を上げる (出荷値 0.3)。撒いた餌の周囲だけ activity が
+  // 明確に立ち上がり、「置けば応える」が絵として見える。
+  wNutrient: 0.9,
+  // 発芽前は source の枝数を絞る (出荷値 5)。発芽の瞬間に source に空き
+  // スロットが残るため、たとえ全ての先端が餌に根を張って (sink 化して)
+  // いても、発芽後の爆発が source から必ず立ち上がる (満腹凍結の防止)。
+  maxDegree: 3,
+};
+// 発芽条件: sink (食料に根を張った終端) のクラスタ (半径6で圧縮、computeWorld
+// の到達拠点と同じ数え方) がこの数に達したら発芽する。開始時の「最初の餌
+// パッチ1つ」だけでは 1 クラスタ止まり = プレイヤーが餌を置く (か、探索の
+// 這い足が近隣の飛び石に届く) ことが発芽の引き金になる。
+const WILDLAND_GERMINATION_CLUSTERS = 2;
+// 発芽判定の間引き間隔 (growth と同じ 12 tick)。
+const WILDLAND_GERMINATION_CHECK_INTERVAL = 12;
+
 // M28: 原野の全世界統計 (チャンク横断走査) を再計算する tick 間隔。
 // computeWorld() は snapshotDerived (250ms毎) と checkEraTransition (12tick毎)
 // から呼ばれるため、毎回全チャンクを走査すると生成済みチャンク数に比例した
@@ -246,6 +283,12 @@ export class Game {
   // M28: 原野の全世界統計 (チャンク横断走査の結果) のキャッシュ。
   // WILDLAND_STATS_INTERVAL_TICKS に1回だけ数え直す (詳細は定数のコメント)。
   private wildlandStatsCache: { tick: number; areaM2: number; massKg: number; exploredChunks: number } | null = null;
+  // M31: 働いている大局介入 (マクロツール)。実座標で記録し、期間中は tick()
+  // が一定間隔で再適用する (macro-tools.ts)。有界6ステージでは常に空。
+  private macroEffects: ActiveMacroEffect[] = [];
+  // M31: 原野の「発芽前」フラグ。true の間は WILDLAND_SEEDLING_OVERRIDES が
+  // params に乗っている。発芽 (2つ目の餌場) で false になる一方通行のラッチ。
+  private wildlandSeedling = false;
 
   constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome, parentMutationBoost?: number) {
     this.seed = seed;
@@ -268,6 +311,10 @@ export class Game {
       ? createChildGenome(parentGenome, this.rng, mutationScaleFor(this.stage) * (parentMutationBoost ?? 1))
       : createGenome(this.rng);
     this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
+    // M31: 原野は「発芽前」の厳しいパラメタで始まる (極小スタート)。
+    // 2つ目の餌場に根を張った瞬間に出荷パラメタへ戻る (checkWildlandGermination)。
+    this.wildlandSeedling = this.stage.infinite === true;
+    if (this.wildlandSeedling) this.params = { ...this.params, ...WILDLAND_SEEDLING_OVERRIDES };
     this.undo = new UndoStack(10);
     this.bus = new EventBus();
     this.stepCache = createStepCache();
@@ -296,7 +343,11 @@ export class Game {
       this.state = createInitialState(seed, WILDLAND_WORLD_SIZE);
       this.sourcePoints = [WILDLAND_CENTER];
       this.foodPoints = []; // M27 の栄養再生は使わない (chunkTerrain が代わりに供給する)
-      seedSource(this.state, WILDLAND_CENTER, 6);
+      // M31 (極小スタート): 原野は「胞子1個」から。初期枝は最小の 2 本
+      // (既存6ステージの 6 本のまま始めると、母体の森を痩せさせても Day 0 の
+      // 立ち上がりが大きすぎる)。最初の餌パッチ1つは wildlandChunkTerrain が
+      // 胞子のそばに湧かせる (stages.ts)。
+      seedSource(this.state, WILDLAND_CENTER, 2);
       // 窓 (ローカル座標 0..WORLD) の中心に種が来るよう初期原点を決める。
       this.windowOrigin = { x: WILDLAND_CENTER.x - WORLD / 2, y: WILDLAND_CENTER.y - WORLD / 2 };
       this.windowShiftDelta = null;
@@ -324,6 +375,7 @@ export class Game {
       this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [...this.sourcePoints, ...this.foodPoints.map((f) => f.pos)]);
     }
 
+    this.macroEffects = [];
     this.evoLog = [];
     this.eraLog = [];
     this.worldEventLog.reset();
@@ -406,6 +458,18 @@ export class Game {
       // 「原野」は chunkTerrain が代わりに前線の先へ栄養を供給し続けるため
       // 対象外 (foodPoints=[] なので実質 no-op だが、意図を明示しておく)。
       if (!this.stage.infinite && this.state.tick % TICKS_PER_DAY === 0) this.regenerateNutrients();
+      // M31: 働いている大局介入の維持 (期間中の再適用) と期限切れの除去。
+      // 有界6ステージでは macroEffects が常に空なので no-op。
+      if (this.macroEffects.length > 0) this.maintainMacroEffects();
+      // M31: 原野の発芽判定 (発芽前のみ、growth と同じ間引きで) と、
+      // 発芽後の満腹凍結の防止 (日次)。
+      if (this.stage.infinite) {
+        if (this.wildlandSeedling && this.state.tick % WILDLAND_GERMINATION_CHECK_INTERVAL === 0) {
+          this.checkWildlandGermination();
+        } else if (!this.wildlandSeedling && this.state.tick % TICKS_PER_DAY === 0) {
+          this.ensureWildlandBud();
+        }
+      }
     }
     if (this.stage.infinite) this.rebakeWildlandWindow();
     this.drainBus();
@@ -622,6 +686,132 @@ export class Game {
     }
   }
 
+  // M31: 原野の発芽判定。sink (食料に根を張った終端) を半径6でクラスタリング
+  // し (computeWorld の到達拠点と同じ数え方)、2クラスタ以上 = 「ふたつ目の
+  // 餌場」に届いたら発芽 — 出荷パラメタ (M29/M30 チューニング) へ戻し、
+  // 母体から新しい枝を4本吹かせる (seedSource は sim の公開 seed API)。
+  // この「発芽の芽吹き」が無いと、幼体の全先端が餌に根を張ったまま
+  // (sink は伸びない・source も次数上限) 網が数日間完全凍結する「満腹凍結」
+  // が起きる (ハーネス対照実験で実測)。state のみの派生判定 + rng 不使用の
+  // 芽吹きなので決定論は保たれる。
+  private checkWildlandGermination(): void {
+    const sinks = this.state.nodes.filter((n) => n.type === 'sink');
+    if (sinks.length === 0) return;
+    if (clusterCount(sinks.map((n) => n.pos), 6) < WILDLAND_GERMINATION_CLUSTERS) return;
+    this.wildlandSeedling = false;
+    this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
+    seedSource(this.state, WILDLAND_CENTER, 4);
+    wakeDormantArea(this.state, this.params, WILDLAND_CENTER, 10);
+    this.pushEvent('ふたつ目の餌場に根を張り、網が目覚めた', 'germination');
+    this.pushEvo(this.state.tick, '発芽 — 網の成長が勢いを増した');
+  }
+
+  // M31: 発芽後の凍結防止 (日次)。「成長できる先端が1つも無い」= 全ての葉が
+  // sink (根を張って伸びない) かつ全 source が次数上限、の状態を検出したら
+  // 母体から新芽を2本吹かせる。序盤の小さな網でしか起きない現象なので、
+  // 網が育ったら (edges >= 300) 判定ごとスキップする。
+  private ensureWildlandBud(): void {
+    if (this.state.edges.length >= 300) return;
+    const deg = new Map<number, number>();
+    for (const e of this.state.edges) {
+      deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
+      deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
+    }
+    for (const n of this.state.nodes) {
+      if (n.type === 'relay' && (deg.get(n.id) ?? 0) <= 1) return;
+      if (n.type === 'source' && (deg.get(n.id) ?? 0) < this.params.maxDegree) return;
+    }
+    seedSource(this.state, WILDLAND_CENTER, 2);
+    wakeDormantArea(this.state, this.params, WILDLAND_CENTER, 10);
+    this.pushEvent('母体から新芽が伸びた', 'wildland-bud');
+  }
+
+  // ── M31: 大局介入 (マクロツール) ──────────────────────────
+  // ズームアウト (zoom < 1 の俯瞰) 中だけ使える高価な広域介入。原野のみ。
+  // pos/dir は窓ローカル座標 (apply() と同じ系)。効果は chunkEnv の placeX()
+  // を実座標へ直接呼ぶだけで、sim のローカル則は無改修 (macro-tools.ts)。
+  applyMacro(tool: MacroToolId, pos: Vec2, dir?: Vec2): void {
+    if (!this.stage.infinite || !this.chunkEnv) return;
+    const def = MACRO_TOOLS[tool];
+    const real: Vec2 = { x: pos.x + this.windowOrigin.x, y: pos.y + this.windowOrigin.y };
+    const effect: ActiveMacroEffect = {
+      kind: tool,
+      center: real,
+      // 回廊のみ方向を持つ。ドラッグが無ければ「母体から離れる向き」へ敷く。
+      dir: tool === 'corridor' ? normalizeMacroDir(dir, WILDLAND_CENTER, real) : undefined,
+      expiresAtTick: this.state.tick + def.durationTicks,
+    };
+    this.macroEffects.push(effect);
+    this.applyMacroEffect(effect, def.initialAmount);
+    this.pushEvent(`大局介入「${def.label}」を発動した`, `macro-${tool}`, pos);
+  }
+
+  // 効果1回ぶんの適用 (発動時 = initialAmount / 維持 = maintainAmount)。
+  private applyMacroEffect(effect: ActiveMacroEffect, amount: number): void {
+    const env = this.chunkEnv;
+    if (!env) return;
+    const def = MACRO_TOOLS[effect.kind];
+    switch (effect.kind) {
+      case 'rain':
+        // M29: 広域介入も休眠領域を起こす (窓内ツールの applyWildlandTool と
+        // 同じ理由 — 起こさないと効果に周囲のエッジが反応しない)。
+        wakeDormantArea(this.state, this.params, effect.center, def.radius);
+        env.placeWater(effect.center, def.radius, amount);
+        break;
+      case 'geoheat':
+        wakeDormantArea(this.state, this.params, effect.center, def.radius);
+        env.placeHeat(effect.center, def.radius, amount);
+        break;
+      case 'geocool':
+        wakeDormantArea(this.state, this.params, effect.center, def.radius);
+        env.placeHeat(effect.center, def.radius, -amount);
+        break;
+      case 'corridor': {
+        const unit = effect.dir ?? { x: 1, y: 0 };
+        for (const c of corridorPatchCenters(effect.center, unit)) {
+          wakeDormantArea(this.state, this.params, c, CORRIDOR_PATCH_RADIUS);
+          env.placeFood(c, CORRIDOR_PATCH_RADIUS, amount);
+        }
+        break;
+      }
+    }
+  }
+
+  // 期間中の再適用 (自然減衰への補填) と期限切れの除去。tick() のステップ
+  // ループから毎 tick 呼ばれ、判定は state.tick 基準で決定的 (steps の
+  // まとめ方に依存しない)。
+  private maintainMacroEffects(): void {
+    let expired = false;
+    for (const effect of this.macroEffects) {
+      if (this.state.tick >= effect.expiresAtTick) { expired = true; continue; }
+      const def = MACRO_TOOLS[effect.kind];
+      if (shouldReapplyMacro(effect, def, this.state.tick)) {
+        this.applyMacroEffect(effect, def.maintainAmount);
+      }
+    }
+    if (expired) {
+      for (const effect of this.macroEffects) {
+        if (this.state.tick >= effect.expiresAtTick) {
+          this.pushEvent(`「${MACRO_TOOLS[effect.kind].label}」の効き目が終わった`, `macro-end-${effect.kind}`);
+        }
+      }
+      this.macroEffects = this.macroEffects.filter((e) => this.state.tick < e.expiresAtTick);
+    }
+  }
+
+  // 可視化用ビュー (窓ローカル座標 + 残り日数)。
+  private macroEffectViews(): MacroEffectView[] {
+    const o = this.windowOrigin;
+    return this.macroEffects.map((e) => ({
+      kind: e.kind,
+      center: { x: e.center.x - o.x, y: e.center.y - o.y },
+      dir: e.dir,
+      radius: MACRO_TOOLS[e.kind].radius,
+      lengthWorld: e.kind === 'corridor' ? CORRIDOR_LENGTH : undefined,
+      remainingDays: macroRemainingDays(e.expiresAtTick, this.state.tick),
+    }));
+  }
+
   private eraseFields(fx: number, fy: number, fr: number): void {
     for (const f of [this.env.nutrients, this.env.moisture, this.env.brightness, this.env.obstacle, this.env.toxin]) {
       this.undo.recordBefore(f, fx, fy, fr + 1);
@@ -662,6 +852,7 @@ export class Game {
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
       landmarks: this.landmarks,
       windowOrigin: this.stage.infinite ? { x: this.windowOrigin.x, y: this.windowOrigin.y } : undefined,
+      macroEffects: this.stage.infinite ? this.macroEffectViews() : undefined,
     };
   }
 

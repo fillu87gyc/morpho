@@ -33,6 +33,7 @@ import { traceChains, smoothChain, computeDegree, type Chain } from './vein-curv
 import { scatterDecorations, type DecorPlacement } from './ecology-scatter.js';
 import { OverviewTileCache, OVERVIEW_VOID_COLOR, OVERVIEW_BIOMASS_GLOW } from './overview-layer.js';
 import type { WorldOverview } from './world-overview.js';
+import { MACRO_TOOLS, type MacroEffectView, type MacroToolId } from './macro-tools.js';
 
 // M28-B: 「原野」の大局レイヤー (zoom < 1 の俯瞰描画) に必要な素材。
 // main.ts が毎フレーム組み立てて draw() に渡す (有界6ステージでは undefined
@@ -42,7 +43,18 @@ import type { WorldOverview } from './world-overview.js';
 export interface WildlandOverviewInput {
   overview: WorldOverview;
   windowOrigin: Vec2;
+  // M31: 働いている大局介入 (効果範囲 + 残り日数、窓ローカル座標)。
+  // 「買った環境」が働いているのが俯瞰で見える (クリッカーの建物に相当)。
+  macroEffects?: readonly MacroEffectView[];
 }
+
+// M31: 大局介入の効果範囲の色 (半透明の円/帯 + 残り日数ラベル)。
+const MACRO_EFFECT_COLORS: Record<MacroToolId, [number, number, number]> = {
+  rain: [110, 175, 255],     // 雨の青
+  corridor: [150, 220, 110], // 栄養の緑
+  geoheat: [255, 150, 80],   // 熱の橙
+  geocool: [150, 220, 255],  // 冷気の淡青
+};
 
 // M28-B: 詳細描画 ⇄ 俯瞰のクロスフェード帯。zoom がこの値まで下がりきると
 // 完全な俯瞰 (タイル + 骨格線のみ)、1.0 に近づくほど従来の詳細描画が濃くなる。
@@ -481,6 +493,9 @@ export class CanvasRenderer {
       const skT0 = performance.now();
       this.drawOverviewSkeleton(ctx, state, scale, offX, offY, fade);
       this.lastOverviewMs += performance.now() - skT0;
+
+      // 2.4 M31: 働いている大局介入の効果範囲 (半透明の円/帯) と残り日数。
+      this.drawMacroEffects(ctx, wildland.macroEffects, scale, offX, offY, fade);
     }
 
     // 6. 昼夜のトーン (洞窟は元々暗いので変調しない)
@@ -1211,6 +1226,68 @@ export class CanvasRenderer {
     }
     this.cachedSkeletonPath = path;
     return path;
+  }
+
+  // M31: 働いている大局介入の可視化 (俯瞰のみ)。効果範囲を半透明の円/帯で
+  // 示し、中央に「名前 あとN日」を出す — 「買った環境」が働いているのが
+  // 一目で分かる (クリッカーの建物に相当する満足感、ROADMAP.md M31)。
+  private drawMacroEffects(ctx: CanvasRenderingContext2D, effects: readonly MacroEffectView[] | undefined, scale: number, offX: number, offY: number, alpha: number): void {
+    if (!effects || effects.length === 0 || alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    for (const e of effects) {
+      const [r, g, b] = MACRO_EFFECT_COLORS[e.kind];
+      const x = offX + e.center.x * scale;
+      const y = offY + e.center.y * scale;
+      let labelX = x, labelY = y;
+      if (e.kind === 'corridor' && e.dir && e.lengthWorld) {
+        // 帯: 起点から方向へ、半幅 radius の丸端ストローク1本。
+        const ex = offX + (e.center.x + e.dir.x * e.lengthWorld) * scale;
+        const ey = offY + (e.center.y + e.dir.y * e.lengthWorld) * scale;
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.18)`;
+        ctx.lineWidth = e.radius * 2 * scale;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.setLineDash([6, 6]);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.7)`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        labelX = (x + ex) / 2;
+        labelY = (y + ey) / 2;
+      } else {
+        // 円: 効果半径の淡い塗り + 破線の輪郭。
+        const pr = e.radius * scale;
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.12)`;
+        ctx.beginPath();
+        ctx.arc(x, y, pr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.setLineDash([6, 6]);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.7)`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(x, y, pr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      const label = `${MACRO_TOOLS[e.kind].label} あと${e.remainingDays}日`;
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // 読めるように細い縁取りを敷く。
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.lineWidth = 3;
+      ctx.strokeText(label, labelX, labelY);
+      ctx.fillStyle = `rgba(${Math.min(255, r + 60)}, ${Math.min(255, g + 60)}, ${Math.min(255, b + 60)}, 0.95)`;
+      ctx.fillText(label, labelX, labelY);
+    }
+    ctx.restore();
   }
 
   private drawOverviewSkeleton(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number, alpha: number): void {

@@ -254,6 +254,24 @@
                 <span class="ico ico-erase"></span>
                 <span>消す</span>
               </button>
+              <!-- M31: 大局介入 (原野の俯瞰 zoom<1 のときだけ表示。
+                   body.overview-tools の CSS でブラシと入れ替わる)。 -->
+              <button class="macro-tool active" data-macro="rain" title="雨季を呼ぶ — 広い範囲の湿度をしばらく底上げする">
+                <span class="ico ico-rain"></span>
+                <span>雨季</span>
+              </button>
+              <button class="macro-tool" data-macro="corridor" title="肥沃な帯 — ドラッグした方向に栄養の回廊を敷く">
+                <span class="ico ico-corridor"></span>
+                <span>肥沃な帯</span>
+              </button>
+              <button class="macro-tool" data-macro="geoheat" title="地熱 — 広い範囲の温度をしばらく上げる">
+                <span class="ico ico-geoheat"></span>
+                <span>地熱↑</span>
+              </button>
+              <button class="macro-tool" data-macro="geocool" title="地熱 — 広い範囲の温度をしばらく下げる">
+                <span class="ico ico-geocool"></span>
+                <span>地熱↓</span>
+              </button>
             </div>
             <div class="brush">
               <label>ブラシの大きさ <span id="brush-n">5</span></label>
@@ -379,6 +397,11 @@
         <button class="tool" data-tool="cool" title="温度を下げる"><span class="ico ico-cool"></span><span>冷却</span></button>
         <button class="tool" data-tool="toxin" title="毒素をまく"><span class="ico ico-toxin"></span><span>毒素</span></button>
         <button class="tool" data-tool="erase" title="土地をならす"><span class="ico ico-erase"></span><span>消す</span></button>
+        <!-- M31: 大局介入 (原野の俯瞰のみ。ブラシと入れ替わる)。 -->
+        <button class="macro-tool active" data-macro="rain" title="雨季を呼ぶ — 広い範囲の湿度をしばらく底上げする"><span class="ico ico-rain"></span><span>雨季</span></button>
+        <button class="macro-tool" data-macro="corridor" title="肥沃な帯 — ドラッグした方向に栄養の回廊を敷く"><span class="ico ico-corridor"></span><span>肥沃な帯</span></button>
+        <button class="macro-tool" data-macro="geoheat" title="地熱 — 広い範囲の温度をしばらく上げる"><span class="ico ico-geoheat"></span><span>地熱↑</span></button>
+        <button class="macro-tool" data-macro="geocool" title="地熱 — 広い範囲の温度をしばらく下げる"><span class="ico ico-geocool"></span><span>地熱↓</span></button>
       </div>
 
       <footer class="footnote">

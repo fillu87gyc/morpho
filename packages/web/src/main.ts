@@ -35,8 +35,10 @@ import { Notes } from './notes.js';
 import { buildReport, eraHistoryLines } from './report.js';
 import { setWorldOverview, overviewLocalBBox } from './world-overview.js';
 import type { WildlandOverviewInput } from './render.js';
-import { biomeAt, wildMutationBoost } from './biomes.js';
-import { WILDLAND_CENTER, WILDLAND_CHUNK_CELLS } from './stages.js';
+import { wildMutationBoost } from './biomes.js';
+import { WILDLAND_CENTER, WILDLAND_CHUNK_CELLS, wildlandBiomeAt } from './stages.js';
+import { WatchIncomeTracker } from './watch-income.js';
+import { MACRO_TOOLS, type MacroToolId } from './macro-tools.js';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('#canvas not found');
@@ -75,6 +77,9 @@ function checkMutationEvents(day: number): void {
 }
 const wallet = new Wallet();
 const dailies = new DailyTracker();
+// M31: 見守り収入 (原野のみ)。新チャンク到達/新バイオーム発見/見守りの
+// 日次基本給を検出する純粋トラッカー。付与は frame() が wallet.earn へ流す。
+const watchIncome = new WatchIncomeTracker();
 const identity = new Identity();
 const catalogueThumbs = new CatalogueThumbs();
 const notes = new Notes();
@@ -157,6 +162,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     trackedColonyIndex = null;
     lastEraName = '胞子期';
     lastWatchedDay = -1;
+    watchIncome.reset();
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleHeat: () => {
@@ -179,6 +185,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     trackedColonyIndex = null;
     lastEraName = '胞子期';
     lastWatchedDay = -1;
+    watchIncome.reset();
     if (dayLoopMode) enterPrepare(0);
   },
   onToggleAmbient: () => {
@@ -204,7 +211,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
         const d = Math.hypot(x - WILDLAND_CENTER.x, y - WILDLAND_CENTER.y);
         if (d > best) { best = d; bx = x; by = y; }
       }
-      const biome = biomeAt(Math.floor(bx / WILDLAND_CHUNK_CELLS), Math.floor(by / WILDLAND_CHUNK_CELLS), snap.state.seed);
+      const biome = wildlandBiomeAt(Math.floor(bx / WILDLAND_CHUNK_CELLS), Math.floor(by / WILDLAND_CHUNK_CELLS), snap.state.seed);
       mutationBoost = wildMutationBoost(best, biome);
     }
     const entry = lineage.harvest({
@@ -257,6 +264,7 @@ const ui = new Ui(game, { encyclopedia, achievements, challenges, scoreboard, li
     trackedColonyIndex = null;
     lastEraName = '胞子期';
     lastWatchedDay = -1;
+    watchIncome.reset();
     if (dayLoopMode) enterPrepare(0);
   },
 });
@@ -477,6 +485,27 @@ for (const btn of toolButtons) {
   btn.appendChild(badge);
 }
 
+// ── M31: 大局介入 (マクロツール) の選択とコストバッジ ──────────
+// ボタンは俯瞰 (原野で zoom < 1) のときだけ CSS (body.overview-tools) で
+// ブラシと入れ替えて表示される。選択状態は window 側の Tool とは独立。
+let macroTool: MacroToolId = 'rain';
+const macroButtons = [...document.querySelectorAll<HTMLButtonElement>('button.macro-tool')];
+for (const btn of macroButtons) {
+  const id = btn.dataset.macro ?? '';
+  btn.dataset.baseTitle = btn.title;
+  const cost = wallet.costOf(id);
+  if (cost) {
+    const badge = document.createElement('span');
+    badge.className = 'tool-cost';
+    badge.textContent = `${CURRENCY_ICON[cost.currency]}${cost.amount}`;
+    btn.appendChild(badge);
+  }
+  btn.addEventListener('click', () => {
+    macroTool = (btn.dataset.macro ?? 'rain') as MacroToolId;
+    for (const b of macroButtons) b.classList.toggle('active', b.dataset.macro === macroTool);
+  });
+}
+
 // M19: 通貨増減の「+n」フロート演出。M11 の簡易フラッシュに追加する形で、
 // 残高チップから差分が浮いて消える。prefers-reduced-motion では出さない。
 const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -507,6 +536,17 @@ function updateWalletUi(): void {
     const cost = wallet.costOf(tool);
     if (!cost) continue;
     const afford = wallet.canAfford(tool);
+    btn.classList.toggle('unaffordable', !afford);
+    btn.title = afford
+      ? (btn.dataset.baseTitle ?? '')
+      : `${btn.dataset.baseTitle ?? ''} (${CURRENCY_ICON[cost.currency]}${cost.amount} が足りません)`;
+  }
+  // M31: マクロツールも残高不足でグレーアウトする。
+  for (const btn of macroButtons) {
+    const id = btn.dataset.macro ?? '';
+    const cost = wallet.costOf(id);
+    if (!cost) continue;
+    const afford = wallet.canAfford(id);
     btn.classList.toggle('unaffordable', !afford);
     btn.title = afford
       ? (btn.dataset.baseTitle ?? '')
@@ -780,6 +820,27 @@ let lastApplyMs = 0;
 let hover: { x: number; y: number } | null = null;
 const APPLY_INTERVAL = 33; // ドラッグ中 ~30Hz で塗り続ける
 
+// M31: 俯瞰ツールモード (原野で zoom < 1)。frame() が毎フレーム判定して
+// body.overview-tools を切り替える。このモード中は窓内ブラシを無効化し
+// (誤爆防止)、クリック/ドラッグはマクロツールの発動として扱う。
+let overviewToolsOn = false;
+// マクロツールのドラッグ (押した点 → 離した点)。「肥沃な帯」は方向指定に
+// 使い、他のツールは押した点だけを使う。ブラシと違い連続適用しない —
+// pointerup で1回だけ発動する (数十倍の価格の誤連打防止)。
+let macroDrag: { x: number; y: number } | null = null;
+
+// マクロツールの発動。press 点を起点、release 点との差をドラッグ方向として
+// Worker へ送る (方向の正規化/フォールバックは game 側 macro-tools.ts)。
+function applyMacroAt(startPx: { x: number; y: number }, endPx: { x: number; y: number }): void {
+  if (!game.ready) return;
+  const cost = wallet.costOf(macroTool);
+  if (cost && !wallet.spend(cost.currency, cost.amount, `大局介入「${MACRO_TOOLS[macroTool].label}」`)) return;
+  const size = viewportSize();
+  const a = camera.screenToWorld(size, startPx.x, startPx.y);
+  const b = camera.screenToWorld(size, endPx.x, endPx.y);
+  game.applyMacro(macroTool, a, { x: b.x - a.x, y: b.y - a.y });
+}
+
 const activeTouches = new Map<number, { x: number; y: number }>();
 let pinch: { ids: [number, number]; tracker: PinchTracker } | null = null;
 
@@ -820,6 +881,7 @@ canvas.addEventListener('pointerdown', (e) => {
       // 2本指そろった: ピンチ/パン開始。保留中のタップ (1本指分) は破棄する。
       clearPendingTap();
       pressed = false;
+      macroDrag = null; // M31: ピンチに切り替わったらマクロ発動もキャンセル
       const ids = [...activeTouches.keys()] as [number, number];
       const a = activeTouches.get(ids[0])!;
       const b = activeTouches.get(ids[1])!;
@@ -833,6 +895,9 @@ canvas.addEventListener('pointerdown', (e) => {
       if (tapPointerId !== e.pointerId) return;
       const cur = activeTouches.get(e.pointerId);
       if (!cur) return;
+      // M31: 俯瞰ではブラシではなくマクロツールのドラッグを開始する
+      // (発動は指を離したとき — endTouch)。
+      if (overviewToolsOn) { macroDrag = cur; return; }
       pressed = true;
       game.beginStroke();
       applyAt(cur.x, cur.y);
@@ -847,6 +912,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button !== 0) return;
+  // M31: 俯瞰ではブラシを無効化し、マクロツールのドラッグを開始する。
+  if (overviewToolsOn) { macroDrag = p; return; }
   pressed = true;
   game.beginStroke();
   applyAt(p.x, p.y);
@@ -893,9 +960,19 @@ function endTouch(e: PointerEvent): void {
     // 2本目が来ないまま指が離れた = 素早いタップと確定。猶予を待たず即配置する。
     clearPendingTap();
     if (lastPos) {
-      game.beginStroke();
-      applyAt(lastPos.x, lastPos.y);
+      if (overviewToolsOn) {
+        // M31: 俯瞰の素早いタップ = ドラッグなしのマクロ発動。
+        applyMacroAt(lastPos, lastPos);
+      } else {
+        game.beginStroke();
+        applyAt(lastPos.x, lastPos.y);
+      }
     }
+  }
+  // M31: マクロツールのドラッグ終了 = 発動 (離した点が方向を決める)。
+  if (macroDrag) {
+    applyMacroAt(macroDrag, lastPos ?? macroDrag);
+    macroDrag = null;
   }
   // M10: Undo の stroke 境界。beginStroke が呼ばれていなくても
   // (2本指ピンチのみで終わった等) endStroke は no-op なので安全に呼べる。
@@ -906,6 +983,11 @@ canvas.addEventListener('pointerup', (e) => {
   canvas.releasePointerCapture(e.pointerId);
   if (e.pointerType === 'touch') { endTouch(e); hover = null; return; }
   if (e.button === 2) { panning = false; panLast = null; return; }
+  // M31: マクロツールのドラッグ終了 = 発動。
+  if (macroDrag) {
+    applyMacroAt(macroDrag, getCanvasPos(e));
+    macroDrag = null;
+  }
   game.endStroke();
   pressed = false;
 });
@@ -919,6 +1001,7 @@ canvas.addEventListener('pointercancel', (e) => {
   pressed = false;
   panning = false;
   panLast = null;
+  macroDrag = null; // M31: キャンセル扱いなので発動しない
 });
 canvas.addEventListener('pointerleave', () => { hover = null; });
 canvas.addEventListener('wheel', (e) => {
@@ -966,6 +1049,18 @@ function applyAt(x: number, y: number): void {
     wallet.earn('wakaba', 5, 'ゆるいデイリー全達成');
     dailies.markBonusGranted();
   }
+}
+
+// ── M31: キャンバス下のヒント行 ──────────────────────────
+// 原野ではオンボーディング的な1行で大局ツールへの動線を示す。
+const hintEl = document.getElementById('hint');
+const DEFAULT_HINT = 'クリックで配置 / ホイールでズーム / 右ドラッグで移動';
+const WILDLAND_HINT = 'ズームアウトすると大局の道具が使える';
+const OVERVIEW_HINT = '大局の道具: クリックで発動 / 「肥沃な帯」はドラッグで方向指定';
+function updateCanvasHint(isWildland: boolean): void {
+  if (!hintEl) return;
+  const text = overviewToolsOn ? OVERVIEW_HINT : isWildland ? WILDLAND_HINT : DEFAULT_HINT;
+  if (hintEl.textContent !== text) hintEl.textContent = text;
 }
 
 // ── レイアウト ────────────────────────────────────────
@@ -1029,7 +1124,8 @@ function frame() {
     const drawT0 = performance.now();
     const size = viewportSize();
     const zoomedScale = size * camera.zoom / game.worldSize;
-    const hoverPx = hover ? {
+    // M31: 俯瞰ツールモード中はブラシが無効なので、ブラシのホバー円も出さない。
+    const hoverPx = hover && !overviewToolsOn ? {
       x: hover.x,
       y: hover.y,
       radius: game.brushRadius * zoomedScale,
@@ -1049,7 +1145,7 @@ function frame() {
     // 同時刻の現在値を使う (overview.windowOrigin は最大1秒古い)。
     const wildlandInput: WildlandOverviewInput | undefined =
       snap.stage.id === 'wildland' && overview && snap.windowOrigin
-        ? { overview, windowOrigin: snap.windowOrigin }
+        ? { overview, windowOrigin: snap.windowOrigin, macroEffects: snap.macroEffects }
         : undefined;
     // M28-B: カメラの最小ズーム (=どこまで引けるか) とパン範囲を「訪問済み
     // 世界の bbox」に毎フレーム追従させる。有界6ステージでは null を渡す
@@ -1060,6 +1156,31 @@ function frame() {
     // M28-B: ズームスライダーの下限も動的な最小ズームへ追従させる。
     const minZoomStr = camera.minimumZoom < 1 ? camera.minimumZoom.toFixed(2) : '1';
     if (zoomSliderEl.min !== minZoomStr) zoomSliderEl.min = minZoomStr;
+    // M31: 俯瞰 (原野で zoom < 1) では窓内ブラシを無効化してマクロツールへ
+    // 切り替える (誤爆防止)。CSS (body.overview-tools) がツールバーを
+    // 入れ替え、入力ハンドラは overviewToolsOn を見て分岐する。
+    const overviewNow = snap.stage.id === 'wildland' && camera.zoom < 1 - 1e-9;
+    if (overviewNow !== overviewToolsOn) {
+      overviewToolsOn = overviewNow;
+      document.body.classList.toggle('overview-tools', overviewToolsOn);
+      // モードの切り替わりを跨いだドラッグは発動させない (誤爆防止)。
+      macroDrag = null;
+      pressed = false;
+    }
+    updateCanvasHint(snap.stage.id === 'wildland');
+    // M31: 見守り収入 (原野のみ)。新チャンク到達 (+🪙)・新バイオーム発見
+    // (+🍃)・見守りモードの日次基本給 (+🪙)。時代到達の 🍄 は下の既存経路。
+    // 二重付与の防ぎ方は watch-income.ts 冒頭コメント。
+    for (const ev of watchIncome.update({
+      stageId: snap.stage.id,
+      day: snap.day,
+      watchMode: !dayLoopMode,
+      exploredChunks: snap.world.exploredChunks,
+      chunkCoords: overview ? overview.chunks : null,
+      worldSeed: snap.state.seed,
+    })) {
+      wallet.earn(ev.currency, ev.amount, ev.reason);
+    }
     // M14: 時代が切り替わった節目に 🍄 を1度だけ贈る (進化の記録には
     // game.ts 側の eraLog で既に残っている、ここは通貨報酬だけを付与)。
     if (snap.era.name !== lastEraName) {

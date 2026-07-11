@@ -282,3 +282,91 @@ test('M30: 原野のバイオームが生成され、俯瞰タイルに複数の
   expect(distinctColors).toBeGreaterThanOrEqual(3);
   expect(errors).toEqual([]);
 });
+
+// ── M31: 介入カーブ — 極小スタート / 見守り収入 / 大局介入 ─────────
+
+test('M31: 原野の新規開始は極小 (リンク数が閾値以下で始まる)', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+    // ほぼ tick が進まない日長 (製品既定値) にして「開始直後」を観測する。
+    localStorage.setItem('morpho.dayMs.v1', '144000');
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+  await page.click('#speed-btn-pause');
+
+  // M31 前は開始 1 日で約 90 リンク (胞子6本枝 + 母体の森 約18パッチ)。
+  // 極小スタートは source 1 + 枝 2 本 = リンク 2 から始まる (数 tick の
+  // 成長猶予を見ても 12 を超えない)。
+  const links = Number(((await page.locator('#w-links').textContent()) ?? '99').trim());
+  expect(links).toBeLessThanOrEqual(12);
+  await expect(page.locator('#w-ct')).toHaveText('1');
+  expect(errors).toEqual([]);
+});
+
+test('M31: 見守りモードで放置すると通貨 (🪙) が増える', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+    // fixtures の既定 (500ms/日) のまま = 数十秒で数十日ぶんの見守りになる。
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+  await page.click('#speed-btn-24');
+
+  const sizuku = async (): Promise<number> =>
+    Number((((await page.locator('#cur-sizuku').textContent()) ?? '0').trim()).replace(/,/g, ''));
+  const before = await sizuku();
+  // 日次の基本給 (+6/日) と新チャンク到達 (+2/枚) が積もる。M31 前は
+  // 見守りでは何日回しても残高が 1 も増えなかった (ROADMAP.md V8)。
+  await expect.poll(sizuku, { timeout: 90_000 }).toBeGreaterThan(before);
+  expect(errors).toEqual([]);
+});
+
+test('M31: 俯瞰でマクロツールへ切り替わり、購入・適用で残高が減って効果が見える', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+
+  // 俯瞰素材が届いてから止め、最小ズームへ (M28 のテストと同じ作法)。
+  const slider = page.locator('#zoom-slider');
+  await expect.poll(async () => Number(await slider.getAttribute('min')), { timeout: 15_000 }).toBeLessThan(1);
+  await page.click('#speed-btn-pause');
+  await zoomOutToMin(page);
+
+  // ツールバーが入れ替わる: 窓内ブラシは隠れ、マクロツールが現れる (誤爆防止)。
+  const rainBtn = page.locator('.palette button.macro-tool[data-macro="rain"]');
+  await expect(rainBtn).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('.palette button.tool[data-tool="food"]')).toBeHidden();
+
+  const sizuku = async (): Promise<number> =>
+    Number((((await page.locator('#cur-sizuku').textContent()) ?? '0').trim()).replace(/,/g, ''));
+  const before = await sizuku();
+  const checksumBefore = await canvasChecksum(page);
+
+  await rainBtn.click();
+  const canvas = page.locator('#canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('canvas bounding box not found');
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  // 「雨季を呼ぶ」は 🪙20 (SIZUKU_FLOOR と同額 = 詰み防止の常時購入可能枠)。
+  await expect.poll(sizuku, { timeout: 10_000 }).toBe(before - 20);
+  // 効果範囲の円 + 残り日数ラベルが大局レイヤーに描かれ、絵が変わる。
+  await expect.poll(async () => canvasChecksum(page), { timeout: 10_000 }).not.toBe(checksumBefore);
+  expect(errors).toEqual([]);
+});

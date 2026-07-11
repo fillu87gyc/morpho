@@ -36,6 +36,14 @@ export const TOOL_COSTS: Partial<Record<string, ToolCost>> = {
   heat: { currency: 'wakaba', amount: 2 },
   cool: { currency: 'wakaba', amount: 2 },
   toxin: { currency: 'wakaba', amount: 3 },
+  // M31: 大局介入 (マクロツール、原野の俯瞰専用)。窓内ブラシの数十倍の
+  // 価格帯 — 後半の主要な意思決定にする。最安の「雨季」は 🪙 の詰み防止
+  // 下限 (SIZUKU_FLOOR=20) と同額: 残高が尽きても自動回復だけで必ずまた
+  // 1つ買える (「やらなくても大丈夫」の詰み防止方針との整合)。
+  rain: { currency: 'sizuku', amount: 20 },
+  corridor: { currency: 'sizuku', amount: 60 },
+  geoheat: { currency: 'wakaba', amount: 30 },
+  geocool: { currency: 'wakaba', amount: 30 },
 };
 
 const START_BALANCES: WalletBalances = { sizuku: 120, wakaba: 20, horoishi: 0 };
@@ -106,6 +114,18 @@ export class Wallet {
     if (this.balances[cost.currency] < cost.amount) return false;
     this.balances[cost.currency] -= cost.amount;
     this.record(cost.currency, -cost.amount, `${tool} を使用`);
+    this.save();
+    return true;
+  }
+
+  // M31: コスト表以外の理由文字列で消費する入口 (マクロツールが
+  // 「大局介入「雨季を呼ぶ」」のような日本語の理由を残すために使う)。
+  // 足りなければ何もせず false。
+  spend(currency: CurrencyKind, amount: number, reason: string): boolean {
+    if (amount <= 0) return true;
+    if (this.balances[currency] < amount) return false;
+    this.balances[currency] -= amount;
+    this.record(currency, -amount, reason);
     this.save();
     return true;
   }

@@ -607,7 +607,7 @@ body { overflow: hidden; }
 }
 
 .palette { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
-.tool {
+.tool, .macro-tool {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   padding: 8px 0;
   background: rgba(255,255,255,0.03);
@@ -618,17 +618,25 @@ body { overflow: hidden; }
   font-size: 10px;
   transition: background 120ms, border-color 120ms, transform 60ms;
 }
-.tool:hover { background: rgba(255,255,255,0.06); }
-.tool.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.tool:active { transform: scale(0.96); }
+.tool:hover, .macro-tool:hover { background: rgba(255,255,255,0.06); }
+.tool.active, .macro-tool.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.tool:active, .macro-tool:active { transform: scale(0.96); }
 /* M11: 残高不足のツールはグレーアウトする (無効化はしない — クリックすれば
    理由がタイトルツールチップで分かるようにするため、button.disabled にはしない)。 */
-.tool.unaffordable { opacity: 0.45; }
+.tool.unaffordable, .macro-tool.unaffordable { opacity: 0.45; }
 .tool-cost {
   position: absolute; top: 2px; right: 4px;
   font-size: 9px; color: var(--text-dim); font-variant-numeric: tabular-nums;
 }
-.tool { position: relative; }
+.tool, .macro-tool { position: relative; }
+
+/* M31: 大局介入 (マクロツール)。俯瞰 (原野で zoom < 1、main.ts が
+   body.overview-tools を付ける) のときだけ、窓内ブラシと入れ替えて表示する
+   (誤爆防止: 俯瞰ではブラシは使えず、窓ではマクロは使えない)。 */
+button.macro-tool { display: none; }
+body.overview-tools .palette button.tool,
+body.overview-tools #mobile-toolbar button.tool { display: none; }
+body.overview-tools button.macro-tool { display: flex; }
 .ico { width: 18px; height: 18px; border-radius: 50%; }
 .ico-food { background: radial-gradient(circle, #b8e88a, #4f9c4f); }
 .ico-light { background: radial-gradient(circle, #fff3b8, #d6b955); box-shadow: 0 0 6px rgba(255, 220, 120, 0.6); }
@@ -640,6 +648,11 @@ body { overflow: hidden; }
 .ico-heat { background: radial-gradient(circle, #ffcf8a, #d9622f); }
 .ico-cool { background: radial-gradient(circle, #cdeeff, #4fa7d9); }
 .ico-toxin { background: radial-gradient(circle, #d9b3f0, #8a5cb0); }
+/* M31: 大局介入 (マクロツール) */
+.ico-rain { background: radial-gradient(circle, #bfe3ff, #3a7fd0); box-shadow: 0 0 6px rgba(120, 180, 255, 0.5); }
+.ico-corridor { background: linear-gradient(90deg, #b8e88a, #4f9c4f); border-radius: 4px; }
+.ico-geoheat { background: radial-gradient(circle, #ffc07a, #c2481f); box-shadow: 0 0 6px rgba(255, 150, 80, 0.5); }
+.ico-geocool { background: radial-gradient(circle, #cfefff, #4a86c8); }
 
 .undo-btn {
   width: 100%; margin-top: 4px;
@@ -771,8 +784,8 @@ body { overflow: hidden; }
     backdrop-filter: blur(8px);
     overflow-x: auto;
   }
-  #mobile-toolbar .tool { flex: 1 0 44px; padding: 6px 0; }
-  #mobile-toolbar .tool span:last-child { font-size: 9px; }
+  #mobile-toolbar .tool, #mobile-toolbar .macro-tool { flex: 1 0 44px; padding: 6px 0; }
+  #mobile-toolbar .tool span:last-child, #mobile-toolbar .macro-tool span:last-child { font-size: 9px; }
 
   #day-loop-bar:not([hidden]) {
     position: fixed;

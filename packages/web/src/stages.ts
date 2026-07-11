@@ -313,11 +313,20 @@ export const WILDLAND_WORLD_SIZE = 1_000_000;
 export const WILDLAND_CENTER: Vec2 = { x: WILDLAND_WORLD_SIZE / 2, y: WILDLAND_WORLD_SIZE / 2 };
 
 // 開始点を含むチャンク番地。開始地点の周囲 (Chebyshev 1チャンク以内) は
-// ノイズの結果に依らず「母体の森」として豊かに固定する — 初手が荒地や
-// 毒地帯で即詰みになる seed を作らないための救済 (M31 の「極小スタート」
-// はこの上に別途設計する)。
+// ノイズの結果に依らず「母体の森」バイオームに固定する — 初手が荒地や
+// 毒地帯で即詰みになる seed を作らないための救済。
+// M31 (極小スタート): バイオームは森のまま、地形 (餌の湧き) だけを痩せさせる
+// (下の wildlandChunkTerrain 参照)。
 const WILDLAND_HOME_CX = Math.floor(WILDLAND_CENTER.x / WILDLAND_CHUNK_CELLS);
 const WILDLAND_HOME_CY = Math.floor(WILDLAND_CENTER.y / WILDLAND_CHUNK_CELLS);
+
+// 原野のバイオーム (母体の森の固定込み)。地形生成 (wildlandChunkTerrain) と
+// 収入 (watch-income.ts の新バイオーム発見)・採種 boost (main.ts) が同じ
+// 判定を共有できるよう、ここに一元化する。
+export function wildlandBiomeAt(cx: number, cy: number, worldSeed: number): BiomeId {
+  const home = Math.max(Math.abs(cx - WILDLAND_HOME_CX), Math.abs(cy - WILDLAND_HOME_CY)) <= 1;
+  return home ? 'forest' : biomeAt(cx, cy, worldSeed);
+}
 
 // M30: 原野のチャンク地形をバイオームで生成する。純粋なノイズ分類は
 // biomes.ts (vitest 対象)、ここは「バイオーム → どんなパッチを湧かすか」。
@@ -327,8 +336,45 @@ const WILDLAND_HOME_CY = Math.floor(WILDLAND_CENTER.y / WILDLAND_CHUNK_CELLS);
 export function wildlandChunkTerrain(coord: { cx: number; cy: number }, rng: SeededRNG, worldSeed: number): ChunkTerrainResult {
   const cells = WILDLAND_CHUNK_CELLS;
   const p = () => rng.range(4, cells - 4); // チャンク内のランダム点 (縁は避ける)
-  const home = Math.max(Math.abs(coord.cx - WILDLAND_HOME_CX), Math.abs(coord.cy - WILDLAND_HOME_CY)) <= 1;
-  const biome: BiomeId = home ? 'forest' : biomeAt(coord.cx, coord.cy, worldSeed);
+
+  // ── M31: 極小スタート ──────────────────────────────────
+  // 原野の開始は「胞子1個 + 最初の餌パッチ1つ」。M30 までは母体の森 3×3 が
+  // フルの森地形 (餌2パッチ×9チャンク = 約18パッチ) で、開始1日で網が勝手に
+  // 爆発し (Day 1 で89リンク)、手動介入の出番がなかった (ROADMAP.md V7)。
+  //   - 開始チャンク: 胞子のすぐそば (距離約10) に小さな餌パッチを1つだけ。
+  //   - 母体の森の残り8チャンク: 40% の確率で小さなパッチ1つ (期待値 約3.2)。
+  //     無介入だと Day 0〜3 の成長は鈍く、餌/水を置けば明確に応える。
+  //     完全にゼロにはしない — 見守り放置でも数日かけて自走を始められる
+  //     飛び石を残す (荒地の飛び石 30% と同じ詰み防止の考え方)。
+  // バイオーム分類そのものは森のまま (wildlandBiomeAt)。
+  const homeDist = Math.max(Math.abs(coord.cx - WILDLAND_HOME_CX), Math.abs(coord.cy - WILDLAND_HOME_CY));
+  if (homeDist === 0) {
+    // 胞子のチャンク内ローカル座標 (WILDLAND_CENTER は chunk 境界に揃って
+    // いないため、原点差で求める)。
+    const sx = WILDLAND_CENTER.x - WILDLAND_HOME_CX * cells;
+    const sy = WILDLAND_CENTER.y - WILDLAND_HOME_CY * cells;
+    // 「最初の餌」: 胞子から距離 9〜12 のランダム方位。極小の初期ネットワーク
+    // (枝2本) が Day 0 のうちに自力で届く距離。amount は foodReachThreshold
+    // (0.55) を明確に超える「根を張れる餌」(sink 化してひと口目の食事になる)。
+    const a = rng.range(0, Math.PI * 2);
+    const d = rng.range(9, 12);
+    const fx = Math.min(cells - 4, Math.max(4, sx + Math.cos(a) * d));
+    const fy = Math.min(cells - 4, Math.max(4, sy + Math.sin(a) * d));
+    return {
+      foodPatches: [{ x: fx, y: fy, radius: rng.range(2.5, 3.5), amount: rng.range(0.9, 1.2) }],
+      moisturePatches: [{ x: sx, y: sy, radius: rng.range(10, 14), amount: rng.range(0.08, 0.14) }],
+    };
+  }
+  if (homeDist === 1) {
+    return {
+      foodPatches: rng.next() < 0.40
+        ? [{ x: p(), y: p(), radius: rng.range(3, 4.5), amount: rng.range(0.7, 1.0) }]
+        : [],
+      moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 16), amount: rng.range(0.08, 0.14) }],
+    };
+  }
+
+  const biome: BiomeId = wildlandBiomeAt(coord.cx, coord.cy, worldSeed);
   switch (biome) {
     case 'forest': {
       // 豊かな森: 餌パッチ多め (2つ) + 湿潤。M25→M29 の一様地形 (全チャンク

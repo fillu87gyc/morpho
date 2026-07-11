@@ -6,6 +6,7 @@
 
 import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type StageId } from './game.js';
 import type { ToWorkerMessage, FromWorkerMessage, PerfInfo } from './worker-protocol.js';
+import type { MacroToolId } from './macro-tools.js';
 import type { Genome, SimState, Vec2 } from '@morpho/sim';
 import { unpackNodes, unpackEdges } from './snapshot-codec.js';
 import type { WorldEvent } from './world-events.js';
@@ -93,6 +94,9 @@ export class GameProxy {
   // 浮いた予算をtickに全振りするよう Worker に伝える。
   setFastForward(v: boolean): void { this.fastForward = v; this.send({ type: 'setFastForward', enabled: v }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
+  // M31: 大局介入 (マクロツール、原野の俯瞰専用)。dir は「肥沃な帯」の
+  // ドラッグベクトル (省略可 — Game 側が母体から離れる向きへフォールバック)。
+  applyMacro(tool: MacroToolId, pos: Vec2, dir?: Vec2): void { this.send({ type: 'applyMacro', tool, pos, dir }); }
   reset(seed?: number, stageId?: StageId, parentGenome?: Genome, parentMutationBoost?: number): void {
     this.send({ type: 'reset', seed, stageId, parentGenome, parentMutationBoost });
     this.dayCompletedFlag = false;

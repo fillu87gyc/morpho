@@ -97,6 +97,7 @@ ctx.onmessage = (e) => {
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;
     case 'apply': game.apply(msg.pos); dirty = true; forceDerived = true; break;
+    case 'applyMacro': game.applyMacro(msg.tool, msg.pos, msg.dir); dirty = true; forceDerived = true; break;
     case 'setFastForward': {
       fastForward = msg.enabled;
       loopIntervalMs = fastForward ? FAST_FORWARD_INTERVAL_MS : TICK_INTERVAL_MS;
