@@ -59,6 +59,9 @@ describe('ChunkedGridEnvironment.summarizeChunks (M28)', () => {
 
   it('M30: 毒素の平均 (toxinAvg) が対応するチャンクに反映される', () => {
     const env = makeEnv();
+    // 要約の座標集合は obstacle 側基準 (summarizeChunks のコメント参照) なので、
+    // 両チャンクとも石で実体化させた上で片方にだけ毒を撒く。
+    env.placeStone({ x: 16, y: 16 }, 2);
     env.placeToxin({ x: 16, y: 16 }, 4, 0.8);
     env.placeStone({ x: CHUNK * 2 + 16, y: 16 }, 2); // 毒のない対照チャンク
     const byKey = new Map(env.summarizeChunks().map((s) => [`${s.cx}:${s.cy}`, s]));

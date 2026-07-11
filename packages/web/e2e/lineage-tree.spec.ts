@@ -59,6 +59,12 @@ test('1つの親から2匹の子を育てると系統樹が枝分かれして表
   await genOneNode.locator('.lineage-start-btn').click();
   await expect(page.locator('#lineage-gen')).toHaveText('現在 2代目');
 
+  // reset 後の新しいスナップショット (#day が 0 に戻る) を確認してから
+  // day>=5 を待つ。直後に day>=5 を見ると、リセット前の古い表示 (>=5) を
+  // 拾って早すぎる採種クリックが HARVEST_MIN_DAY で空振りする race がある
+  // (このテストが全体実行時にだけ時折落ちていた原因)。
+  await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 10_000 })
+    .toBeLessThan(5);
   await expect.poll(async () => Number((await page.locator('#day').textContent())?.trim()), { timeout: 20_000 })
     .toBeGreaterThanOrEqual(5);
   await page.click('#harvest-seed');

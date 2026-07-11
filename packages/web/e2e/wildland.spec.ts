@@ -28,12 +28,7 @@ async function waitForReady(page: Page): Promise<void> {
   await expect.poll(async () => canvasChecksum(page), { timeout: 15_000 }).not.toBe(0);
 }
 
-async function networkLinks(page: Page): Promise<number> {
-  const text = (await page.locator('#w-links').textContent()) ?? '0';
-  return Number(text.trim());
-}
-
-test('原野ステージへ切り替えると前線が停滞せず伸び続ける (エッジ数が単調に近く増加)', async ({ page }) => {
+test('原野ステージへ切り替えると前線が停滞せず伸び続ける (探索チャンク数が増加)', async ({ page }) => {
   const errors = collectConsoleErrors(page);
   await page.addInitScript(() => {
     localStorage.setItem('morpho.onboarded.v1', '1');
@@ -53,20 +48,21 @@ test('原野ステージへ切り替えると前線が停滞せず伸び続け�
   // ×24 まで速度を上げ、前線が実際に伸び続けることを実測する。
   await page.click('#speed-btn-24');
 
-  const netAt = async (): Promise<number> => {
-    await page.waitForTimeout(3000);
-    return networkLinks(page);
-  };
-  const n1 = await netAt();
-  const n2 = await netAt();
-  const n3 = await netAt();
-
   // M25 の核心 (forager reclaim): 有界ステージが Day24 相当で完全停滞する
-  // のに対し、原野は観察を続ける限りネットワークが伸び続ける。3回のサンプル
-  // で単調非減少かつ、最初と最後で明確な増加があることを確認する。
-  expect(n2).toBeGreaterThanOrEqual(n1);
-  expect(n3).toBeGreaterThanOrEqual(n2);
-  expect(n3).toBeGreaterThan(n1);
+  // のに対し、原野は観察を続ける限り新しい土地を踏み続ける。指標は
+  // 「探索チャンク数」(#w-chunks、touched の累計 = 定義上単調非減少) —
+  // M25 当初はエッジ数の単調増加を見ていたが、M30 の距離コスト勾配で
+  // 「伸びすぎた遠征枝が枯れて戻る」(エッジ数の一時減少) が仕様になった
+  // ため、前線の前進そのものを数える指標へ切り替えた。開始直後は初期窓の
+  // 焼き込みぶん (3×3 チャンク) で止まって見えるので、固定間隔サンプリング
+  // ではなく「増えるまで待つ」を2回続けて前進を確認する。
+  test.setTimeout(150_000);
+  const chunksNow = async (): Promise<number> =>
+    Number(((await page.locator('#w-chunks').textContent()) ?? '0').trim());
+  const c1 = await chunksNow();
+  await expect.poll(chunksNow, { timeout: 60_000 }).toBeGreaterThan(c1);
+  const c2 = await chunksNow();
+  await expect.poll(chunksNow, { timeout: 60_000 }).toBeGreaterThan(c2);
 
   expect(errors).toEqual([]);
 });
@@ -236,5 +232,53 @@ test('M29: ×24 で60秒回しても日の進みが極端に鈍化しない (前
   // しきい値は実測 (~0.9-1.0) に対して 0.5 と保守的に取る (フレーク耐性)。
   expect(firstHalf).toBeGreaterThanOrEqual(3);
   expect(secondHalf / firstHalf).toBeGreaterThan(0.5);
+  expect(errors).toEqual([]);
+});
+
+// ── M30: バイオーム — 俯瞰で色の違いが見える ─────────────────
+
+test('M30: 原野のバイオームが生成され、俯瞰タイルに複数の色が見える', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('morpho.onboarded.v1', '1');
+    localStorage.setItem('morpho.dayMs.v1', '3840');
+    localStorage.setItem('morpho.dayLoopMode.v1', '0');
+  });
+  await page.goto('/');
+  await waitForReady(page);
+  await page.selectOption('#stage-select', 'wildland');
+  await expect(page.locator('#stage-name')).toHaveText('原野');
+
+  // ×24 でしばらく成長させ、母体の森 (3×3 チャンク) の外まで踏み出させる —
+  // バイオームはチャンクを踏んだときに初めて俯瞰へ現れる (遅延生成)。
+  await page.click('#speed-btn-24');
+  await page.waitForTimeout(8000);
+  await page.click('#speed-btn-pause');
+
+  await zoomOutToMin(page);
+  await page.waitForTimeout(400);
+
+  // 画面全体を間引きサンプリングし、未訪問の暗黒とバイオマスの金色の光を
+  // 除いた「タイルの地色」を 32 階調に量子化して数える。バイオーム
+  // (豊かな森 = 明るい苔 / 荒地 = 暗い苔 / 岩場 = 無彩色 / 毒 = 紫 /
+  // 水辺 = 青) が生成されていれば、複数の色クラスタが必ず現れる。
+  // biomeAt はチャンク座標 + worldSeed の純粋関数 (決定論は vitest 側
+  // biomes.test.ts で担保) なので、ここでは「絵として見えている」ことを守る。
+  const distinctColors = await page.evaluate(() => {
+    const canvas = document.getElementById('canvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const buckets = new Map<string, number>();
+    for (let i = 0; i < data.length; i += 32) {
+      const r = data[i] ?? 0, g = data[i + 1] ?? 0, b = data[i + 2] ?? 0;
+      if (r + g + b < 90) continue; // 未訪問の暗黒 (OVERVIEW_VOID_COLOR)
+      if (r > 200 && g > 170) continue; // バイオマスの金色の光は地色ではない
+      const key = `${r >> 5}:${g >> 5}:${b >> 5}`;
+      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    }
+    // ノイズ (アンチエイリアスの縁) を除くため、十分な画素数のある色だけ数える。
+    return [...buckets.values()].filter((n) => n >= 8).length;
+  });
+  expect(distinctColors).toBeGreaterThanOrEqual(3);
   expect(errors).toEqual([]);
 });
