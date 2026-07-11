@@ -28,7 +28,12 @@ function tickUntilDormant(g: Game, maxTicks = 1500): void {
 describe('原野の休眠配線 (M29-B)', () => {
   it('原野では休眠セルと evict 済みチャンクが実際に生まれる', () => {
     const g = new Game(1234, 'wildland');
-    g.tick(1200); // Day 5 相当
+    // M31: 極小スタート (発芽ラッチ) で序盤の成長が控えめになったぶん、
+    // 休眠/evict が育つまでの猶予を Day 5→7.5 相当へ延ばす (実測: seed 1234
+    // で tick 1800 は dormantCells 19 / evictedChunks 4 と十分に余裕がある —
+    // tick 1200 は evictedChunks は非ゼロだが dormantCells が一時的に 0 へ
+    // 落ち込む瞬間に当たりフレークしていた)。
+    g.tick(1800);
     const c = g.dormancyCounters();
     expect(c.dormantCells).toBeGreaterThan(0);
     expect(c.evictedChunks).toBeGreaterThan(0);

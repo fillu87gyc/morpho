@@ -1,0 +1,7 @@
+{"t":0,"sizuku":120,"wakaba":20,"day":"0"}
+{"t":30,"sizuku":284,"wakaba":64,"day":"24"}
+{"t":60,"sizuku":440,"wakaba":74,"day":"49"}
+{"t":90,"sizuku":574,"wakaba":74,"day":"71"}
+{"t":120,"sizuku":730,"wakaba":74,"day":"97"}
+{"t":150,"sizuku":888,"wakaba":74,"day":"123"}
+{"t":180,"sizuku":1062,"wakaba":74,"day":"152"}

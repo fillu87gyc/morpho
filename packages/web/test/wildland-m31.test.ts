@@ -111,13 +111,17 @@ describe('M31: 大局介入 (マクロツール)', () => {
   }, 30_000);
 
   it('有界ステージでは applyMacro は no-op で、ビューも undefined', () => {
-    const g = new Game(7, 'petri');
-    const before = fieldAt(g, g.env.moisture, { x: 50, y: 50 });
-    g.applyMacro('rain', { x: 50, y: 50 });
-    g.tick(1);
-    // 湿度は自然減衰以外で変わらない (placeWater されていない)
-    expect(fieldAt(g, g.env.moisture, { x: 50, y: 50 })).toBeLessThanOrEqual(before + 1e-6);
-    expect(g.snapshotFast().macroEffects).toBeUndefined();
+    // 湿度は baseMoisture へ向かう自然減衰 (env.decay) が毎tick働くため、
+    // 「変化しない」ではなく「applyMacro を呼んでも呼ばないときと bit 一致」
+    // で no-op を確認する (同一 seed の対照)。
+    const withMacro = new Game(7, 'petri');
+    withMacro.applyMacro('rain', { x: 50, y: 50 });
+    withMacro.tick(1);
+    const without = new Game(7, 'petri');
+    without.tick(1);
+    expect(fieldAt(withMacro, withMacro.env.moisture, { x: 50, y: 50 }))
+      .toBe(fieldAt(without, without.env.moisture, { x: 50, y: 50 }));
+    expect(withMacro.snapshotFast().macroEffects).toBeUndefined();
   });
 
   it('決定論: 同じ seed + 同じマクロ適用は bit 一致', () => {
