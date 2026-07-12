@@ -11,6 +11,9 @@ export function createInitialState(seed: number, worldSize = 100): SimState {
 export function seedSource(state: SimState, pos: Vec2, initialBranches = 6): void {
   const source: SimNode = { id: state.nextNodeId++, pos, type: 'source', bornAt: state.tick };
   state.nodes.push(source);
+  // M30-B: 「スタート地点」を確定記録する (distanceMode='origin' の距離基準)。
+  // 参照共有で後から動かないよう座標はコピーする。
+  (state.origins ??= []).push({ x: pos.x, y: pos.y });
   const r = 2.0;
   for (let i = 0; i < initialBranches; i++) {
     const angle = (i / initialBranches) * Math.PI * 2;

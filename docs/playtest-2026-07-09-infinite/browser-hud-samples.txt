@@ -1,0 +1,33 @@
+=== Phase A: petri early game ===
+A0 {"day":"0","area":"4,464","mass":"6.74","links":"318","colonies":"6/6","era":"胞子期","eta":"次の時代まで 条件: Day 8 まで経過","sizuku":"120","wakaba":"36","horoishi":"3"}
+tools: ["food","light","water","drain","stone","heat","cool","toxin","erase","food","light","water","drain","stone","heat","cool","toxin","erase"]
+placed food. wallet: {"day":"1","area":"5,921","mass":"9.57","links":"368","colonies":"6/6","era":"胞子期","eta":"次の時代まで 条件: Day 8 まで経過","sizuku":"117","wakaba":"36","horoishi":"4"}
+A1 (after 15s x24) {"day":"20","area":"6,668","mass":"11.50","links":"350","colonies":"7/7","era":"変形体期","eta":"次の時代まで 条件: ネットワークをひとつに","sizuku":"117","wakaba":"36","horoishi":"8"}
+=== Phase B: wildland long run ===
+B {"sec":0,"day":"1","area":"1,552","mass":"2.27","links":"89","colonies":"1/1","era":"胞子期","eta":"次の時代まで 条件: Day 8 まで経過","sizuku":"117","wakaba":"44","horoishi":"10"}
+B {"sec":15,"day":"8","area":"7,732","mass":"8.57","links":"740","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":30,"day":"9","area":"8,658","mass":"11.69","links":"1,836","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 01:20","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":45,"day":"9","area":"8,740","mass":"11.51","links":"1,764","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 17:47","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":60,"day":"9","area":"8,691","mass":"11.83","links":"2,154","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":75,"day":"10","area":"8,707","mass":"12.14","links":"2,301","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 06:52","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":90,"day":"10","area":"8,877","mass":"12.99","links":"2,767","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":105,"day":"11","area":"8,963","mass":"13.00","links":"2,747","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 01:40","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":120,"day":"11","area":"8,904","mass":"13.13","links":"3,291","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 22:03","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":136,"day":"11","area":"8,789","mass":"13.58","links":"3,129","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":151,"day":"12","area":"9,064","mass":"14.31","links":"3,442","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 01:30","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":166,"day":"12","area":"9,199","mass":"14.85","links":"3,952","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 12:52","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":181,"day":"12","area":"9,271","mass":"14.87","links":"4,244","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":196,"day":"13","area":"9,159","mass":"14.53","links":"3,777","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 00:50","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":211,"day":"13","area":"8,802","mass":"13.51","links":"3,903","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 11:07","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":226,"day":"13","area":"8,636","mass":"13.00","links":"4,157","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":241,"day":"13","area":"8,342","mass":"12.95","links":"4,494","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":256,"day":"14","area":"8,178","mass":"12.93","links":"4,205","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 04:02","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":271,"day":"14","area":"8,240","mass":"12.55","links":"4,558","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":286,"day":"14","area":"8,276","mass":"13.09","links":"4,618","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":301,"day":"15","area":"8,387","mass":"12.79","links":"5,104","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 00:56","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":316,"day":"15","area":"8,432","mass":"12.70","links":"5,531","colonies":"1/1","era":"拡散期","eta":"次の時代まで あと 12:25","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":331,"day":"15","area":"8,495","mass":"12.42","links":"5,904","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":346,"day":"15","area":"8,231","mass":"11.91","links":"6,324","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B {"sec":361,"day":"16","area":"8,125","mass":"11.29","links":"6,908","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"117","wakaba":"44","horoishi":"11"}
+B tool placed late. wallet: {"day":"16","area":"8,077","mass":"11.22","links":"6,908","colonies":"1/1","era":"拡散期","eta":"次の時代まで 条件: もう1拠点に到達","sizuku":"114","wakaba":"44","horoishi":"11"}
+console errors: []

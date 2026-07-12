@@ -68,6 +68,17 @@
         <span id="day-loop-remaining" class="day-loop-remaining" hidden>残り <span id="day-loop-remaining-n">--:--</span></span>
       </div>
 
+      <!-- M32: 皿 (チュートリアル) が成熟期に到達したら、本編「原野」への
+           推奨動線を一度だけ案内するコーチマーク。モーダルでブロックせず、
+           閉じるまで軽く出続ける (onboarding.ts の shouldSuggestWildland)。 -->
+      <div id="wildland-coachmark" class="wildland-coachmark" hidden>
+        <p>皿の成熟期に到達した。次は本編「原野」で、果てのない世界を育ててみよう。</p>
+        <div class="wildland-coachmark-actions">
+          <button id="wildland-coachmark-go" class="harvest-btn">原野へ ▶</button>
+          <button id="wildland-coachmark-dismiss" title="この案内を閉じる">閉じる</button>
+        </div>
+      </div>
+
       <main class="stage">
         <aside class="panel left">
           <!-- M19: ドロワーのスライドイン。オーバーレイ本体 (.panel) は
@@ -77,17 +88,28 @@
           <div class="drawer-content">
           <section class="card">
             <h2>メインクエスト</h2>
-            <div class="quest-item">
+            <!-- M32: 「拠点をすべてつなぐ/大陸の85%を探索する」は原野では
+                 意味を持たない (開始直後100%/0%固定) ため、原野では隠して
+                 wild-reach/wild-biomes に切り替える (ui.ts が hidden を切替)。 -->
+            <div class="quest-item" id="q-connect-item">
               <div class="quest-head"><span class="quest-title">拠点をすべてつなぐ</span><span class="num" id="q-connect-n">0%</span></div>
               <div class="progress"><div id="q-connect-bar" class="bar"></div></div>
             </div>
-            <div class="quest-item">
+            <div class="quest-item" id="q-explore-item">
               <div class="quest-head"><span class="quest-title">大陸の85%を探索する</span><span class="num" id="q-explore-n">0%</span></div>
               <div class="progress"><div id="q-explore-bar" class="bar"></div></div>
             </div>
             <div class="quest-item" id="q-continent-item" hidden>
               <div class="quest-head"><span class="quest-title">大陸全体に栄養を届けよう</span><span class="num" id="q-continent-n">0%</span></div>
               <div class="progress"><div id="q-continent-bar" class="bar"></div></div>
+            </div>
+            <div class="quest-item" id="q-wild-reach-item" hidden>
+              <div class="quest-head"><span class="quest-title">母体から500先へ到達しよう</span><span class="num" id="q-wild-reach-n">0%</span></div>
+              <div class="progress"><div id="q-wild-reach-bar" class="bar"></div></div>
+            </div>
+            <div class="quest-item" id="q-wild-biomes-item" hidden>
+              <div class="quest-head"><span class="quest-title">3つのバイオームに根を張ろう</span><span class="num" id="q-wild-biomes-n">0%</span></div>
+              <div class="progress"><div id="q-wild-biomes-bar" class="bar"></div></div>
             </div>
           </section>
 
@@ -109,6 +131,9 @@
               <dt>粘菌の総量</dt><dd><span id="w-mass">0.00</span> kg</dd>
               <dt>接続ネットワーク</dt><dd id="w-links">0</dd>
               <dt>拠点</dt><dd><span id="w-cr">0</span>/<span id="w-ct">0</span></dd>
+              <!-- M28: 原野 (半無限ワールド) のみ表示する行。ui.ts が hidden を切り替える -->
+              <dt id="w-reach-dt" hidden>到達距離</dt><dd id="w-reach-dd" hidden><span id="w-reach">0</span> m</dd>
+              <dt id="w-chunks-dt" hidden>探索チャンク</dt><dd id="w-chunks-dd" hidden><span id="w-chunks">0</span></dd>
             </dl>
           </section>
 
@@ -251,6 +276,24 @@
                 <span class="ico ico-erase"></span>
                 <span>消す</span>
               </button>
+              <!-- M31: 大局介入 (原野の俯瞰 zoom<1 のときだけ表示。
+                   body.overview-tools の CSS でブラシと入れ替わる)。 -->
+              <button class="macro-tool active" data-macro="rain" title="雨季を呼ぶ — 広い範囲の湿度をしばらく底上げする">
+                <span class="ico ico-rain"></span>
+                <span>雨季</span>
+              </button>
+              <button class="macro-tool" data-macro="corridor" title="肥沃な帯 — ドラッグした方向に栄養の回廊を敷く">
+                <span class="ico ico-corridor"></span>
+                <span>肥沃な帯</span>
+              </button>
+              <button class="macro-tool" data-macro="geoheat" title="地熱 — 広い範囲の温度をしばらく上げる">
+                <span class="ico ico-geoheat"></span>
+                <span>地熱↑</span>
+              </button>
+              <button class="macro-tool" data-macro="geocool" title="地熱 — 広い範囲の温度をしばらく下げる">
+                <span class="ico ico-geocool"></span>
+                <span>地熱↓</span>
+              </button>
             </div>
             <div class="brush">
               <label>ブラシの大きさ <span id="brush-n">5</span></label>
@@ -344,14 +387,18 @@
 
           <section class="card actions">
             <label class="stage-select-label" for="stage-select">ステージ</label>
+            <!-- M32: 「皿 (チュートリアル) → 原野 (本編)」の推奨動線を、並びと
+                 ラベルで明示する。有界6ステージは「チュートリアル & チャレンジ集」
+                 として位置づけ直した (ROADMAP.md M32)。原野を先頭に置きつつ、
+                 デフォルト起動は変わらず皿のまま (main.ts の Game 既定値)。 -->
             <select id="stage-select">
-              <option value="petri">皿</option>
-              <option value="cave">洞窟</option>
-              <option value="desert">砂漠</option>
-              <option value="ruins">都市跡</option>
-              <option value="wetland">湿地</option>
-              <option value="continent">大陸</option>
-              <option value="wildland">原野 (実験・果てなし)</option>
+              <option value="wildland">原野 (本編)</option>
+              <option value="petri">皿 (チュートリアル)</option>
+              <option value="cave">洞窟 (チャレンジ)</option>
+              <option value="desert">砂漠 (チャレンジ)</option>
+              <option value="ruins">都市跡 (チャレンジ)</option>
+              <option value="wetland">湿地 (チャレンジ)</option>
+              <option value="continent">大陸 (チャレンジ)</option>
             </select>
             <button id="reset">新しい皿へ</button>
             <button id="toggle-heat">環境ヒート表示</button>
@@ -376,6 +423,11 @@
         <button class="tool" data-tool="cool" title="温度を下げる"><span class="ico ico-cool"></span><span>冷却</span></button>
         <button class="tool" data-tool="toxin" title="毒素をまく"><span class="ico ico-toxin"></span><span>毒素</span></button>
         <button class="tool" data-tool="erase" title="土地をならす"><span class="ico ico-erase"></span><span>消す</span></button>
+        <!-- M31: 大局介入 (原野の俯瞰のみ。ブラシと入れ替わる)。 -->
+        <button class="macro-tool active" data-macro="rain" title="雨季を呼ぶ — 広い範囲の湿度をしばらく底上げする"><span class="ico ico-rain"></span><span>雨季</span></button>
+        <button class="macro-tool" data-macro="corridor" title="肥沃な帯 — ドラッグした方向に栄養の回廊を敷く"><span class="ico ico-corridor"></span><span>肥沃な帯</span></button>
+        <button class="macro-tool" data-macro="geoheat" title="地熱 — 広い範囲の温度をしばらく上げる"><span class="ico ico-geoheat"></span><span>地熱↑</span></button>
+        <button class="macro-tool" data-macro="geocool" title="地熱 — 広い範囲の温度をしばらく下げる"><span class="ico ico-geocool"></span><span>地熱↓</span></button>
       </div>
 
       <footer class="footnote">

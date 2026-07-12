@@ -81,7 +81,7 @@ function stepWithTiming(
 
   if (state.tick % 4 === 0) {
     t0 = performance.now();
-    updateRadius(state, params, bus);
+    updateRadius(state, params, bus, idx);
     acc.radius += performance.now() - t0;
   }
   if (state.tick % 12 === 0) {

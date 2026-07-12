@@ -3,15 +3,22 @@
 // 取りこぼし・タイポをコンパイル時に検出できる。
 
 import type { Tool, GameSnapshot, EvolutionLog, StageId } from './game.js';
+import type { MacroToolId } from './macro-tools.js';
 import type { Genome, Vec2 } from '@morpho/sim';
 import type { WorldEvent } from './world-events.js';
+import type { WorldOverview } from './world-overview.js';
 
 export type ToWorkerMessage =
-  | { type: 'reset'; seed?: number; stageId?: StageId; parentGenome?: Genome }
+  // M30: parentMutationBoost = 採種時に記録された変異幅の倍率 (原野で母体から
+  // 遠く/過酷なバイオームで採った種ほど大きい)。省略時 1 (補正なし)。
+  | { type: 'reset'; seed?: number; stageId?: StageId; parentGenome?: Genome; parentMutationBoost?: number }
   | { type: 'setSpeed'; speed: number }
   | { type: 'setTool'; tool: Tool }
   | { type: 'setBrush'; radius: number }
   | { type: 'apply'; pos: Vec2 }
+  // M31: 大局介入 (マクロツール、原野の俯瞰専用)。pos は窓ローカル座標、
+  // dir は「肥沃な帯」のドラッグベクトル (ワールド単位、正規化前)。
+  | { type: 'applyMacro'; tool: MacroToolId; pos: Vec2; dir?: Vec2 }
   // M8 P4: 早送りモード。描画/スナップショット送信の頻度を10fpsまで落とし、
   // 浮いた予算をtickに全振りする (sim-worker.ts のループ間隔と
   // TickScheduler の予算/借金上限を切り替える)。
@@ -36,6 +43,12 @@ export interface PerfInfo {
   tickMs: number;        // 直近の game.tick() 呼び出しの 1 sim tick あたりの平均コスト
   targetSpeed: number;   // スライダーで指定された速度倍率
   effectiveSpeed: number; // 実際に進んでいる速度倍率 (直近ウィンドウの実測)
+  // M29: 実効ペース「日/分」(直近ウィンドウの実測)。×24 が本当に出ていれば
+  // 公称 10 日/分 (dayMs=144,000ms 時)。長時間セッションでの劣化を絶対値で読む。
+  daysPerMin: number;
+  // M29: 休眠の観測値。休眠無効 (既存6ステージ) では常に 0。
+  dormantCells: number;  // 休眠中の空間セル数 (state.dormantCells.size)
+  evictedChunks: number; // 平均値へ圧縮解放されたフィールドチャンク数
 }
 
 // M8 P2: SimState のうち小さなスカラーだけを残した部分。nodes/edges は
@@ -66,4 +79,10 @@ export type FromWorkerMessage =
     perf: PerfInfo; windowShift: Vec2 | null;
   }
   // M9: runUntilTick の target に到達し、Worker が自動で speed=0 に止めた通知。
-  | { type: 'dayCompleted' };
+  | { type: 'dayCompleted' }
+  // M28: 「原野」の全世界俯瞰 (チャンク要約 + 全世界統計)。snapshot よりずっと
+  // 低頻度 (WORLD_OVERVIEW_INTERVAL_MS = 1秒間隔) でよい — 大局レイヤー/
+  // ワールドマップの素材であって、毎フレームの描画には使わない。チャンク
+  // 要約の座標は実座標なので、窓相対で使うための windowOrigin を overview に
+  // 同梱してある (world-overview.ts 参照)。有界6ステージでは送られない。
+  | { type: 'worldOverview'; overview: WorldOverview };

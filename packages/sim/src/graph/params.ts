@@ -45,6 +45,46 @@ export interface SimParams {
   // 正の値を入れて「前線が尽きない」forager ループを成立させる (ROADMAP M25)。
   forageReclaimThreshold: number;
 
+  // ── 休眠 (dormancy, M29 無限ワールド用) ──
+  // 前線から遠く構造変化が止まった領域を、チャンク相当の空間セル単位で
+  // 「休眠」させる: 休眠セル内のエッジは activity/fatigue/radius 更新と
+  // Activity/Biomass フィールドへの deposit をスキップし、輸送 (flux) の
+  // 通り道としてだけ生き続ける。growth (reclaim 含む) も休眠セルのノードを
+  // 触らない。判定は bornAt (構造の変化) だけの純関数で RNG を使わないため
+  // seed 決定的。dormancyCheckInterval=0 (既定) で全機構が無効 = 既存
+  // 6ステージは bit 一致で不変 (M25 の forageReclaimThreshold 方式)。
+  dormancyCheckInterval: number;  // N tick ごとに休眠判定を行う。0 = 無効 (既定)
+  dormancyCellWorld: number;      // 休眠セルの一辺 (ワールド単位)。フィールドのチャンク一辺と揃えると evict がセルと 1:1 に対応する
+  dormancyFrontierCells: number;  // 前線として起きていられるセル数の上限 (最も新しく生まれたノードのセルから数える)
+  dormancyFrontierMargin: number; // 前線セルから Chebyshev 距離でこのセル数以内は起きたまま (起床の余白)
+  dormancyEvict: boolean;         // 休眠チャンクのフィールド実体を要約値 (平均) へ圧縮して解放する (対応実装がある場合のみ)
+
+  // ── 距離のコスト勾配 (M30 無限ワールド用) ──
+  // 「母体から近い組織は消費が緩やか、遠征している組織は早く消耗する」
+  // (ROADMAP ビジョン第4項)。母体からの距離が h のエッジは、fatigue の増分が
+  // (1 + distanceUpkeep×h) 倍、流れによる回復が 1/(1 + distanceUpkeep×h) 倍に
+  // なる — 効果は連続的で、母体近傍 (h が小さい) では実質ゼロ。伸びすぎた
+  // 遠征枝は疲労が回復で追いつかなくなり、activity と radius が落ちて自然に
+  // 枯れて戻る (無制限な一方向暴走への自然なブレーキ)。
+  // 距離 h の定義は distanceMode で選ぶ:
+  //   - 'hops' (既定、M30-A): 母体 (source ノード) からのグラフ距離 (hop 数)。
+  //     flux が毎tick回しているマルチソース BFS (flux.ts) に distanceUpdate-
+  //     Interval tick ごとに便乗して hop 深さを記録する (二重計算なし)。
+  //     forager reclaim (M25) で母体から切り離された孤立成分には載らない
+  //     (= 距離コストが効くのは連結コアのみ) という既知の限界がある。
+  //   - 'origin' (M30-B): 原点 (createInitialState/seedSource 時点の初期 source
+  //     位置。複数なら最寄り) からのユークリッド距離 (ワールド単位)。孤立
+  //     成分にも等しく効き、ビジョンの文言 (スタート位置からの空間距離) に
+  //     一致する。1 hop ≈ growthStep (数ワールド単位) なので、distanceUpkeep
+  //     は 'hops' の推奨値 (0.005/hop) を growthStep で割った程度 (≈0.0015/unit)
+  //     へ再スケールすること。
+  // どちらも距離キャッシュは state.sourceHops (RNG 不使用 = seed 決定的)。
+  // distanceUpkeep=0 (既定) で無効 = 既存6ステージは bit 一致で不変
+  // (forageReclaimThreshold 方式)。
+  distanceUpkeep: number;         // 距離単位あたりの維持係数。0 = 無効 (既定)
+  distanceUpdateInterval: number; // 距離キャッシュを更新する間隔 (tick)。distanceUpkeep=0 なら参照されない
+  distanceMode: 'hops' | 'origin'; // 距離の定義。'hops' = グラフ距離 (既定)、'origin' = 原点からのユークリッド距離
+
   // ── 環境スコア ──────────────────────
   foodReachThreshold: number;
   nutrientBias: number;
@@ -107,6 +147,21 @@ export const DEFAULT_PARAMS: SimParams = {
   alpha: 0.30,
   beta: 0.06,
   forageReclaimThreshold: 0, // 既定は無効 (既存ステージは sink を戻さない)
+
+  // 休眠は既定で無効 (checkInterval=0)。他の値は有効化時の推奨初期値で、
+  // 無効時は一切参照されない (既存6ステージは bit 一致で不変)。
+  dormancyCheckInterval: 0,
+  dormancyCellWorld: 24,     // 原野のチャンク一辺 (48) の半分 = 1チャンクが 2×2 セルに整数分割される (M29-B 実測で 48 より速く span 同等)
+  dormancyFrontierCells: 4,  // 実測 (docs/playtest-2026-07-09-infinite/sim-100day-dormancy.txt) で span を維持しつつチャンク数が頭打ちになった値
+  dormancyFrontierMargin: 1,
+  dormancyEvict: false,
+
+  // 距離のコスト勾配は既定で無効 (0)。interval は有効化時の推奨値で、
+  // 無効時は一切参照されない。60 = 休眠判定と同じ低頻度 (距離は growth が
+  // 12 tick ごとに数 hop しか動かさないので、60 tick の遅れは十分小さい)。
+  distanceUpkeep: 0,
+  distanceUpdateInterval: 60,
+  distanceMode: 'hops',
 
   foodReachThreshold: 0.55,
   nutrientBias: 2.5,

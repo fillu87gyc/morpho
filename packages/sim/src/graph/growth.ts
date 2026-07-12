@@ -13,6 +13,7 @@ import type { SeededRNG } from '../rng.js';
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
 import { type NodeIndex, dist } from './index-utils.js';
+import { dormantSetOf, dormancyCellKeyAt, wakeCellAt } from './dormancy.js';
 
 // ── tip 発見 / 方向選択 / マージターゲット ─────────────
 
@@ -135,6 +136,9 @@ function growFromTip(
         state.edges.push(e);
         ns?.add(mt.id); idx.neighbors.get(mt.id)?.add(tip.id);
         idx.adjacency.get(tip.id)?.push(e); idx.adjacency.get(mt.id)?.push(e);
+        // M29: 休眠中のノードへ接続した場合はそのセルを即時起床させる
+        // (新しい辺が checkInterval ぶん凍ったまま放置されるのを防ぐ)。
+        wakeCellAt(state, params, mt.pos);
         bus.emit({ type: 'LoopCreated', tick: state.tick, nodeIds: [tip.id, mt.id] });
         if (obstacleRejected > 0) bus.emit({ type: 'ObstacleAvoided', tick: state.tick, nodeId: mt.id, pos: bestEnd });
         if (parentEdge) parentEdge.stress *= 0.5;
@@ -162,6 +166,8 @@ function growFromTip(
   idx.adjacency.get(tip.id)?.push(newEdge);
   idx.neighbors.set(newNode.id, new Set([tip.id]));
   idx.neighbors.get(tip.id)?.add(newNode.id);
+  // M29: 成長が休眠セルの縁へ踏み込んだ場合はそのセルを即時起床させる。
+  wakeCellAt(state, params, newNode.pos);
 
   bus.emit({ type: isSink ? 'ReachedFood' : 'NewBranch', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
   if (obstacleRejected > 0) bus.emit({ type: 'ObstacleAvoided', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
@@ -211,6 +217,8 @@ function lateralBud(
   idx.adjacency.get(tip.id)?.push(newEdge);
   idx.neighbors.set(newNode.id, new Set([tip.id]));
   idx.neighbors.get(tip.id)?.add(newNode.id);
+  // M29: growFromTip と同じく、休眠セルへ踏み込んだ出芽は即時起床させる。
+  wakeCellAt(state, params, newNode.pos);
   // 周囲に強めの biomass を即時滲ませる: 描画上「膜が膨らんだ」ように見える。
   bioField.deposit(end, params.biomassDeposit * 2, params.biomassRadius + 0.8);
   bus.emit({ type: 'NewBranch', tick: state.tick, nodeId: newNode.id, pos: newNode.pos });
@@ -237,8 +245,15 @@ export function reclaimDepletedSinks(
 ): void {
   const t = params.forageReclaimThreshold;
   if (t <= 0) return;
+  // M29: 休眠セルの sink は触らない。ここで環境をサンプルしてしまうと
+  // evict 済みチャンクを 12 tick ごとに再実体化させてしまうし、休眠領域に
+  // 前線チップを作っても growthStep が (休眠スキップで) 伸ばせない。
+  // 前線が戻ってきてセルが起床すれば、次の reclaim から普通に対象になる。
+  const dormant = dormantSetOf(state, params);
+  const cw = params.dormancyCellWorld;
   for (const n of state.nodes) {
     if (n.type !== 'sink') continue;
+    if (dormant && dormant.has(dormancyCellKeyAt(n.pos.x, n.pos.y, cw))) continue;
     if (env.sampleGrowthContext(n.pos).nutrients < t) n.type = 'relay';
   }
 }
@@ -249,8 +264,14 @@ export function growthStep(
   state: SimState, env: Environment, bioField: BiomassFieldLike, params: SimParams,
   rng: SeededRNG, bus: EventBus, idx: NodeIndex,
 ): void {
+  // M29: 休眠セルのノード/エッジは成長へ参加しない (環境サンプリングも
+  // rng 消費もしない)。dormant が undefined (既定 = 無効) なら判定ごと省く。
+  const dormant = dormantSetOf(state, params);
+  const cw = params.dormancyCellWorld;
+
   // 端点からの伸長
   for (const tip of findTipNodes(state, idx)) {
+    if (dormant && dormant.has(dormancyCellKeyAt(tip.pos.x, tip.pos.y, cw))) continue;
     const adj = idx.adjacency.get(tip.id) ?? [];
     if (tip.type === 'source') {
       const avgAct = adj.length > 0 ? adj.reduce((s, e) => s + e.activity, 0) / adj.length : 1.0;
@@ -280,6 +301,12 @@ export function growthStep(
   for (const e of state.edges) {
     if (e.activity < params.branchActivityThreshold) continue;
     if (e.stress < params.stressBranchThreshold) continue;
+    // M29: 休眠エッジは側枝も出さない (rng を消費する前に抜けて、休眠中の
+    // 乱数消費が前線側の決定的な系列へ混ざらないようにする)。
+    if (dormant) {
+      const a = idx.byId.get(e.from), b = idx.byId.get(e.to);
+      if (a && b && dormant.has(dormancyCellKeyAt((a.pos.x + b.pos.x) / 2, (a.pos.y + b.pos.y) / 2, cw))) continue;
+    }
     if (rng.next() < params.branchProbabilityBase * (1 + e.stress) * e.activity) {
       const nodeId = rng.next() < 0.5 ? e.to : e.from;
       const node = idx.byId.get(nodeId);

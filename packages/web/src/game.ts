@@ -12,19 +12,26 @@ import {
   createInitialState, seedSource, createRNG, GridEnvironment, clearAroundSource,
   ActivityField, BiomassField, EventBus, DEFAULT_PARAMS, step, createStepCache, computeTraits,
   createGenome, createChildGenome, applyGenome, computeIndividuality, classifyIndividual,
-  ChunkedGridEnvironment, ChunkedActivityField, ChunkedBiomassField,
-  bakeChunkWindow, bakeScalarFieldWindow, followWindowOrigin,
+  ChunkedGridEnvironment, ChunkedActivityField, ChunkedBiomassField, type ChunkedFieldGrid, type FieldPatch,
+  bakeChunkWindow, bakeScalarFieldWindow, followWindowOrigin, wakeDormantArea,
   type SimState, type SimParams, type Vec2, type Traits, type SimEvent,
   type Genome, type Individuality, type IndividualTypeInfo, type StepCache,
 } from '@morpho/sim';
-import { STAGES, WILDLAND_CHUNK_CELLS, type StageId, type StageConfig } from './stages.js';
+import { STAGES, WILDLAND_CHUNK_CELLS, WILDLAND_WORLD_SIZE, WILDLAND_CENTER, wildlandBiomeAt, type StageId, type StageConfig } from './stages.js';
+import type { BiomeId } from './biomes.js';
+import {
+  MACRO_TOOLS, corridorPatchCenters, normalizeMacroDir, macroRemainingDays, shouldReapplyMacro,
+  CORRIDOR_PATCH_RADIUS, CORRIDOR_LENGTH,
+  type MacroToolId, type ActiveMacroEffect, type MacroEffectView,
+} from './macro-tools.js';
 import { computeQuests, type QuestStatus } from './quests.js';
 import { computeColonyNetworks, type ColonyMarker } from './colony-networks.js';
 import { TICKS_PER_DAY } from './day-loop.js';
 import { UndoStack } from './undo.js';
-import { eraFor, type EraStatus } from './era.js';
+import { eraFor, wildlandEraFor, type EraStatus } from './era.js';
 import { WorldEventLog, type WorldEvent } from './world-events.js';
 import { computeRegenAmount, REGEN_RADIUS_FRACTION } from './nutrient-regen.js';
+import { computeReachDistance, type WorldChunkSummary, type WorldOverview } from './world-overview.js';
 
 export type { StageId } from './stages.js';
 
@@ -51,6 +58,21 @@ export interface WorldInfo {
   coloniesTotal: number;   // 食料拠点の総数 (envの食料エリアの連結成分数)
   sourceColonies: number;    // M6: 大マップに配置したコロニー (群体) の総数
   connectedNetworks: number; // M6: 現在の独立ネットワーク数 (1 = 全コロニーが統合済み)
+  // M28: 母体 (初期source) から最遠ノードまでの距離 (現在値、ライブ)。
+  // 全ステージで計算する (純粋な派生値で決定論に影響しない) が、HUD 表示は
+  // 原野のみ (ui.ts)。M30 の距離コスト勾配で遠征枝が枯れて戻ると縮む
+  // (非単調) — 「今の網の広さ」を見せる HUD 用の値。
+  reachDistance: number;
+  // M32: 到達距離の生涯最大値 (単調非減少)。時代・wild-reach クエストの
+  // 条件はこちらを使う (reachDistance をそのまま使うと、一度進んだ時代/
+  // クエスト進捗が後退して見える — 実プレイ検証で確認、game.ts の
+  // wildlandPeakReach 参照)。有界6ステージでは reachDistance と同値。
+  reachDistancePeak: number;
+  // M28: 探索チャンク数 (生成済みチャンク数)。有界6ステージでは常に 0。
+  exploredChunks: number;
+  // M32: 発見済みバイオーム数 [1,5] (母体の森 = forest を含む)。原野の
+  // 時代・メインクエストの節目に使う。有界6ステージでは常に 0。
+  biomesDiscovered: number;
 }
 
 export interface EvolutionLog {
@@ -71,6 +93,14 @@ export interface FastSnapshot {
   stage: { id: StageId; name: string; description: string };
   // ステージらしさを伝える装飾アイコンの目印座標 (廃墟の柱 / 鍾乳石 など)。
   landmarks: Vec2[];
+  // M28-B: 「原野」の現在の窓原点 (実座標)。俯瞰チャンク (実座標のチャンク
+  // 番地) を窓ローカル座標へ変換するのに使う。worldOverview.windowOrigin は
+  // 集計時点の値 (最大1秒古い) なので、描画は必ずこちら (snapshot と同時刻の
+  // 現在値) を使うこと。有界6ステージでは undefined。
+  windowOrigin?: Vec2;
+  // M31: 働いている大局介入 (マクロツール) の可視化用ビュー (窓ローカル座標 +
+  // 残り日数)。原野のみ。有界6ステージでは undefined。
+  macroEffects?: MacroEffectView[];
 }
 
 export interface DerivedSnapshot {
@@ -93,18 +123,56 @@ export const WORLD = 100;
 export const FIELD = 96;
 
 // M25: 「原野」(半無限ワールド) 専用の定数。
-// WILDLAND_WORLD_SIZE は growth.ts の worldMargin 境界判定に実用上ひっかから
-// ない程度に大きい値 (実質「無限」)。窓の一辺は既存ステージと同じ WORLD を
+// WILDLAND_WORLD_SIZE/WILDLAND_CENTER は M30 で stages.ts へ移した (main.ts の
+// 採種時の実座標復元と共有するため)。窓の一辺は既存ステージと同じ WORLD を
 // 使う — Camera/Minimap が起動時に一度だけ game.worldSize (=WORLD) で構築
 // され、以後ステージを切り替えても再構築されない前提を尊重するため、
 // 「原野」もこの同じ WORLD をローカル座標系の広さとして扱う (窓が前線を
 // 追って実座標側を平行移動することで、無限に広い土地を同じ大きさの窓から
 // 覗き続ける)。
-const WILDLAND_WORLD_SIZE = 1_000_000;
-const WILDLAND_CENTER: Vec2 = { x: WILDLAND_WORLD_SIZE / 2, y: WILDLAND_WORLD_SIZE / 2 };
 // 窓の bbox が縁からこの割合以内に近づいたら再センタリングする
 // (chunk-window.ts の followWindowOrigin と同じ意味、値は経験的に選定)。
 const WILDLAND_REBAKE_MARGIN = 0.25;
+// M28: 「粘菌が占めている」とみなすバイオマスの下限。computeWorld() の
+// 窓集計 (既存6ステージ) が使ってきた 0.05 と同じ値を、原野の全世界集計
+// (チャンク横断) でも使う — 窓と世界で「面積」の定義がずれないようにする。
+const BIOMASS_AREA_THRESHOLD = 0.05;
+// M31: 原野の「発芽前」(seedling) パラメタ上書き。極小スタートの Day 0〜3 に
+// 手動介入の意味を濃くするための食料ゲート: 胞子は生まれつき growthProbability/
+// growthActivityThreshold が厳しく、探索の波 (youth 駆動の自走拡大) がほぼ
+// 立ち上がらない。**2つ目の餌場に根を張った瞬間** (下の WILDLAND_GERMINATION_
+// CLUSTERS) に出荷パラメタ (M29/M30 でチューニング済み) へ切り替わり、以後は
+// 従来通り自走する — 「餌を置けば明確に応える」を、餌が sim 的に意味を持つ
+// 形 (sink → flux → 発芽) で作る。判定は state のみの純粋な派生 (rng 不使用)
+// で決定論を乱さない。既存6ステージはこの経路に一切入らない。
+const WILDLAND_SEEDLING_OVERRIDES: Partial<SimParams> = {
+  // 探索の波を鈍らせる (出荷値 0.85/0.20)。ゼロにはしない — 見守り放置でも
+  // 数日かけて隣の餌へ這い着き、自力で発芽できる速度は残す。
+  growthProbability: 0.4,
+  growthActivityThreshold: 0.35,
+  // 餌への感受性を上げる (出荷値 0.3)。撒いた餌の周囲だけ activity が
+  // 明確に立ち上がり、「置けば応える」が絵として見える。
+  wNutrient: 0.9,
+  // 発芽前は source の枝数を絞る (出荷値 5)。発芽の瞬間に source に空き
+  // スロットが残るため、たとえ全ての先端が餌に根を張って (sink 化して)
+  // いても、発芽後の爆発が source から必ず立ち上がる (満腹凍結の防止)。
+  maxDegree: 3,
+};
+// 発芽条件: sink (食料に根を張った終端) のクラスタ (半径6で圧縮、computeWorld
+// の到達拠点と同じ数え方) がこの数に達したら発芽する。開始時の「最初の餌
+// パッチ1つ」だけでは 1 クラスタ止まり = プレイヤーが餌を置く (か、探索の
+// 這い足が近隣の飛び石に届く) ことが発芽の引き金になる。
+const WILDLAND_GERMINATION_CLUSTERS = 2;
+// 発芽判定の間引き間隔 (growth と同じ 12 tick)。
+const WILDLAND_GERMINATION_CHECK_INTERVAL = 12;
+
+// M28: 原野の全世界統計 (チャンク横断走査) を再計算する tick 間隔。
+// computeWorld() は snapshotDerived (250ms毎) と checkEraTransition (12tick毎)
+// から呼ばれるため、毎回全チャンクを走査すると生成済みチャンク数に比例した
+// 固定費が乗ってしまう。growthStep 系の間引き (12tick) の倍にあたる 24tick
+// に1回だけ数え直し、間はキャッシュを返す (Day 100 実測 68チャンク規模で
+// 走査は 1ms 未満、この頻度なら tick 本体に埋もれる)。
+const WILDLAND_STATS_INTERVAL_TICKS = 24;
 
 // M6: 単一 source ではなく、大マップに複数のコロニー (群体) を離して配置する。
 // ズームアウト (zoom=1) すると全コロニーを見渡せ、ズームインすると
@@ -223,25 +291,58 @@ export class Game {
   // だけずらして「窓が動いた」ことを見た目に響かせないための差分)。
   // consumeWindowShift() で1回読むと 0 に戻る。
   private windowShiftDelta: Vec2 | null = null;
+  // M32: 到達距離の生涯最大値 (原野のみ)。reachDistance (現在の最遠ノードまでの
+  // 距離) は M30 の距離コスト勾配で遠征枝が枯れて戻ると縮む — 非単調
+  // (実測: seed 1234 で Day15 reach 84 → Day20 68 と後退)。これを時代/クエストの
+  // 条件にそのまま使うと、一度進んだ時代が後退して見える (実プレイ検証で確認)。
+  // 「一度そこまで到達した」という生涯最大値は単調非減少なので、時代判定
+  // (computeEra) とメインクエスト (wild-reach) はこちらを使う。HUD の
+  // 「到達距離」表示 (WorldInfo.reachDistance) は現在値のまま (仕様通りの
+  // ライブ表示、後退して見えても「今の網の広さ」としては正しい)。
+  private wildlandPeakReach = 0;
+  // M28: 原野の全世界統計 (チャンク横断走査の結果) のキャッシュ。
+  // WILDLAND_STATS_INTERVAL_TICKS に1回だけ数え直す (詳細は定数のコメント)。
+  // M32: biomesDiscovered (発見済みバイオーム数) も同じキャッシュに相乗り
+  // させる (同じ間引き頻度で十分 = 時代判定の節目に必要な精度で足りる)。
+  private wildlandStatsCache: { tick: number; areaM2: number; massKg: number; exploredChunks: number; biomesDiscovered: number } | null = null;
+  // M32: 原野の「直前1手」Undo。チャンク系フィールド (Map ベース) は dense
+  // UndoStack の recordBefore が使えないため、直前の1回だけを覚える縮小版
+  // (undo.ts のコメント/ROADMAP.md M32 実装メモ参照)。stroke の概念を持たず、
+  // apply のたびに上書きされる — ドラッグ中の複数スタンプは最後の1つだけが
+  // undo 対象になる (有界6ステージの「stroke 全体を undo」より狭いスコープ)。
+  private wildlandLastTool: { field: ChunkedFieldGrid; patch: FieldPatch } | null = null;
+  // M31: 働いている大局介入 (マクロツール)。実座標で記録し、期間中は tick()
+  // が一定間隔で再適用する (macro-tools.ts)。有界6ステージでは常に空。
+  private macroEffects: ActiveMacroEffect[] = [];
+  // M31: 原野の「発芽前」フラグ。true の間は WILDLAND_SEEDLING_OVERRIDES が
+  // params に乗っている。発芽 (2つ目の餌場) で false になる一方通行のラッチ。
+  private wildlandSeedling = false;
 
-  constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome) {
+  constructor(seed = (Math.random() * 1e9) | 0, stageId: StageId = 'petri', parentGenome?: Genome, parentMutationBoost?: number) {
     this.seed = seed;
-    this.reset(seed, stageId, parentGenome);
+    this.reset(seed, stageId, parentGenome, parentMutationBoost);
   }
 
   // parentGenome を渡すと「種の採取」(M5) で継承した親の遺伝子を元に、
   // ステージの過酷さに応じて変異させた子の Genome で始める。
   // 省略時は従来通り seed から独立に新規生成する。
-  reset(seed = (Math.random() * 1e9) | 0, stageId: StageId = this.stage?.id ?? 'petri', parentGenome?: Genome): void {
+  // M30: parentMutationBoost は採種時に記録された変異幅の倍率 (原野で母体から
+  // 遠く/過酷なバイオームで採った種ほど大きい、biomes.ts の wildMutationBoost)。
+  // ステージの過酷さ由来の mutationScaleFor に乗じる。省略時 1 (補正なし)。
+  reset(seed = (Math.random() * 1e9) | 0, stageId: StageId = this.stage?.id ?? 'petri', parentGenome?: Genome, parentMutationBoost?: number): void {
     this.seed = seed;
     this.stage = STAGES[stageId];
     this.rng = createRNG(seed);
     // その個体固有の遺伝パラメータを rng から決定的に引く (地形生成より先に
     // 引いて、常に同じ順番で消費されるようにする)。
     this.genome = parentGenome
-      ? createChildGenome(parentGenome, this.rng, mutationScaleFor(this.stage))
+      ? createChildGenome(parentGenome, this.rng, mutationScaleFor(this.stage) * (parentMutationBoost ?? 1))
       : createGenome(this.rng);
     this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
+    // M31: 原野は「発芽前」の厳しいパラメタで始まる (極小スタート)。
+    // 2つ目の餌場に根を張った瞬間に出荷パラメタへ戻る (checkWildlandGermination)。
+    this.wildlandSeedling = this.stage.infinite === true;
+    if (this.wildlandSeedling) this.params = { ...this.params, ...WILDLAND_SEEDLING_OVERRIDES };
     this.undo = new UndoStack(10);
     this.bus = new EventBus();
     this.stepCache = createStepCache();
@@ -270,16 +371,22 @@ export class Game {
       this.state = createInitialState(seed, WILDLAND_WORLD_SIZE);
       this.sourcePoints = [WILDLAND_CENTER];
       this.foodPoints = []; // M27 の栄養再生は使わない (chunkTerrain が代わりに供給する)
-      seedSource(this.state, WILDLAND_CENTER, 6);
+      // M31 (極小スタート): 原野は「胞子1個」から。初期枝は最小の 2 本
+      // (既存6ステージの 6 本のまま始めると、母体の森を痩せさせても Day 0 の
+      // 立ち上がりが大きすぎる)。最初の餌パッチ1つは wildlandChunkTerrain が
+      // 胞子のそばに湧かせる (stages.ts)。
+      seedSource(this.state, WILDLAND_CENTER, 2);
       // 窓 (ローカル座標 0..WORLD) の中心に種が来るよう初期原点を決める。
       this.windowOrigin = { x: WILDLAND_CENTER.x - WORLD / 2, y: WILDLAND_CENTER.y - WORLD / 2 };
       this.windowShiftDelta = null;
+      this.wildlandStatsCache = null;
       this.rebakeWildlandWindow();
       this.landmarks = [];
     } else {
       this.chunkEnv = null; this.chunkAct = null; this.chunkBio = null;
       this.windowOrigin = { x: 0, y: 0 };
       this.windowShiftDelta = null;
+      this.wildlandStatsCache = null;
       this.state = createInitialState(seed, WORLD);
 
       // M14: 大陸ステージは worldPoints() で拠点を手続き生成する (rng は genome の
@@ -296,6 +403,9 @@ export class Game {
       this.landmarks = this.stage.generateTerrain(this.env, this.rng, WORLD, [...this.sourcePoints, ...this.foodPoints.map((f) => f.pos)]);
     }
 
+    this.macroEffects = [];
+    this.wildlandLastTool = null;
+    this.wildlandPeakReach = 0;
     this.evoLog = [];
     this.eraLog = [];
     this.worldEventLog.reset();
@@ -340,6 +450,15 @@ export class Game {
     return d;
   }
 
+  // M29: perf HUD (`?debug`) 用の休眠カウンタ。どちらも O(1) の読み出しで、
+  // 有界6ステージ (休眠無効・chunkEnv=null) では常に 0。
+  dormancyCounters(): { dormantCells: number; evictedChunks: number } {
+    return {
+      dormantCells: this.state.dormantCells?.size ?? 0,
+      evictedChunks: this.chunkEnv?.evictedChunkCount() ?? 0,
+    };
+  }
+
   setTool(t: Tool): void { this.tool = t; }
   setBrush(r: number): void { this.brushRadius = r; }
   setSpeed(s: number): void { this.speed = Math.max(0, s | 0); }
@@ -369,6 +488,18 @@ export class Game {
       // 「原野」は chunkTerrain が代わりに前線の先へ栄養を供給し続けるため
       // 対象外 (foodPoints=[] なので実質 no-op だが、意図を明示しておく)。
       if (!this.stage.infinite && this.state.tick % TICKS_PER_DAY === 0) this.regenerateNutrients();
+      // M31: 働いている大局介入の維持 (期間中の再適用) と期限切れの除去。
+      // 有界6ステージでは macroEffects が常に空なので no-op。
+      if (this.macroEffects.length > 0) this.maintainMacroEffects();
+      // M31: 原野の発芽判定 (発芽前のみ、growth と同じ間引きで) と、
+      // 発芽後の満腹凍結の防止 (日次)。
+      if (this.stage.infinite) {
+        if (this.wildlandSeedling && this.state.tick % WILDLAND_GERMINATION_CHECK_INTERVAL === 0) {
+          this.checkWildlandGermination();
+        } else if (!this.wildlandSeedling && this.state.tick % TICKS_PER_DAY === 0) {
+          this.ensureWildlandBud();
+        }
+      }
     }
     if (this.stage.infinite) this.rebakeWildlandWindow();
     this.drainBus();
@@ -392,15 +523,32 @@ export class Game {
     const colonies = computeColonyNetworks(this.state, this.sourcePoints);
     const world = this.computeWorld(colonies.networksCount);
     const traits = computeTraits(this.state);
-    const era = eraFor({
-      coloniesReached: world.coloniesReached, massKg: world.massKg,
-      connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
-      exploration: traits.exploration, day: Math.floor(this.state.tick / TICKS_PER_DAY),
-    });
+    const era = this.computeEra(world, traits);
     if (era.name !== this.lastEra) {
       this.eraLog.unshift({ tick: this.state.tick, text: `${era.name}に入った` });
       this.lastEra = era.name;
     }
+  }
+
+  // M32: 時代判定を有界6ステージ (eraFor、拠点数ベース) と原野
+  // (wildlandEraFor、無限世界の節目ベース) に分岐する。checkEraTransition と
+  // snapshotDerived の両方から呼ぶ (同じ入力から同じ結果になることを保証する)。
+  private computeEra(world: WorldInfo, traits: Traits): EraStatus {
+    const day = Math.floor(this.state.tick / TICKS_PER_DAY);
+    if (this.stage.infinite) {
+      // M32: reachDistance (ライブ、非単調) ではなく reachDistancePeak
+      // (生涯最大値、単調非減少) を使う — 遠征枝が枯れて戻っても、
+      // 一度進んだ時代が後退して見えないようにする (実プレイ検証で確認)。
+      return wildlandEraFor({
+        reachDistance: world.reachDistancePeak, exploredChunks: world.exploredChunks,
+        biomesDiscovered: world.biomesDiscovered, day,
+      });
+    }
+    return eraFor({
+      coloniesReached: world.coloniesReached, massKg: world.massKg,
+      connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
+      exploration: traits.exploration, day,
+    });
   }
 
   // EventBus に溜まった sim イベントを「最近の出来事」(worldEventLog) に
@@ -459,10 +607,22 @@ export class Game {
   }
 
   // M10: 「やり直す」の stroke 境界。main.ts が pointerdown/pointerup で呼ぶ。
+  // M32: 原野では stroke の概念を使わない (「直前1手」だけの縮小版 Undo、
+  // wildlandLastTool 参照) ので、beginStroke/endStroke はここでは no-op の
+  // まま (呼ばれても害はない、既存6ステージは従来通り)。
   beginStroke(): void { this.undo.beginStroke(); }
   endStroke(): void { this.undo.endStroke(); }
-  get canUndo(): boolean { return this.undo.canUndo; }
+  get canUndo(): boolean { return this.stage.infinite ? this.wildlandLastTool !== null : this.undo.canUndo; }
   undoStroke(): void {
+    if (this.stage.infinite) {
+      const last = this.wildlandLastTool;
+      if (!last) return;
+      last.field.restoreRegion(last.patch);
+      this.wildlandLastTool = null;
+      this.rebakeWildlandWindow(); // 窓 (表示用フィールド) にも即座に反映する
+      this.pushEvent('やり直した', 'undo');
+      return;
+    }
     if (!this.undo.canUndo) return;
     this.undo.undo();
     this.pushEvent('やり直した', 'undo');
@@ -531,53 +691,203 @@ export class Game {
   }
 
   // M25: 「原野」専用のツール適用。実座標 (windowOrigin ぶんずらした pos) へ
-  // chunkEnv 側の place* を直接呼ぶ。チャンク系フィールドは密な FieldGrid
-  // ではない (Map ベース) ため Undo の記録方式 (recordBefore) がそのままでは
-  // 使えず、この一手を取り消す機能はスコープ外とする (canUndo は自然に
-  // false のまま — 既存ステージの Undo 挙動には一切影響しない)。'erase' も
-  // 同じ理由でスコープ外 (無効: 押しても何も起きない)。
+  // chunkEnv 側の place* を直接呼ぶ。
+  // M32: チャンク系フィールドは密な FieldGrid ではない (Map ベース) ため
+  // 既存の Undo (undo.ts の recordBefore、stroke 単位で複数スタンプを深さ10
+  // まで積む) はそのままでは使えない。ChunkedFieldGrid.captureRegion() /
+  // restoreRegion() (chunk-grid.ts) を使い、「直前1手だけ」を記録する縮小版
+  // Undo を成立させる (wildlandLastTool、canUndo/undoStroke 参照) — 費用対
+  // 効果の判断は ROADMAP.md M32 実装メモ。'erase' はチャンク側に対応する
+  // 一括消去の実装が無く、この縮小版でも対象外 (押しても何も起きない、
+  // M25 からの既存挙動)。
   private applyWildlandTool(pos: Vec2): void {
     const env = this.chunkEnv;
     if (!env) return;
     const r = this.brushRadius;
     const real: Vec2 = { x: pos.x + this.windowOrigin.x, y: pos.y + this.windowOrigin.y };
+    // M29: プレイヤーの介入は休眠領域を起こす (起床経路その3)。起こして
+    // おかないと、撒いた餌や毒に周囲のエッジが checkInterval を過ぎても
+    // 反応しない (休眠セル内は activity 更新も成長もスキップされるため)。
+    // 休眠無効 (既定) の有界ステージではこの経路に入らないので影響なし。
+    wakeDormantArea(this.state, this.params, real, r);
+    // stampGaussian 系 (food/light/water/drain/heat/cool/toxin) の実際の
+    // 影響範囲は半径の2倍相当 (chunk-grid.ts の stampGaussian 参照)。
+    // 「広めに記録しても安全」(余分に記録したセルは restoreRegion で同じ値へ
+    // 戻すだけの no-op) の考え方で、+2 の余裕を持たせる。
+    const captureFor = (field: ChunkedFieldGrid, margin: number): void => {
+      this.wildlandLastTool = { field, patch: field.captureRegion(real.x, real.y, margin) };
+    };
     switch (this.tool) {
       case 'food':
+        captureFor(env.nutrients, r * 2 + 2);
         env.placeFood(real, r, 0.7);
         this.coloniesTotal += 1;
         this.pushEvent('栄養を撒いた', 'tool-food', pos);
         break;
       case 'light':
+        captureFor(env.brightness, r * 2 + 2);
         env.placeLight(real, r, 0.45);
         this.pushEvent('光をあてた', 'tool-light', pos);
         break;
       case 'water':
+        captureFor(env.moisture, r * 2 + 2);
         env.placeWater(real, r, 0.4);
         this.pushEvent('水を引いた', 'tool-water', pos);
         break;
       case 'drain':
+        captureFor(env.moisture, r * 2 + 2);
         env.placeDrain(real, r, 0.35);
         this.pushEvent('水を止めた', 'tool-drain', pos);
         break;
       case 'stone':
+        captureFor(env.obstacle, Math.max(2, r * 0.5) + 2);
         env.placeStone(real, Math.max(2, r * 0.5));
         this.pushEvent('障害物を置いた', 'tool-stone', pos);
         break;
       case 'heat':
+        captureFor(env.temperature, r * 2 + 2);
         env.placeHeat(real, r, 0.12);
         this.pushEvent('温度を上げた', 'tool-heat', pos);
         break;
       case 'cool':
+        captureFor(env.temperature, r * 2 + 2);
         env.placeHeat(real, r, -0.12);
         this.pushEvent('温度を下げた', 'tool-cool', pos);
         break;
       case 'toxin':
+        captureFor(env.toxin, r * 2 + 2);
         env.placeToxin(real, r, 0.35);
         this.pushEvent('毒素をまいた', 'tool-toxin', pos);
         break;
       case 'erase':
         break; // スコープ外 (上記コメント参照)
     }
+  }
+
+  // M31: 原野の発芽判定。sink (食料に根を張った終端) を半径6でクラスタリング
+  // し (computeWorld の到達拠点と同じ数え方)、2クラスタ以上 = 「ふたつ目の
+  // 餌場」に届いたら発芽 — 出荷パラメタ (M29/M30 チューニング) へ戻し、
+  // 母体から新しい枝を4本吹かせる (seedSource は sim の公開 seed API)。
+  // この「発芽の芽吹き」が無いと、幼体の全先端が餌に根を張ったまま
+  // (sink は伸びない・source も次数上限) 網が数日間完全凍結する「満腹凍結」
+  // が起きる (ハーネス対照実験で実測)。state のみの派生判定 + rng 不使用の
+  // 芽吹きなので決定論は保たれる。
+  private checkWildlandGermination(): void {
+    const sinks = this.state.nodes.filter((n) => n.type === 'sink');
+    if (sinks.length === 0) return;
+    if (clusterCount(sinks.map((n) => n.pos), 6) < WILDLAND_GERMINATION_CLUSTERS) return;
+    this.wildlandSeedling = false;
+    this.params = { ...applyGenome(PETRI_PARAMS, this.genome), ...this.stage.paramOverrides };
+    seedSource(this.state, WILDLAND_CENTER, 4);
+    wakeDormantArea(this.state, this.params, WILDLAND_CENTER, 10);
+    this.pushEvent('ふたつ目の餌場に根を張り、網が目覚めた', 'germination');
+    this.pushEvo(this.state.tick, '発芽 — 網の成長が勢いを増した');
+  }
+
+  // M31: 発芽後の凍結防止 (日次)。「成長できる先端が1つも無い」= 全ての葉が
+  // sink (根を張って伸びない) かつ全 source が次数上限、の状態を検出したら
+  // 母体から新芽を2本吹かせる。序盤の小さな網でしか起きない現象なので、
+  // 網が育ったら (edges >= 300) 判定ごとスキップする。
+  private ensureWildlandBud(): void {
+    if (this.state.edges.length >= 300) return;
+    const deg = new Map<number, number>();
+    for (const e of this.state.edges) {
+      deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
+      deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
+    }
+    for (const n of this.state.nodes) {
+      if (n.type === 'relay' && (deg.get(n.id) ?? 0) <= 1) return;
+      if (n.type === 'source' && (deg.get(n.id) ?? 0) < this.params.maxDegree) return;
+    }
+    seedSource(this.state, WILDLAND_CENTER, 2);
+    wakeDormantArea(this.state, this.params, WILDLAND_CENTER, 10);
+    this.pushEvent('母体から新芽が伸びた', 'wildland-bud');
+  }
+
+  // ── M31: 大局介入 (マクロツール) ──────────────────────────
+  // ズームアウト (zoom < 1 の俯瞰) 中だけ使える高価な広域介入。原野のみ。
+  // pos/dir は窓ローカル座標 (apply() と同じ系)。効果は chunkEnv の placeX()
+  // を実座標へ直接呼ぶだけで、sim のローカル則は無改修 (macro-tools.ts)。
+  applyMacro(tool: MacroToolId, pos: Vec2, dir?: Vec2): void {
+    if (!this.stage.infinite || !this.chunkEnv) return;
+    const def = MACRO_TOOLS[tool];
+    const real: Vec2 = { x: pos.x + this.windowOrigin.x, y: pos.y + this.windowOrigin.y };
+    const effect: ActiveMacroEffect = {
+      kind: tool,
+      center: real,
+      // 回廊のみ方向を持つ。ドラッグが無ければ「母体から離れる向き」へ敷く。
+      dir: tool === 'corridor' ? normalizeMacroDir(dir, WILDLAND_CENTER, real) : undefined,
+      expiresAtTick: this.state.tick + def.durationTicks,
+    };
+    this.macroEffects.push(effect);
+    this.applyMacroEffect(effect, def.initialAmount);
+    this.pushEvent(`大局介入「${def.label}」を発動した`, `macro-${tool}`, pos);
+  }
+
+  // 効果1回ぶんの適用 (発動時 = initialAmount / 維持 = maintainAmount)。
+  private applyMacroEffect(effect: ActiveMacroEffect, amount: number): void {
+    const env = this.chunkEnv;
+    if (!env) return;
+    const def = MACRO_TOOLS[effect.kind];
+    switch (effect.kind) {
+      case 'rain':
+        // M29: 広域介入も休眠領域を起こす (窓内ツールの applyWildlandTool と
+        // 同じ理由 — 起こさないと効果に周囲のエッジが反応しない)。
+        wakeDormantArea(this.state, this.params, effect.center, def.radius);
+        env.placeWater(effect.center, def.radius, amount);
+        break;
+      case 'geoheat':
+        wakeDormantArea(this.state, this.params, effect.center, def.radius);
+        env.placeHeat(effect.center, def.radius, amount);
+        break;
+      case 'geocool':
+        wakeDormantArea(this.state, this.params, effect.center, def.radius);
+        env.placeHeat(effect.center, def.radius, -amount);
+        break;
+      case 'corridor': {
+        const unit = effect.dir ?? { x: 1, y: 0 };
+        for (const c of corridorPatchCenters(effect.center, unit)) {
+          wakeDormantArea(this.state, this.params, c, CORRIDOR_PATCH_RADIUS);
+          env.placeFood(c, CORRIDOR_PATCH_RADIUS, amount);
+        }
+        break;
+      }
+    }
+  }
+
+  // 期間中の再適用 (自然減衰への補填) と期限切れの除去。tick() のステップ
+  // ループから毎 tick 呼ばれ、判定は state.tick 基準で決定的 (steps の
+  // まとめ方に依存しない)。
+  private maintainMacroEffects(): void {
+    let expired = false;
+    for (const effect of this.macroEffects) {
+      if (this.state.tick >= effect.expiresAtTick) { expired = true; continue; }
+      const def = MACRO_TOOLS[effect.kind];
+      if (shouldReapplyMacro(effect, def, this.state.tick)) {
+        this.applyMacroEffect(effect, def.maintainAmount);
+      }
+    }
+    if (expired) {
+      for (const effect of this.macroEffects) {
+        if (this.state.tick >= effect.expiresAtTick) {
+          this.pushEvent(`「${MACRO_TOOLS[effect.kind].label}」の効き目が終わった`, `macro-end-${effect.kind}`);
+        }
+      }
+      this.macroEffects = this.macroEffects.filter((e) => this.state.tick < e.expiresAtTick);
+    }
+  }
+
+  // 可視化用ビュー (窓ローカル座標 + 残り日数)。
+  private macroEffectViews(): MacroEffectView[] {
+    const o = this.windowOrigin;
+    return this.macroEffects.map((e) => ({
+      kind: e.kind,
+      center: { x: e.center.x - o.x, y: e.center.y - o.y },
+      dir: e.dir,
+      radius: MACRO_TOOLS[e.kind].radius,
+      lengthWorld: e.kind === 'corridor' ? CORRIDOR_LENGTH : undefined,
+      remainingDays: macroRemainingDays(e.expiresAtTick, this.state.tick),
+    }));
   }
 
   private eraseFields(fx: number, fy: number, fr: number): void {
@@ -619,6 +929,8 @@ export class Game {
       day, thickEdges,
       stage: { id: this.stage.id, name: this.stage.name, description: this.stage.description },
       landmarks: this.landmarks,
+      windowOrigin: this.stage.infinite ? { x: this.windowOrigin.x, y: this.windowOrigin.y } : undefined,
+      macroEffects: this.stage.infinite ? this.macroEffectViews() : undefined,
     };
   }
 
@@ -647,12 +959,13 @@ export class Game {
       coloniesReached: world.coloniesReached, coloniesTotal: world.coloniesTotal, traits,
       sourceColonies: world.sourceColonies, connectedNetworks: world.connectedNetworks,
       landCoverage: this.computeLandCoverage(),
+      // M32: 原野専用クエスト (wild-reach/wild-biomes) の入力。有界6ステージ
+      // でも計算はされるが、UI 側 (ui.ts) が stage.id === 'wildland' のときだけ
+      // カードを表示する。reachDistancePeak (生涯最大値) を使うのは era と
+      // 同じ理由 — 「一度届いた」達成型クエストが後退して見えないように。
+      reachDistance: world.reachDistancePeak, biomesDiscovered: world.biomesDiscovered,
     });
-    const era = eraFor({
-      coloniesReached: world.coloniesReached, massKg: world.massKg,
-      connectedNetworks: world.connectedNetworks, sourceColonies: world.sourceColonies,
-      exploration: traits.exploration, day: Math.floor(this.state.tick / TICKS_PER_DAY),
-    });
+    const era = this.computeEra(world, traits);
     // M25: colonyMarkers の pos/centroid は computeColonyNetworks が
     // this.state (「原野」では実座標) から導出するため、カメラ追従
     // (focusOn) やミニマップがローカル座標 (0..WORLD) を前提にできるよう
@@ -709,16 +1022,6 @@ export class Game {
   }
 
   private computeWorld(connectedNetworks: number): WorldInfo {
-    // 占有面積: biomass が一定値以上のセル数。世界全体を 100×100 m² とみなす。
-    const n = this.fieldSize * this.fieldSize;
-    const cellArea = (WORLD * WORLD) / n; // m²/cell
-    let cells = 0;
-    let mass = 0;
-    for (let i = 0; i < n; i++) {
-      const v = this.bio.field.data[i] ?? 0;
-      mass += v;
-      if (v > 0.05) cells++;
-    }
     // 拠点総数は配置回数で素直に数える (computeWorld で派生しない)。
     const coloniesTotal = this.coloniesTotal;
     // 到達数: sink ノード数を独立な拠点に「圧縮」する。
@@ -728,17 +1031,134 @@ export class Game {
     const sinks = this.state.nodes.filter((n) => n.type === 'sink');
     const reached = clusterCount(sinks.map((n) => n.pos), 6 /* world units */);
     const coloniesReached = Math.min(coloniesTotal, reached);
-    // 粘菌の総量 (kg 想定): biomass の総和 × 単位 (係数は体感優先で調整)。
-    // モックアップ ~4kg 規模に近付くよう、薄めの密度に倒す。
-    const massKg = +(mass * cellArea * 0.0009).toFixed(2);
+    // M28: 到達距離 = 母体 (初期source、原野では WILDLAND_CENTER) から
+    // 最遠ノードまでの距離。純粋な派生値 (rng もフィールドも触らない) なので
+    // 全ステージで計算して問題ないが、表示は原野のみ (ui.ts)。
+    const mother = this.sourcePoints[0] ?? { x: 0, y: 0 };
+    const reachDistance = computeReachDistance(this.state.nodes.map((n) => n.pos), mother);
+    // M32: 生涯最大値を更新する (原野のみ、単調非減少)。computeWorld は
+    // snapshotDerived (250ms毎) と checkEraTransition (12tick毎) の両方から
+    // 呼ばれるため、ここで一度更新しておけば呼び出し側は常に最新の
+    // 「これまでの最遠到達」を読める。
+    if (this.stage.infinite && reachDistance > this.wildlandPeakReach) this.wildlandPeakReach = reachDistance;
+    // M28: 面積・総量は、原野では窓 (this.bio、理論上限 WORLD² = 10,000m²)
+    // ではなくチャンク横断の全世界集計を使う (ROADMAP.md V2: 「総面積が窓の
+    // 中しか数えていない」の解消)。既存6ステージは従来通りの窓集計で、数値は
+    // bit 一致で不変。
+    const { areaM2, massKg, exploredChunks, biomesDiscovered } = this.stage.infinite
+      ? this.wildlandWorldStats()
+      : { ...this.windowBiomassStats(), exploredChunks: 0, biomesDiscovered: 0 };
     return {
-      areaM2: Math.round(cells * cellArea),
+      areaM2,
       massKg,
       networkLinks: this.state.edges.length,
       coloniesReached,
       coloniesTotal,
       sourceColonies: this.sourcePoints.length,
       connectedNetworks,
+      reachDistance,
+      reachDistancePeak: this.stage.infinite ? this.wildlandPeakReach : reachDistance,
+      exploredChunks,
+      biomesDiscovered,
+    };
+  }
+
+  // 既存6ステージの面積・総量 (従来の computeWorld 本体そのまま)。
+  // 占有面積: biomass が一定値以上のセル数。世界全体を 100×100 m² とみなす。
+  private windowBiomassStats(): { areaM2: number; massKg: number } {
+    const n = this.fieldSize * this.fieldSize;
+    const cellArea = (WORLD * WORLD) / n; // m²/cell
+    let cells = 0;
+    let mass = 0;
+    for (let i = 0; i < n; i++) {
+      const v = this.bio.field.data[i] ?? 0;
+      mass += v;
+      if (v > BIOMASS_AREA_THRESHOLD) cells++;
+    }
+    // 粘菌の総量 (kg 想定): biomass の総和 × 単位 (係数は体感優先で調整)。
+    // モックアップ ~4kg 規模に近付くよう、薄めの密度に倒す。
+    return {
+      areaM2: Math.round(cells * cellArea),
+      massKg: +(mass * cellArea * 0.0009).toFixed(2),
+    };
+  }
+
+  // M28: 原野の全世界統計。チャンク横断の走査は WILDLAND_STATS_INTERVAL_TICKS
+  // に1回だけ行い、間はキャッシュを返す (computeWorld は 250ms毎 + 12tick毎に
+  // 呼ばれるため)。面積・総量の式は窓集計 (windowBiomassStats) と同じで、
+  // セル面積だけがチャンク側の解像度 (cellWorldSize², 出荷値 1m²/cell) になる。
+  private wildlandWorldStats(): { areaM2: number; massKg: number; exploredChunks: number; biomesDiscovered: number } {
+    const chunkEnv = this.chunkEnv, chunkBio = this.chunkBio;
+    if (!chunkEnv || !chunkBio) return { areaM2: 0, massKg: 0, exploredChunks: 0, biomesDiscovered: 0 };
+    const cached = this.wildlandStatsCache;
+    if (cached && this.state.tick >= cached.tick && this.state.tick - cached.tick < WILDLAND_STATS_INTERVAL_TICKS) {
+      return cached;
+    }
+    const cellArea = chunkBio.cellWorldSize * chunkBio.cellWorldSize; // m²/cell
+    const world = chunkBio.summarizeWorld(BIOMASS_AREA_THRESHOLD);
+    const next = {
+      tick: this.state.tick,
+      areaM2: Math.round(world.cellsAbove * cellArea),
+      massKg: +(world.total * cellArea * 0.0009).toFixed(2),
+      // M29: evict (実体解放) で generatedChunkCount() は減るようになった。
+      // 「探索チャンク」は踏破の累計なので、evict 済みも含む touched を数える。
+      exploredChunks: chunkEnv.touchedChunkCount(),
+      // M32: 発見済みバイオーム数。座標だけで決まる純粋関数 (wildlandBiomeAt)
+      // なので touchedChunkCoords() (セルデータを読まない軽量 API) で足りる。
+      biomesDiscovered: this.wildlandBiomesDiscovered(chunkEnv),
+    };
+    this.wildlandStatsCache = next;
+    return next;
+  }
+
+  // M32: 訪問済みチャンクのうち、何種類のバイオームを踏んだか (母体の森 =
+  // forest を含め [1,5])。wildlandWorldStats() と同じ間引き頻度で数え直す。
+  private wildlandBiomesDiscovered(chunkEnv: ChunkedGridEnvironment): number {
+    const seen = new Set<BiomeId>();
+    for (const c of chunkEnv.touchedChunkCoords()) seen.add(wildlandBiomeAt(c.cx, c.cy, this.seed));
+    return seen.size;
+  }
+
+  // M28: 「原野」の全世界俯瞰。チャンク要約 (地形 + バイオマス) と全世界統計を
+  // 1つに束ねて返す。Worker が低頻度 (sim-worker.ts) で main スレッドへ送る。
+  // sim 側の summarize* は peekChunk ベース (副作用なし) なので、これを何度
+  // 呼んでも sim の決定論は乱れない。有界6ステージでは null。
+  worldOverview(): WorldOverview | null {
+    const chunkEnv = this.chunkEnv, chunkBio = this.chunkBio;
+    if (!chunkEnv || !chunkBio) return null;
+    const terrain = chunkEnv.summarizeChunks();
+    const bio = chunkBio.summarizeChunks(BIOMASS_AREA_THRESHOLD);
+    const bioByKey = new Map(bio.map((s) => [`${s.cx}:${s.cy}`, s.total]));
+    const chunks: WorldChunkSummary[] = terrain.map((t) => ({
+      cx: t.cx, cy: t.cy,
+      nutrientAvg: t.nutrientAvg,
+      obstacleDensity: t.obstacleDensity,
+      hasWater: t.hasWater,
+      toxinAvg: t.toxinAvg,
+      biomass: bioByKey.get(`${t.cx}:${t.cy}`) ?? 0,
+    }));
+    // バイオマス場は拡散の縁で「地形チャンク未生成のままバイオマスだけ滲んだ」
+    // チャンクを持ちうる。落とすと世界の縁が欠けるので、地形 0 扱いで含める。
+    const seen = new Set(terrain.map((t) => `${t.cx}:${t.cy}`));
+    for (const s of bio) {
+      if (seen.has(`${s.cx}:${s.cy}`)) continue;
+      chunks.push({ cx: s.cx, cy: s.cy, nutrientAvg: 0, obstacleDensity: 0, hasWater: false, toxinAvg: 0, biomass: s.total });
+    }
+    const stats = this.wildlandWorldStats();
+    const mother = this.sourcePoints[0] ?? WILDLAND_CENTER;
+    return {
+      chunks,
+      // チャンク要約は実座標なので、窓相対 (ローカル座標 0..WORLD) で使える
+      // よう窓原点も一緒に届ける (受け手が実座標 - windowOrigin で変換する)。
+      windowOrigin: { x: this.windowOrigin.x, y: this.windowOrigin.y },
+      chunkWorldSize: chunkEnv.chunkCells * chunkEnv.cellWorldSize,
+      stats: {
+        areaM2: stats.areaM2,
+        massKg: stats.massKg,
+        exploredChunks: stats.exploredChunks,
+        reachDistance: computeReachDistance(this.state.nodes.map((n) => n.pos), mother),
+      },
+      tick: this.state.tick,
     };
   }
 

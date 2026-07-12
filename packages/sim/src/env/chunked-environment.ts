@@ -26,13 +26,40 @@ export interface ChunkedGridEnvironmentInit {
   baseMoisture?: number;
   baseBrightness?: number;
   baseTemperature?: number;
-  /** チャンクの地形 (nutrients/moisture/brightness/obstacle) を決定的に
-   * 生成する。省略時は「何もない (obstacle=0, 各フィールドは base 値)」
-   * チャンクになる。 */
+  /** チャンクの地形を決定的に生成する。省略時は「何もない (obstacle=0,
+   * 各フィールドは base 値)」チャンクになる。
+   * M30: バイオーム表現のため toxin/moisture/water のパッチを追加した
+   * (すべて省略可 = 既存の呼び出し (M25 の原野) はそのまま動く)。 */
   generateTerrain?: (coord: { cx: number; cy: number }, rng: ReturnType<typeof createRNG>, worldSeed: number) => {
     obstaclePatches?: { x: number; y: number; radius: number }[];
     foodPatches?: { x: number; y: number; radius: number; amount: number }[];
+    /** M30: 毒素のガウス染み (毒の窪地バイオーム用)。 */
+    toxinPatches?: { x: number; y: number; radius: number; amount: number }[];
+    /** M30: 湿度の増減 (amount は base からのデルタ、負なら乾燥地帯)。 */
+    moisturePatches?: { x: number; y: number; radius: number; amount: number }[];
+    /** M30: 水域 (通行不能)。placeWaterBody と同じく water と obstacle の
+     * 両方に立ち、周囲 (radius×1.8) の湿度を +0.3 底上げする。 */
+    waterPatches?: { x: number; y: number; radius: number }[];
   };
+}
+
+// M28: 生成済みチャンク1枚ぶんの地形要約。バイオマス側の要約
+// (ChunkedScalarField.summarizeChunks) と合わせて、web 側が「大局レイヤー/
+// ワールドマップ」を組み立てるための素材になる。ここでは数値の集計だけを
+// 返し、描画の概念 (色・タイル種) は持ち込まない (ROADMAP.md
+// アーキテクチャ方針: 絵は web 側で決める)。
+export interface ChunkTerrainSummary {
+  cx: number;
+  cy: number;
+  /** 栄養の平均値 (チャンク内全セル)。 */
+  nutrientAvg: number;
+  /** 障害物セル (>0.5) の割合 (0..1)。 */
+  obstacleDensity: number;
+  /** 水域セルが1つでもあるか。 */
+  hasWater: boolean;
+  /** M30: 毒素の平均値 (チャンク内全セル)。毒の窪地バイオームを俯瞰
+   * (web 側の大局レイヤー/ワールドマップ) で見分けるための軸。 */
+  toxinAvg: number;
 }
 
 // 中心差分で勾配を取る (grid.ts の gradientField と同じ考え方)。
@@ -83,16 +110,21 @@ export class ChunkedGridEnvironment implements Environment {
     if (init.generateTerrain) {
       const genTerrain = init.generateTerrain;
       const worldSeed = this.worldSeed;
-      // obstacle/nutrients の生成はチャンク単位で決定的な RNG を1つ引き、
-      // 障害物と食料の両方をそこから配置する (同じチャンクなら常に同じ
-      // 内容になる = 決定的)。
+      // 各フィールドの生成はチャンク単位で決定的な RNG を「フィールドごとに
+      // 同じ seed から引き直して」genTerrain を再実行する (同じチャンクなら
+      // 常に同じ内容になる = 決定的で、フィールド同士の実体化順にも依らない)。
+      const terrainOf = (coord: { cx: number; cy: number }) =>
+        genTerrain(coord, createRNG(`${worldSeed}:${coord.cx}:${coord.cy}`), worldSeed);
       this.obstacle = new ChunkedFieldGrid({
         chunkCells: this.chunkCells,
         cellWorldSize: this.cellWorldSize,
         generate: (coord, data, cells) => {
-          const rng = createRNG(`${worldSeed}:${coord.cx}:${coord.cy}`);
-          const result = genTerrain(coord, rng, worldSeed);
+          const result = terrainOf(coord);
           for (const p of result.obstaclePatches ?? []) {
+            stampObstacleLocal(data, cells, p.x, p.y, p.radius, this.cellWorldSize);
+          }
+          // M30: 水域は通行不能 (placeWaterBody と同じく obstacle にも立てる)。
+          for (const p of result.waterPatches ?? []) {
             stampObstacleLocal(data, cells, p.x, p.y, p.radius, this.cellWorldSize);
           }
         },
@@ -101,12 +133,47 @@ export class ChunkedGridEnvironment implements Environment {
         chunkCells: this.chunkCells,
         cellWorldSize: this.cellWorldSize,
         generate: (coord, data, cells) => {
-          // 障害物と同じ RNG 系列を再現するため、同じ seed から引き直す
-          // (obstacle 生成呼び出しの副作用と完全に独立させるため)。
-          const rng = createRNG(`${worldSeed}:${coord.cx}:${coord.cy}`);
-          const result = genTerrain(coord, rng, worldSeed);
+          const result = terrainOf(coord);
           for (const p of result.foodPatches ?? []) {
             stampGaussianLocal(data, cells, p.x, p.y, p.radius, p.amount, this.cellWorldSize);
+          }
+        },
+      });
+      // M30: バイオーム表現のための追加フィールド (毒素/湿度/水域)。地形が
+      // これらのパッチを一切返さなければ、生成結果は従来 (毒素0・湿度base・
+      // 水なし) と完全に一致する — M25 からの既存の原野地形は不変。
+      this.toxin = new ChunkedFieldGrid({
+        chunkCells: this.chunkCells,
+        cellWorldSize: this.cellWorldSize,
+        generate: (coord, data, cells) => {
+          const result = terrainOf(coord);
+          for (const p of result.toxinPatches ?? []) {
+            stampGaussianLocal(data, cells, p.x, p.y, p.radius, p.amount, this.cellWorldSize);
+          }
+        },
+      });
+      this.moisture = new ChunkedFieldGrid({
+        chunkCells: this.chunkCells,
+        cellWorldSize: this.cellWorldSize,
+        generate: (coord, data, cells) => {
+          data.fill(this.baseMoisture);
+          const result = terrainOf(coord);
+          for (const p of result.moisturePatches ?? []) {
+            stampGaussianLocal(data, cells, p.x, p.y, p.radius, p.amount, this.cellWorldSize);
+          }
+          // 水辺は湿る (placeWaterBody の radius×1.8, +0.3 と同じ味付け)。
+          for (const p of result.waterPatches ?? []) {
+            stampGaussianLocal(data, cells, p.x, p.y, p.radius * 1.8, 0.3, this.cellWorldSize);
+          }
+        },
+      });
+      this.water = new ChunkedFieldGrid({
+        chunkCells: this.chunkCells,
+        cellWorldSize: this.cellWorldSize,
+        generate: (coord, data, cells) => {
+          const result = terrainOf(coord);
+          for (const p of result.waterPatches ?? []) {
+            stampObstacleLocal(data, cells, p.x, p.y, p.radius, this.cellWorldSize);
           }
         },
       });
@@ -162,13 +229,108 @@ export class ChunkedGridEnvironment implements Environment {
     this.moisture.stampGaussian(pos.x, pos.y, radius * 1.8, 0.3);
   }
 
-  /** 生成済みチャンク数 (触れたことのある範囲の目安、描画/デバッグ用)。 */
+  /** 実体があるチャンク数 (evict 済みは含まない、描画/デバッグ用)。 */
   generatedChunkCount(): number {
     return this.obstacle.chunkCount();
   }
 
-  // 自然減衰。GridEnvironment.decay() と同じ式だが、これまでに生成された
-  // チャンクだけを対象にする (未探索領域は生成すらされていないので対象外)。
+  /** M29: evict 済み (要約値だけ保持) のチャンク数。 */
+  evictedChunkCount(): number {
+    return this.obstacle.evictedChunkCount();
+  }
+
+  /** M29: 触れたことのあるチャンク数 (実体 + evict 済み)。「探索チャンク」
+   * 統計は evict で減らないよう、こちらを使うこと。 */
+  touchedChunkCount(): number {
+    return this.obstacle.chunkCount() + this.obstacle.evictedChunkCount();
+  }
+
+  /** M32: 触れたことのあるチャンクの番地一覧 (実体 + evict 済み)。
+   * summarizeChunks() と違ってセルデータは読まない (peekChunk 済みのフィールド
+   * 走査をしない) ぶん軽量 — 「発見バイオーム数」のような、座標だけで決まる
+   * 派生指標 (biomeAt は (cx,cy,worldSeed) の純粋関数) を安く求めるための API。 */
+  touchedChunkCoords(): { cx: number; cy: number }[] {
+    return [...this.obstacle.generatedChunks(), ...this.obstacle.evictedChunks()];
+  }
+
+  // 全フィールドのグリッド (evict/集計でまとめて回すため)。
+  private allGrids(): ChunkedFieldGrid[] {
+    return [this.nutrients, this.moisture, this.brightness, this.obstacle, this.temperature, this.toxin, this.water];
+  }
+
+  // M29: 休眠判定 (graph/dormancy.ts) が呼ぶ evict 対応 (Environment の
+  // optional メソッド)。座標集合はフィールドごとに異なりうる (place* は
+  // 一部のフィールドしか実体化しない) ので、全フィールドの和集合を返す。
+  materializedChunkCenters(): Vec2[] {
+    const seen = new Set<string>();
+    const out: Vec2[] = [];
+    for (const g of this.allGrids()) {
+      for (const c of g.generatedChunks()) {
+        const key = `${c.cx}:${c.cy}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(g.chunkCenterWorld(c));
+      }
+    }
+    return out;
+  }
+
+  /** M29: 指定ワールド座標を含むチャンクを全フィールドまとめて evict する。
+   * 各フィールドは平均値へ圧縮され、再訪時に平均で塗り戻される (決定的な
+   * 近似 — 食料パッチの形は失われ、平均濃度の土地として復元される)。 */
+  evictChunkAt(worldX: number, worldY: number): void {
+    for (const g of this.allGrids()) g.evictChunkAt(worldX, worldY);
+  }
+
+  // M28: 生成済みチャンクごとの地形要約。基準となるチャンク集合は
+  // generatedChunkCount() と同じく obstacle 側 (sampleGrowthContext は全
+  // フィールドを同時にサンプルするため、実用上 nutrients と同じ集合になる)。
+  // 各フィールドは peekChunk (副作用なし) で読む — ensureChunk だと「要約を
+  // 取るだけ」のつもりが未生成の nutrients/water チャンクを実体化させて
+  // しまい、以後の decay/diffuse 対象が変わって決定論を壊す。未生成の
+  // フィールドは 0 埋め (nutrientAvg=0 / hasWater=false) として扱う。
+  // 走査は生成済みチャンクのみ・呼び出し時のみ (毎tickの固定費にはしない)。
+  summarizeChunks(): ChunkTerrainSummary[] {
+    const out: ChunkTerrainSummary[] = [];
+    const cells = this.chunkCells * this.chunkCells;
+    // M29: evict 済みチャンクも座標集合に含める — 大局レイヤー/ワールド
+    // マップ (M28) のタイルが evict で消えないようにするため。フィールド
+    // ごとに実体があれば従来どおり走査し、evict 済みなら要約値 (平均) から
+    // 近似する: obstacle は 0/1 の場なので平均 = 密度そのもの、water は
+    // 平均 > 0 なら「水域セルがあった」とみなせる。
+    const coords = [...this.obstacle.generatedChunks(), ...this.obstacle.evictedChunks()];
+    for (const { cx, cy } of coords) {
+      const obstacle = this.obstacle.peekChunk(cx, cy);
+      const nutrients = this.nutrients.peekChunk(cx, cy);
+      const water = this.water.peekChunk(cx, cy);
+      const toxin = this.toxin.peekChunk(cx, cy);
+      let nutrientSum = 0;
+      let toxinSum = 0;
+      let obstacleCells = 0;
+      let hasWater = false;
+      for (let i = 0; i < cells; i++) {
+        if (nutrients) nutrientSum += nutrients[i] ?? 0;
+        if (toxin) toxinSum += toxin[i] ?? 0;
+        if ((obstacle?.[i] ?? 0) > 0.5) obstacleCells++;
+        if (!hasWater && (water?.[i] ?? 0) > 0.5) hasWater = true;
+      }
+      out.push({
+        cx, cy,
+        nutrientAvg: nutrients ? nutrientSum / cells : (this.nutrients.evictedMean(cx, cy) ?? 0),
+        obstacleDensity: obstacle ? obstacleCells / cells : (this.obstacle.evictedMean(cx, cy) ?? 0),
+        hasWater: water ? hasWater : (this.water.evictedMean(cx, cy) ?? 0) > 0,
+        // M30: 毒の窪地バイオームの俯瞰用。evict 済みは要約値 (平均) で近似。
+        toxinAvg: toxin ? toxinSum / cells : (this.toxin.evictedMean(cx, cy) ?? 0),
+      });
+    }
+    return out;
+  }
+
+  // 自然減衰。GridEnvironment.decay() と同じ式だが、実体のあるチャンク
+  // だけを対象にする (未探索領域は生成すらされていないので対象外)。
+  // M29: evict 済みチャンクの要約値も減衰させない — 休眠中の土地は時間が
+  // 凍っている扱い (枯れかけの餌場が休眠中に守られる = 将来の栄養再生と
+  // 同じ向きの近似)。走査コストは実体チャンク数 (前線サイズ) にだけ比例する。
   decay(nutrientRate: number, moistureRelaxRate: number, tempRelaxRate = 0, toxinDecayRate = 0): void {
     decayChunks(this.nutrients, (v) => Math.max(0, v * (1 - nutrientRate)));
     decayChunks(this.moisture, (v) => v + (this.baseMoisture - v) * moistureRelaxRate);

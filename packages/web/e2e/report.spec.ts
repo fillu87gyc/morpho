@@ -35,7 +35,8 @@ test('探索レポートを開くと数値サマリが見え、画像で保存�
   await page.click('#report-open');
   await expect(page.locator('#report-modal')).toBeVisible();
   await expect(page.locator('#report-colonies')).toHaveText(/\d+\/\d+/);
-  await expect(page.locator('#report-species')).toHaveText(/\d+\/37/);
+  // M32: 図鑑が37枠→42枠に拡張された (原野が STAGE_ORDER に加わった)。
+  await expect(page.locator('#report-species')).toHaveText(/\d+\/42/);
   await expect(page.locator('#report-achievements')).toHaveText(/\d+\/12/);
 
   await expect(page.locator('#album-count')).toHaveText('0');

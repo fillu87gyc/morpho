@@ -6,12 +6,14 @@
 
 import { WORLD, FIELD, type Tool, type GameSnapshot, type EvolutionLog, type StageId } from './game.js';
 import type { ToWorkerMessage, FromWorkerMessage, PerfInfo } from './worker-protocol.js';
+import type { MacroToolId } from './macro-tools.js';
 import type { Genome, SimState, Vec2 } from '@morpho/sim';
 import { unpackNodes, unpackEdges } from './snapshot-codec.js';
 import type { WorldEvent } from './world-events.js';
 import { readDayMsOverride } from './time-scale.js';
+import type { WorldOverview } from './world-overview.js';
 
-const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0 };
+const NO_PERF: PerfInfo = { tickMs: 0, targetSpeed: 0, effectiveSpeed: 0, daysPerMin: 0, dormantCells: 0, evictedChunks: 0 };
 
 export class GameProxy {
   private worker: Worker;
@@ -25,6 +27,9 @@ export class GameProxy {
   // M25: 直近の snapshot メッセージに乗ってきた窓シフト量。main.ts が毎フレーム
   // consumeWindowShift() で1度だけ読む (消費型、Game 本体の同名メソッドと同じ設計)。
   private pendingWindowShift: Vec2 | null = null;
+  // M28: 「原野」の全世界俯瞰の最新値。Worker から低頻度で届く (sim-worker.ts)。
+  // null = まだ届いていない、または現在のステージが有界 (worldOverview は送られない)。
+  private latestWorldOverview: WorldOverview | null = null;
 
   tool: Tool = 'food';
   brushRadius = 5;
@@ -34,8 +39,9 @@ export class GameProxy {
   fastForward = false;
 
   // parentGenome を渡すと、Worker 起動直後の初期個体をその継承先で始める
-  // (M5: 系統樹の続きをセッションをまたいで再開する)。
-  constructor(parentGenome?: Genome) {
+  // (M5: 系統樹の続きをセッションをまたいで再開する)。parentMutationBoost は
+  // その種の採種時に記録された変異幅の倍率 (M30、lineage.ts 参照)。
+  constructor(parentGenome?: Genome, parentMutationBoost?: number) {
     this.worker = new Worker(new URL('./sim-worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent<FromWorkerMessage>) => {
       const msg = e.data;
@@ -58,12 +64,14 @@ export class GameProxy {
         }
       } else if (msg.type === 'dayCompleted') {
         this.dayCompletedFlag = true;
+      } else if (msg.type === 'worldOverview') {
+        this.latestWorldOverview = msg.overview;
       }
     };
     // M15.7: URL パラメータ/localStorage による日長の上書き (開発/e2e 用フック)。
     // reset より前に送り、起動直後の tick から新しいペースを使う。
     this.send({ type: 'setDayMs', ms: readDayMsOverride() });
-    if (parentGenome) this.send({ type: 'reset', parentGenome });
+    if (parentGenome) this.send({ type: 'reset', parentGenome, parentMutationBoost });
   }
 
   // Worker からの初回スナップショットが届くまでは描画できない。
@@ -86,9 +94,15 @@ export class GameProxy {
   // 浮いた予算をtickに全振りするよう Worker に伝える。
   setFastForward(v: boolean): void { this.fastForward = v; this.send({ type: 'setFastForward', enabled: v }); }
   apply(pos: Vec2): void { this.send({ type: 'apply', pos }); }
-  reset(seed?: number, stageId?: StageId, parentGenome?: Genome): void {
-    this.send({ type: 'reset', seed, stageId, parentGenome });
+  // M31: 大局介入 (マクロツール、原野の俯瞰専用)。dir は「肥沃な帯」の
+  // ドラッグベクトル (省略可 — Game 側が母体から離れる向きへフォールバック)。
+  applyMacro(tool: MacroToolId, pos: Vec2, dir?: Vec2): void { this.send({ type: 'applyMacro', tool, pos, dir }); }
+  reset(seed?: number, stageId?: StageId, parentGenome?: Genome, parentMutationBoost?: number): void {
+    this.send({ type: 'reset', seed, stageId, parentGenome, parentMutationBoost });
     this.dayCompletedFlag = false;
+    // M28: 前ステージ (原野) の俯瞰を持ち越さない — 有界ステージへ切り替えた
+    // 場合、Worker は worldOverview を二度と送らないので、ここで消しておく。
+    this.latestWorldOverview = null;
   }
   // M9: target tick まで自動で進め、到達したら Worker が speed=0 に止める。
   // null で日境界のキャップを解除する。
@@ -109,6 +123,8 @@ export class GameProxy {
     this.pendingWindowShift = null;
     return v;
   }
+  // M28: 「原野」の全世界俯瞰の最新値 (消費型ではない — 常に最後に届いた値)。
+  worldOverview(): WorldOverview | null { return this.latestWorldOverview; }
 
   snapshot(): GameSnapshot { return this.current(); }
   events(): readonly WorldEvent[] { return this.recentEvents; }

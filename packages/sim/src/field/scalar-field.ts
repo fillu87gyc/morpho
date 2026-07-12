@@ -15,6 +15,13 @@ export interface ActivityFieldLike {
   sample(pos: Vec2): number;
   deposit(pos: Vec2, amount: number, radius: number): void;
   diffuse(decay: number, diffusion: number): void;
+  // M29 (任意): チャンク evict に対応する実装 (ChunkedScalarField) だけが持つ。
+  // 休眠判定 (graph/dormancy.ts) が存在チェックのうえで呼ぶ — 密な
+  // ActivityField/BiomassField は実装しない。
+  /** 実体化済みチャンクの中心ワールド座標一覧。 */
+  materializedChunkCenters?(): Vec2[];
+  /** 指定ワールド座標を含むチャンクを要約値へ圧縮して解放する。 */
+  evictChunkAt?(worldX: number, worldY: number): void;
 }
 export interface BiomassFieldLike extends ActivityFieldLike {
   depositSegment(a: Vec2, b: Vec2, amount: number, radius: number): void;

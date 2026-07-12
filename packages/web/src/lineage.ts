@@ -20,6 +20,12 @@ export interface LineageEntry {
   day: number;
   stageId: StageId;
   stageName: string;
+  // M30: 採種時の状況による変異幅の倍率 (原野のみ、biomes.ts の
+  // wildMutationBoost)。母体から遠くまで到達した個体・過酷なバイオーム
+  // (荒地/毒の窪地) に前線がいる個体ほど大きい。この種を植えるとき
+  // (Game.reset の parentMutationBoost) に mutationScaleFor へ乗じる。
+  // 省略時 (既存の保存データ・有界6ステージの採種) は 1 扱い。
+  mutationBoost?: number;
   harvestedAt: string; // ISO 日時
 }
 

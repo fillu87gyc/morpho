@@ -161,3 +161,60 @@ export class DailyChallengeTracker {
     this.save();
   }
 }
+
+// ── M32: 原野専用の「期限のない反復チャレンジ」 ──────────────────
+//
+// 上の3種 (fastest/cheapest/clean) は「生涯で一度だけの初回達成」を
+// DailyChallengeTracker が localStorage に永続化する設計だが、これは原野には
+// そぐわない — 原野は「拠点」も「日付をまたぐ皿の使い切り」も無い無限世界
+// なので、代わりに「今日の分」を毎日リセットして繰り返し挑戦できる
+// チャレンジを用意する (ROADMAP.md M32: 「今日中に新チャンク5つ」)。
+// 状態は「その日の開始時点の探索チャンク数」というベースラインだけを覚える
+// 薄いクラスで、DailyChallengeTracker の永続フォーマット (種別ごとの初回達成)
+// とは独立 (=既存3種の挙動・永続化には一切触れない)。
+
+export const WILD_DAILY_CHUNK_TARGET = 5;
+
+export interface WildDailyChallengeInput {
+  day: number;
+  exploredChunks: number; // 探索チャンク数 (touched の累計、単調非減少)
+}
+
+export interface WildDailyChallengeStatus {
+  title: string;
+  description: string;
+  goal: string;
+  progress: number; // [0,1]
+  done: boolean;
+  // この呼び出しで新たに達成したか (呼び出し側の報酬付与のトリガー用)。
+  // 同じ日に複数回 true にはならない (達成後の再判定は false)。
+  justCompleted: boolean;
+}
+
+export class WildDailyChallengeTracker {
+  private baselineDay: number | null = null;
+  private baselineChunks = 0;
+  private completedForDay = false;
+
+  // 毎フレーム呼ぶ。day が変わったら (皿を跨いだ日付ではなく、原野の
+  // Day カウンタが進んだら) その時点の exploredChunks をベースラインに
+  // 取り直す。
+  update(input: WildDailyChallengeInput): WildDailyChallengeStatus {
+    if (this.baselineDay !== input.day) {
+      this.baselineDay = input.day;
+      this.baselineChunks = input.exploredChunks;
+      this.completedForDay = false;
+    }
+    const gained = Math.max(0, input.exploredChunks - this.baselineChunks);
+    const progress = Math.min(1, gained / WILD_DAILY_CHUNK_TARGET);
+    const done = gained >= WILD_DAILY_CHUNK_TARGET;
+    const justCompleted = done && !this.completedForDay;
+    if (done) this.completedForDay = true;
+    return {
+      title: '今日の探索',
+      description: '新しいチャンクを踏んで、その先の土地を確かめよう',
+      goal: `1日で新チャンク ${WILD_DAILY_CHUNK_TARGET} 枚`,
+      progress, done, justCompleted,
+    };
+  }
+}

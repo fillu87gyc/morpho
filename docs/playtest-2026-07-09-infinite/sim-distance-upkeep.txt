@@ -1,0 +1,112 @@
+# M30 距離のコスト勾配 (distanceUpkeep) の before/after 実測 (2026-07-10)
+#
+# 手法: 出荷構成相当 (Game(1234, 'wildland') 直接駆動 = applyGenome(PETRI_PARAMS,
+#       genome) + wildland paramOverrides (M29-B の休眠/evict/横芽抑制込み)。
+#       BATCH=12 tick で 24,000 tick (= Day 100 相当) 駆動し 5日おきにサンプリング。
+#       ハーネス: scratchpad/sim-distance.mjs。すべて同一 seed=1234。
+# before = distanceUpkeep 無効 (K=0、= M29-B 出荷そのまま)。
+# after  = distanceUpkeep=K, distanceUpdateInterval=60 を上乗せしただけ。
+#
+# 列: span = ノード bbox の長辺。live/evicted/touched = 実体/圧縮解放済み/累計チャンク。
+#     dormant = 休眠セル数。frozen = 中点が休眠セルにあるエッジ数。
+#     maxHop = 母体連結成分の最大 hop。nearFat/farFat = 母体連結成分の
+#              h<=10 / h>=0.7*maxHop のエッジ平均 fatigue (null = そのバケツが空)。
+#     ×24 の tick 予算は 25ms/tick。
+#
+# ── 推奨値 ──────────────────────────────────────────────
+#   distanceUpkeep         = 0.005
+#   distanceUpdateInterval = 60
+#
+# ── 結論 (数字の根拠) ───────────────────────────────────
+# (1) 近傍 vs 遠端の fatigue に測定可能な差が出る: 母体連結成分で
+#     nearFat ≈ 0.27, farFat = 0.327 (+21%) を Day 20 以降ずっと維持
+#     (対照の単体テスト test/distance-upkeep.test.ts でも 30hop 一本鎖で
+#      遠端 fatigue > 近傍 + 0.5 を bit で固定)。
+# (2) span の成長ペースは budget 内: Day 40 で 613.1 → 493.7 (-19.5%、2割減の
+#     許容内)。しかもこの落ち込みは序盤の一過性で、Day 60 以降は逆転し
+#     Day 100 で 660.6 → 727.6 (+10%)。
+# (3) ★ M29-B の既知の限界「span が Day 50 以降 660 で停滞」を解消: before は
+#     Day 50〜100 を通して span 660.6 で完全に頭打ちだが、after は 657→727 と
+#     伸び続ける。内向きの稠密化/backfill が距離コストで抑えられ、配分が前線へ
+#     回るため (M29-B の横芽抑制と同じ機序が距離方向にも効く)。
+# (4) tick コストは悪化しない: 距離 BFS は flux のマルチソース BFS に便乗する
+#     ので追加走査ゼロ。Day 100 で 16.7ms/tick (before 17.8ms/tick) と誤差内。
+#
+# ── ★ 重要な限界 (M30-B へ申し送り) ────────────────────
+# 母体 (source) からの「グラフ hop 距離」は、原野では前線のごく一部しか
+# カバーしない。forager reclaim の前線は時間とともに母体から切り離される:
+#   連結成分の到達ノード数 / 全ノード数 (scratchpad/diag-connect.mjs, seed 1234):
+#     Day 5:  160 / 278  (maxHop 27、連結成分 span 91 / 全 span 250)
+#     Day 40:  17 / 2045 (maxHop  7、連結成分 span 29 / 全 span 451)
+#     Day 80:   7 / 2380 (maxHop  2、連結成分 span 12 / 全 span 525)
+# = 遠征している前線はほぼ孤立成分で、source から到達できない → sourceHops に
+#   載らない → 距離ペナルティが掛からない。つまり distanceUpkeep が効くのは
+#   「母体に繋がったまま伸びる序盤の連結コア」であって、切り離された遠征前線
+#   ではない。このため:
+#   - 「伸びすぎた遠征枝が枯れて戻る」は連結コアでは起きるが、支配的な孤立
+#     前線では起きない (期待した凍結グラフの頭打ちにはならない —
+#     frozen エッジは Day 100 で 2594 → 2854 と before より減っていない。
+#     span/edges が増えた分に比例)。
+#   - hop 距離ではなく「母体位置からのユークリッド距離」で測れば孤立前線にも
+#     効かせられる。M30-B でバイオームと配線する際は、この距離定義の見直しを
+#     推奨 (flux BFS 便乗をやめ、各ノード pos と source pos の距離を
+#     distanceUpdateInterval ごとにキャッシュする形。RNG 不使用・決定論は維持可)。
+#
+# ── 休眠 (M29) との整合 (確認済み) ──────────────────────
+# - 休眠エッジも flux BFS には参加し続ける (updateFlux は全エッジ対象) ので、
+#   休眠領域を貫く連結路の hop 距離は古びない。「休眠中は距離が古くて構わない」
+#   以前に、そもそも古びない。
+# - 休眠エッジは life.ts の状態更新ごとスキップされる (M29) ため、距離ペナルティ
+#   の fatigue 加算も掛からない = 「休眠中は消耗も凍結」と自動的に整合する。
+#   起床すれば次 tick から距離ペナルティ込みで再開する。
+#
+# ── パラメタ振りの要約 (Day 40, span / 対 before) ──────
+#   K=0     : span 613.1 (基準)            — before
+#   K=0.002 : span 613.1 (±0)              — 弱すぎ (成長判定を変えず bit 一致で不発)
+#   K=0.005 : span 493.7 (-19.5%)          — 採用 (差が出て budget 内)
+#   K=0.01  : span 472.5 (-23%)            — 却下 (2割超)
+#   K=0.02  : span 467.6 (-24%)            — 却下 (2割超)
+
+## before: K=0 (M29-B 出荷そのまま)
+{"day":5,"nodes":249,"edges":220,"span":234.4,"live":16,"evicted":4,"touched":20,"dormant":19,"frozen":156,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":9.44}
+{"day":10,"nodes":448,"edges":393,"span":262.8,"live":16,"evicted":11,"touched":27,"dormant":40,"frozen":273,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":9.15}
+{"day":15,"nodes":716,"edges":642,"span":332.6,"live":17,"evicted":20,"touched":37,"dormant":60,"frozen":444,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":11.8}
+{"day":20,"nodes":1073,"edges":951,"span":421.5,"live":14,"evicted":32,"touched":46,"dormant":95,"frozen":687,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":11.89}
+{"day":25,"nodes":1231,"edges":1071,"span":464.2,"live":23,"evicted":30,"touched":53,"dormant":111,"frozen":813,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":15.19}
+{"day":30,"nodes":1426,"edges":1226,"span":489.2,"live":23,"evicted":35,"touched":58,"dormant":127,"frozen":995,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":15}
+{"day":35,"nodes":1568,"edges":1348,"span":555.4,"live":20,"evicted":47,"touched":67,"dormant":161,"frozen":1204,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":13.26}
+{"day":40,"nodes":1793,"edges":1529,"span":613.1,"live":20,"evicted":53,"touched":73,"dormant":171,"frozen":1232,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":14.52}
+{"day":45,"nodes":1794,"edges":1531,"span":625.8,"live":17,"evicted":62,"touched":79,"dormant":197,"frozen":1409,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":15.76}
+{"day":50,"nodes":2010,"edges":1727,"span":660.6,"live":22,"evicted":60,"touched":82,"dormant":207,"frozen":1501,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":15.28}
+{"day":55,"nodes":2093,"edges":1797,"span":660.6,"live":22,"evicted":65,"touched":87,"dormant":218,"frozen":1574,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":13.85}
+{"day":60,"nodes":2277,"edges":1937,"span":660.6,"live":21,"evicted":72,"touched":93,"dormant":235,"frozen":1672,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":13.65}
+{"day":65,"nodes":2353,"edges":2012,"span":660.6,"live":21,"evicted":80,"touched":101,"dormant":262,"frozen":1807,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":15.23}
+{"day":70,"nodes":2554,"edges":2196,"span":660.6,"live":16,"evicted":91,"touched":107,"dormant":277,"frozen":2010,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":13.92}
+{"day":75,"nodes":2701,"edges":2323,"span":660.6,"live":18,"evicted":92,"touched":110,"dormant":288,"frozen":2060,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":14.72}
+{"day":80,"nodes":2874,"edges":2459,"span":660.6,"live":23,"evicted":91,"touched":114,"dormant":296,"frozen":2056,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":17.61}
+{"day":85,"nodes":2847,"edges":2447,"span":660.6,"live":21,"evicted":95,"touched":116,"dormant":312,"frozen":2216,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":16.77}
+{"day":90,"nodes":3077,"edges":2651,"span":660.6,"live":19,"evicted":101,"touched":120,"dormant":339,"frozen":2376,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":16.16}
+{"day":95,"nodes":3231,"edges":2776,"span":660.6,"live":23,"evicted":102,"touched":125,"dormant":346,"frozen":2520,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":17.13}
+{"day":100,"nodes":3264,"edges":2798,"span":660.6,"live":23,"evicted":106,"touched":129,"dormant":365,"frozen":2594,"maxHop":0,"nearFat":null,"farFat":null,"msPerTick":17.77}
+
+## after: K=0.005 (distanceUpkeep=0.005, distanceUpdateInterval=60) — 採用
+{"day":5,"nodes":335,"edges":306,"span":179.6,"live":11,"evicted":7,"touched":18,"dormant":20,"frozen":158,"maxHop":38,"nearFat":0.198,"farFat":0.218,"msPerTick":9.6}
+{"day":10,"nodes":744,"edges":668,"span":264.6,"live":18,"evicted":12,"touched":30,"dormant":55,"frozen":400,"maxHop":32,"nearFat":0.266,"farFat":0.073,"msPerTick":10.88}
+{"day":15,"nodes":867,"edges":734,"span":351.6,"live":19,"evicted":16,"touched":35,"dormant":71,"frozen":477,"maxHop":4,"nearFat":0.26,"farFat":null,"msPerTick":12.83}
+{"day":20,"nodes":1208,"edges":1031,"span":462.9,"live":20,"evicted":29,"touched":49,"dormant":123,"frozen":872,"maxHop":17,"nearFat":0.284,"farFat":0.327,"msPerTick":12.69}
+{"day":25,"nodes":1443,"edges":1218,"span":481.6,"live":17,"evicted":39,"touched":56,"dormant":135,"frozen":958,"maxHop":17,"nearFat":0.273,"farFat":0.327,"msPerTick":11.97}
+{"day":30,"nodes":1650,"edges":1397,"span":481.6,"live":22,"evicted":44,"touched":66,"dormant":159,"frozen":1093,"maxHop":17,"nearFat":0.263,"farFat":0.327,"msPerTick":14.28}
+{"day":35,"nodes":1809,"edges":1534,"span":493.7,"live":22,"evicted":51,"touched":73,"dormant":185,"frozen":1264,"maxHop":17,"nearFat":0.265,"farFat":0.327,"msPerTick":15.13}
+{"day":40,"nodes":2057,"edges":1737,"span":493.7,"live":22,"evicted":59,"touched":81,"dormant":210,"frozen":1474,"maxHop":17,"nearFat":0.269,"farFat":0.327,"msPerTick":14.65}
+{"day":45,"nodes":2169,"edges":1822,"span":529.2,"live":17,"evicted":68,"touched":85,"dormant":229,"frozen":1571,"maxHop":17,"nearFat":0.27,"farFat":0.327,"msPerTick":15.36}
+{"day":50,"nodes":2255,"edges":1909,"span":529.2,"live":20,"evicted":65,"touched":85,"dormant":230,"frozen":1527,"maxHop":17,"nearFat":0.264,"farFat":0.327,"msPerTick":14.77}
+{"day":55,"nodes":2460,"edges":2086,"span":556.3,"live":24,"evicted":73,"touched":97,"dormant":258,"frozen":1871,"maxHop":17,"nearFat":0.275,"farFat":0.327,"msPerTick":15.08}
+{"day":60,"nodes":2664,"edges":2260,"span":657.2,"live":25,"evicted":78,"touched":103,"dormant":278,"frozen":2025,"maxHop":17,"nearFat":0.271,"farFat":0.327,"msPerTick":16.13}
+{"day":65,"nodes":2749,"edges":2342,"span":663.7,"live":16,"evicted":88,"touched":104,"dormant":282,"frozen":2063,"maxHop":17,"nearFat":0.272,"farFat":0.327,"msPerTick":15.47}
+{"day":70,"nodes":2779,"edges":2368,"span":663.7,"live":18,"evicted":88,"touched":106,"dormant":285,"frozen":2181,"maxHop":17,"nearFat":0.276,"farFat":0.327,"msPerTick":16.05}
+{"day":75,"nodes":2787,"edges":2386,"span":663.7,"live":21,"evicted":86,"touched":107,"dormant":292,"frozen":2114,"maxHop":17,"nearFat":0.277,"farFat":0.327,"msPerTick":14.97}
+{"day":80,"nodes":2944,"edges":2510,"span":663.7,"live":22,"evicted":94,"touched":116,"dormant":311,"frozen":2265,"maxHop":17,"nearFat":0.275,"farFat":0.327,"msPerTick":16.98}
+{"day":85,"nodes":3191,"edges":2740,"span":663.7,"live":21,"evicted":101,"touched":122,"dormant":335,"frozen":2514,"maxHop":17,"nearFat":0.276,"farFat":0.327,"msPerTick":17.34}
+{"day":90,"nodes":3323,"edges":2828,"span":674.8,"live":17,"evicted":113,"touched":130,"dormant":363,"frozen":2638,"maxHop":17,"nearFat":0.27,"farFat":0.327,"msPerTick":18.04}
+{"day":95,"nodes":3475,"edges":2959,"span":717.6,"live":22,"evicted":112,"touched":134,"dormant":373,"frozen":2678,"maxHop":17,"nearFat":0.271,"farFat":0.327,"msPerTick":16.84}
+{"day":100,"nodes":3516,"edges":3000,"span":727.6,"live":21,"evicted":113,"touched":134,"dormant":391,"frozen":2854,"maxHop":17,"nearFat":0.268,"farFat":0.327,"msPerTick":16.73}

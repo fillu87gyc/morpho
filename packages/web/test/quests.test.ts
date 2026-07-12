@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeQuests } from '../src/quests.js';
+import { computeQuests, WILD_REACH_TARGET, WILD_BIOMES_TARGET } from '../src/quests.js';
 import type { Traits } from '@morpho/sim';
 
 const traits = (exploration: number): Traits => ({ exploration, efficiency: 0, stability: 0 });
@@ -92,5 +92,49 @@ describe('computeQuests', () => {
     const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 6, traits: traits(0), landCoverage: 1 });
     const continentQuest = quests.find((q) => q.id === 'continent-nutrient')!;
     expect(continentQuest.done).toBe(true);
+  });
+
+  // M32: 原野専用クエスト。「拠点をすべてつなぐ (connect-all)」の代わりに
+  // 到達距離、「大陸の85%を探索する (explore-70)」の代わりに発見バイオーム数
+  // を使う (どちらも原野では無限世界の節目として意味を持つ)。
+  describe('wild-reach / wild-biomes (M32: 原野専用)', () => {
+    it('reachDistance/biomesDiscovered を省略すると進捗0 (他ステージでは常にこの状態)', () => {
+      const quests = computeQuests({ coloniesReached: 0, coloniesTotal: 1, traits: traits(0) });
+      expect(quests.find((q) => q.id === 'wild-reach')!.progress).toBe(0);
+      expect(quests.find((q) => q.id === 'wild-biomes')!.progress).toBe(0);
+    });
+
+    it('wild-reach: reachDistance が WILD_REACH_TARGET に達すると完了', () => {
+      const quests = computeQuests({
+        coloniesReached: 0, coloniesTotal: 1, traits: traits(0), reachDistance: WILD_REACH_TARGET,
+      });
+      const q = quests.find((q) => q.id === 'wild-reach')!;
+      expect(q.progress).toBe(1);
+      expect(q.done).toBe(true);
+    });
+
+    it('wild-reach: 半分の距離なら進捗0.5', () => {
+      const quests = computeQuests({
+        coloniesReached: 0, coloniesTotal: 1, traits: traits(0), reachDistance: WILD_REACH_TARGET / 2,
+      });
+      expect(quests.find((q) => q.id === 'wild-reach')!.progress).toBeCloseTo(0.5, 5);
+    });
+
+    it('wild-biomes: biomesDiscovered が WILD_BIOMES_TARGET に達すると完了', () => {
+      const quests = computeQuests({
+        coloniesReached: 0, coloniesTotal: 1, traits: traits(0), biomesDiscovered: WILD_BIOMES_TARGET,
+      });
+      const q = quests.find((q) => q.id === 'wild-biomes')!;
+      expect(q.progress).toBe(1);
+      expect(q.done).toBe(true);
+    });
+
+    it('wild-biomes: 進捗は常に [0,1] にクランプされる (発見数が目標を超えても1のまま)', () => {
+      const quests = computeQuests({
+        coloniesReached: 0, coloniesTotal: 1, traits: traits(0), biomesDiscovered: 5, reachDistance: 10_000,
+      });
+      expect(quests.find((q) => q.id === 'wild-biomes')!.progress).toBe(1);
+      expect(quests.find((q) => q.id === 'wild-reach')!.progress).toBe(1);
+    });
   });
 });

@@ -57,6 +57,9 @@ let lastTickMs = 0;
 let ticksInWindow = 0;
 let windowStartMs = performance.now();
 let effectiveSpeed = 0;
+// M29: 実効ペース「日/分」。effectiveSpeed (倍率) と違い dayMs に依存しない
+// 絶対値なので、「×24 なのに実際は何日/分出ているか」を HUD で直読みできる。
+let daysPerMin = 0;
 const EFFECTIVE_SPEED_WINDOW_MS = 500;
 
 // M8 P2: 時間予算スケジューラ。「speed 倍を毎 16ms 必ず全部回す」のではなく、
@@ -79,14 +82,22 @@ let lastDerived: DerivedSnapshot = game.snapshotDerived();
 let lastDerivedAtMs = performance.now();
 let forceDerived = false;
 
+// M28: 「原野」の全世界俯瞰。チャンク要約の走査は snapshot と桁違いに重く
+// なりうる (生成済みチャンク数に比例) ので、1秒に1回まで間引く。盤面が
+// 変わっていない間 (dirty が一度も立たなかった間) は再送もしない。
+const WORLD_OVERVIEW_INTERVAL_MS = 1000;
+let lastOverviewAtMs = 0;
+let overviewPending = true; // 起動直後・reset/apply 後は次の機会に必ず送る
+
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
-    case 'reset': game.reset(msg.seed, msg.stageId, msg.parentGenome); dirty = true; forceDerived = true; break;
+    case 'reset': game.reset(msg.seed, msg.stageId, msg.parentGenome, msg.parentMutationBoost); dirty = true; forceDerived = true; break;
     case 'setSpeed': game.setSpeed(msg.speed); break;
     case 'setTool': game.setTool(msg.tool); break;
     case 'setBrush': game.setBrush(msg.radius); break;
     case 'apply': game.apply(msg.pos); dirty = true; forceDerived = true; break;
+    case 'applyMacro': game.applyMacro(msg.tool, msg.pos, msg.dir); dirty = true; forceDerived = true; break;
     case 'setFastForward': {
       fastForward = msg.enabled;
       loopIntervalMs = fastForward ? FAST_FORWARD_INTERVAL_MS : TICK_INTERVAL_MS;
@@ -152,8 +163,20 @@ function loop(): void {
   if (windowElapsed >= EFFECTIVE_SPEED_WINDOW_MS) {
     // 「×1 (1 tick = baseTickMs ms) で進めた場合」を基準にした倍率 (M15.7)。
     effectiveSpeed = (ticksInWindow / windowElapsed) * baseTickMs;
+    // M29: 同じ実測ウィンドウから「日/分」も出す (ticks/ms → 日/分)。
+    daysPerMin = (ticksInWindow / windowElapsed) * 60_000 / TICKS_PER_DAY;
     ticksInWindow = 0;
     windowStartMs = now;
+  }
+  // M28: 盤面が変わった (dirty が立った) ことを覚えておき、間引き間隔ごとに
+  // 全世界俯瞰を送り直す。dirty 自体は下の snapshot 送信でクリアされるため、
+  // 別フラグに写し取っておく (間隔未達のまま dirty が消えても取りこぼさない)。
+  if (dirty) overviewPending = true;
+  if (overviewPending && now - lastOverviewAtMs >= WORLD_OVERVIEW_INTERVAL_MS) {
+    lastOverviewAtMs = now;
+    overviewPending = false;
+    const overview = game.worldOverview(); // 有界6ステージでは null (送らない)
+    if (overview) ctx.postMessage({ type: 'worldOverview', overview });
   }
   if (dirty) {
     if (forceDerived || now - lastDerivedAtMs >= DERIVED_INTERVAL_MS) {
@@ -178,7 +201,7 @@ function loop(): void {
       snapshot: wire,
       events: game.events(),
       evolution: game.evolution(),
-      perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed },
+      perf: { tickMs: lastTickMs, targetSpeed: game.speed, effectiveSpeed, daysPerMin, ...game.dormancyCounters() },
       // M25: この snapshot が反映する tick() 呼び出し群の間に窓が動いた量。
       // dirty (=この回で実際に snapshot を送る) のときだけ消費する —
       // 送らない回で消費すると、次に実際に送られる snapshot にその分の

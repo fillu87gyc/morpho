@@ -5,15 +5,21 @@
 // (アーキテクチャ方針: sim はステートレスに保つ)。
 
 import { type GridEnvironment, type SeededRNG, type SimParams, type Vec2 } from '@morpho/sim';
+import { biomeAt, type BiomeId } from './biomes.js';
 
 export type StageId = 'petri' | 'cave' | 'desert' | 'ruins' | 'wetland' | 'continent' | 'wildland';
 
 // M25: 「原野」用のチャンク単位の地形生成 (無限ワールド)。既存6ステージの
 // generateTerrain (GridEnvironment 全体を一度だけ焼く) とは前提が違う —
 // ChunkedGridEnvironment がチャンクを初めて触れた瞬間に1度ずつ呼ばれる。
+// M30: バイオーム表現のため toxin/moisture/water を追加 (sim 側の
+// ChunkedGridEnvironmentInit.generateTerrain と同じ形)。
 export interface ChunkTerrainResult {
   obstaclePatches?: { x: number; y: number; radius: number }[];
   foodPatches?: { x: number; y: number; radius: number; amount: number }[];
+  toxinPatches?: { x: number; y: number; radius: number; amount: number }[];
+  moisturePatches?: { x: number; y: number; radius: number; amount: number }[];
+  waterPatches?: { x: number; y: number; radius: number }[];
 }
 
 // M14: 大陸ステージ専用。source (拠点の種となるコロニー核) と
@@ -57,7 +63,14 @@ export interface StageConfig {
   chunkTerrain?(coord: { cx: number; cy: number }, rng: SeededRNG, worldSeed: number): ChunkTerrainResult;
 }
 
-export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland', 'continent'];
+// M32: 原野 (半無限ワールド) を図鑑/系統樹の対象ステージへ加える。
+// catalogue.ts の STANDARD_ENTRIES は「5タイプ × STAGE_ORDER」で決まるため、
+// この1行の追加だけで図鑑の枠 (37→42) が増える。既存の id 文字列
+// (`${typeId}:${stageId}`) は配列の並び順に依存しないので、既存6ステージの
+// 図鑑エントリの id・localStorage との対応関係は完全に不変 (末尾への追加のみ)。
+// 「37枠の拡張 vs 原野専用の別枠」の判断は ROADMAP.md M32 実装メモを参照 —
+// この配列を素直に拡張する方を選んだ (実装が単純・既存データを一切壊さない)。
+export const STAGE_ORDER: StageId[] = ['petri', 'cave', 'desert', 'ruins', 'wetland', 'continent', 'wildland'];
 
 function dist(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -300,11 +313,144 @@ function generateContinentTerrain(env: GridEnvironment, rng: SeededRNG, worldSiz
 // chunkTerrain のローカル座標範囲を揃えるための共有定数)。
 export const WILDLAND_CHUNK_CELLS = 48;
 
+// M30: 原野の実座標系の広さと開始点。growth.ts の worldMargin 境界判定に
+// 実用上ひっかからない程度に大きい値 (実質「無限」)。game.ts と main.ts
+// (採種時の実座標復元) が同じ値を共有できるよう、ここで定義する。
+export const WILDLAND_WORLD_SIZE = 1_000_000;
+export const WILDLAND_CENTER: Vec2 = { x: WILDLAND_WORLD_SIZE / 2, y: WILDLAND_WORLD_SIZE / 2 };
+
+// 開始点を含むチャンク番地。開始地点の周囲 (Chebyshev 1チャンク以内) は
+// ノイズの結果に依らず「母体の森」バイオームに固定する — 初手が荒地や
+// 毒地帯で即詰みになる seed を作らないための救済。
+// M31 (極小スタート): バイオームは森のまま、地形 (餌の湧き) だけを痩せさせる
+// (下の wildlandChunkTerrain 参照)。
+const WILDLAND_HOME_CX = Math.floor(WILDLAND_CENTER.x / WILDLAND_CHUNK_CELLS);
+const WILDLAND_HOME_CY = Math.floor(WILDLAND_CENTER.y / WILDLAND_CHUNK_CELLS);
+
+// 原野のバイオーム (母体の森の固定込み)。地形生成 (wildlandChunkTerrain) と
+// 収入 (watch-income.ts の新バイオーム発見)・採種 boost (main.ts) が同じ
+// 判定を共有できるよう、ここに一元化する。
+export function wildlandBiomeAt(cx: number, cy: number, worldSeed: number): BiomeId {
+  const home = Math.max(Math.abs(cx - WILDLAND_HOME_CX), Math.abs(cy - WILDLAND_HOME_CY)) <= 1;
+  return home ? 'forest' : biomeAt(cx, cy, worldSeed);
+}
+
+// M30: 原野のチャンク地形をバイオームで生成する。純粋なノイズ分類は
+// biomes.ts (vitest 対象)、ここは「バイオーム → どんなパッチを湧かすか」。
+// rng はチャンクごとに (worldSeed, cx, cy) から決定的に引き直される
+// (chunked-environment.ts) ので、バイオームごとに消費数が違っても他の
+// チャンクへ影響しない。
+export function wildlandChunkTerrain(coord: { cx: number; cy: number }, rng: SeededRNG, worldSeed: number): ChunkTerrainResult {
+  const cells = WILDLAND_CHUNK_CELLS;
+  const p = () => rng.range(4, cells - 4); // チャンク内のランダム点 (縁は避ける)
+
+  // ── M31: 極小スタート ──────────────────────────────────
+  // 原野の開始は「胞子1個 + 最初の餌パッチ1つ」。M30 までは母体の森 3×3 が
+  // フルの森地形 (餌2パッチ×9チャンク = 約18パッチ) で、開始1日で網が勝手に
+  // 爆発し (Day 1 で89リンク)、手動介入の出番がなかった (ROADMAP.md V7)。
+  //   - 開始チャンク: 胞子のすぐそば (距離約10) に小さな餌パッチを1つだけ。
+  //   - 母体の森の残り8チャンク: 40% の確率で小さなパッチ1つ (期待値 約3.2)。
+  //     無介入だと Day 0〜3 の成長は鈍く、餌/水を置けば明確に応える。
+  //     完全にゼロにはしない — 見守り放置でも数日かけて自走を始められる
+  //     飛び石を残す (荒地の飛び石 30% と同じ詰み防止の考え方)。
+  // バイオーム分類そのものは森のまま (wildlandBiomeAt)。
+  const homeDist = Math.max(Math.abs(coord.cx - WILDLAND_HOME_CX), Math.abs(coord.cy - WILDLAND_HOME_CY));
+  if (homeDist === 0) {
+    // 胞子のチャンク内ローカル座標 (WILDLAND_CENTER は chunk 境界に揃って
+    // いないため、原点差で求める)。
+    const sx = WILDLAND_CENTER.x - WILDLAND_HOME_CX * cells;
+    const sy = WILDLAND_CENTER.y - WILDLAND_HOME_CY * cells;
+    // 「最初の餌」: 胞子から距離 9〜12 のランダム方位。極小の初期ネットワーク
+    // (枝2本) が Day 0 のうちに自力で届く距離。amount は foodReachThreshold
+    // (0.55) を明確に超える「根を張れる餌」(sink 化してひと口目の食事になる)。
+    const a = rng.range(0, Math.PI * 2);
+    const d = rng.range(9, 12);
+    const fx = Math.min(cells - 4, Math.max(4, sx + Math.cos(a) * d));
+    const fy = Math.min(cells - 4, Math.max(4, sy + Math.sin(a) * d));
+    return {
+      foodPatches: [{ x: fx, y: fy, radius: rng.range(2.5, 3.5), amount: rng.range(0.9, 1.2) }],
+      moisturePatches: [{ x: sx, y: sy, radius: rng.range(10, 14), amount: rng.range(0.08, 0.14) }],
+    };
+  }
+  if (homeDist === 1) {
+    return {
+      foodPatches: rng.next() < 0.40
+        ? [{ x: p(), y: p(), radius: rng.range(3, 4.5), amount: rng.range(0.7, 1.0) }]
+        : [],
+      moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 16), amount: rng.range(0.08, 0.14) }],
+    };
+  }
+
+  const biome: BiomeId = wildlandBiomeAt(coord.cx, coord.cy, worldSeed);
+  switch (biome) {
+    case 'forest': {
+      // 豊かな森: 餌パッチ多め (2つ) + 湿潤。M25→M29 の一様地形 (全チャンク
+      // 1パッチ, amount 0.9-1.3) より少し豊か。
+      return {
+        foodPatches: [
+          { x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(1.0, 1.4) },
+          { x: p(), y: p(), radius: rng.range(3, 5), amount: rng.range(0.8, 1.1) },
+        ],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 16), amount: rng.range(0.10, 0.18) }],
+        obstaclePatches: rng.next() < 0.15 ? [{ x: p(), y: p(), radius: rng.range(2, 3.5) }] : [],
+      };
+    }
+    case 'barrens': {
+      // 痩せた荒地: 餌なし〜稀 (30% で小さな飛び石が1つ)。乾いている。
+      // 横断の旅を生む主役 — 前線はここで一旦止まり、reclaim の這い出しで
+      // 飛び石を伝って渡る。飛び石ゼロにすると連続した荒地で完全に詰む
+      // (ハーネス実測、ROADMAP.md M30 実装メモ)。
+      return {
+        foodPatches: rng.next() < 0.30
+          ? [{ x: p(), y: p(), radius: rng.range(2.5, 3.5), amount: rng.range(0.35, 0.55) }]
+          : [],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(12, 20), amount: -rng.range(0.06, 0.12) }],
+        obstaclePatches: rng.next() < 0.2 ? [{ x: p(), y: p(), radius: rng.range(2, 3) }] : [],
+      };
+    }
+    case 'rocky': {
+      // 岩場: 障害物多・餌少。通れるが遠回りになる。
+      const rocks = 3 + Math.floor(rng.next() * 3); // 3〜5
+      return {
+        obstaclePatches: Array.from({ length: rocks }, () => ({ x: p(), y: p(), radius: rng.range(2.5, 5) })),
+        foodPatches: rng.next() < 0.6
+          ? [{ x: p(), y: p(), radius: rng.range(3, 4.5), amount: rng.range(0.6, 0.9) }]
+          : [],
+      };
+    }
+    case 'toxic': {
+      // 毒の窪地: 毒素 + 餌豊か (リスクリワード)。toxinPenalty (と genome の
+      // toxinResistance) が働くので、系統によっては素通りできる。
+      return {
+        toxinPatches: [
+          { x: p(), y: p(), radius: rng.range(5, 8), amount: rng.range(0.35, 0.55) },
+          { x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(0.25, 0.4) },
+        ],
+        foodPatches: [
+          { x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(1.2, 1.6) },
+          { x: p(), y: p(), radius: rng.range(3, 5), amount: rng.range(0.9, 1.2) },
+        ],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 14), amount: rng.range(0.08, 0.15) }],
+      };
+    }
+    case 'waterside': {
+      // 水辺: 水域 (通行不能) + 湿潤 + 中程度の餌。
+      const lakes = 1 + (rng.next() < 0.5 ? 1 : 0);
+      return {
+        waterPatches: Array.from({ length: lakes }, () => ({ x: p(), y: p(), radius: rng.range(3, 6) })),
+        foodPatches: [{ x: p(), y: p(), radius: rng.range(4, 6), amount: rng.range(0.9, 1.3) }],
+        moisturePatches: [{ x: p(), y: p(), radius: rng.range(10, 16), amount: rng.range(0.12, 0.2) }],
+      };
+    }
+  }
+}
+
 export const STAGES: Record<StageId, StageConfig> = {
   petri: {
     id: 'petri',
     name: '皿',
-    description: '起伏の少ない、育成の基本となる培養皿。',
+    // M32: 「皿 (チュートリアル) → 原野 (本編)」の推奨動線を説明文にも明示する。
+    description: '起伏の少ない、育成の基本を学べる培養皿 (チュートリアル)。慣れたら原野へ。',
     baseMoisture: 0.3,
     baseBrightness: 0.2,
     baseTemperature: 0.5,
@@ -403,32 +549,67 @@ export const STAGES: Record<StageId, StageConfig> = {
   wildland: {
     id: 'wildland',
     name: '原野',
-    description: '果てのない野原。歩けば歩くほど、その先にも大地が続いている。',
+    // M32: 原野が本編であることを説明文でも明示する (有界6ステージは
+    // チュートリアル & チャレンジ集として位置づけ直した、ROADMAP.md M32)。
+    description: '果てのない野原 — 本編はここ。歩けば歩くほど、その先にも大地が続いている。',
     baseMoisture: 0.32,
     baseBrightness: 0.22,
     baseTemperature: 0.5,
     // sim/test/forage-reclaim.test.ts で実証済みの値。0 (既定・無効) だと
     // 前線が sink で詰まり Day24 相当で完全停止する (ROADMAP.md M25)。
-    paramOverrides: { forageReclaimThreshold: 0.3 },
+    paramOverrides: {
+      forageReclaimThreshold: 0.3,
+      // M29: 成熟領域の休眠 + チャンク evict。前線 (最新 born 上位4セル +
+      // margin 1セル) 以外のエッジは更新を止め、awake から遠いチャンクは
+      // 平均値へ圧縮して解放する。値は sim 直接駆動の実測
+      // (docs/playtest-2026-07-09-infinite/sim-100day-dormancy.txt) で
+      // span を維持しつつチャンク数が頭打ちになった推奨値。既存6ステージは
+      // dormancyCheckInterval=0 (既定) のままなので bit 一致で不変。
+      dormancyCheckInterval: 60,
+      // 休眠セル一辺。チャンク一辺 (WILDLAND_CHUNK_CELLS=48 × 1) のちょうど
+      // 半分 = 1チャンクが 2×2 セルに整数分割される。48 (1:1) との対照実験では
+      // 24 の方が前線の awake 領域を細かく絞れて Day 40 で 13ms/tick vs 31ms/tick
+      // (span はほぼ同じ 613 vs 594)。evict の判定はチャンク中心セル ±1 なので
+      // セルがチャンクより細かくても awake に重なるチャンクを誤って解放しない。
+      dormancyCellWorld: 24,
+      dormancyFrontierCells: 4,
+      dormancyFrontierMargin: 1,
+      dormancyEvict: true,
+      // M29: 稠密化の抑制。出荷構成 (applyGenome(PETRI_PARAMS, genome)) は
+      // 皿サイズの「面を膜で埋める」チューニングで、原野では横芽が前進より
+      // 速く、窓の中が迷路化していた (第5回実測: Day 16 でエッジ6,908本、
+      // 実効45〜60秒/日)。横芽の条件を DEFAULT 寄りへ絞ると、Day 40 の
+      // 対照実験 (同一 seed、Game 直接駆動) でエッジ 8,729→1,529 (-82%) に
+      // 対して span は 677→613 (-9%) に留まり、「エッジ数の増加 < span の
+      // 増加」へ配分が反転する (ROADMAP.md M29 の実装メモ参照)。
+      lateralBudBiomassThreshold: 0.55,
+      lateralBudProbability: 0.12,
+      // M30: 距離のコスト勾配。「母体から近い組織は消費が緩やか、遠征して
+      // いる組織は早く消耗する」(ビジョン第4項)。'origin' = スタート地点
+      // からのユークリッド距離で、forager reclaim が母体から切り離した
+      // 孤立前線にも等しく効く (M30-A の hop 距離の既知の限界を解消)。
+      // K は hop 版の推奨値 0.005/hop を 1 hop ≈ growthStep 3.6 world unit
+      // で再スケールした 0.0015/unit。対照実験 (seed 1234, Day 100,
+      // ROADMAP.md M30 実装メモ) で「遠征枝が伸びて→枯れて→別方向へ」の
+      // 収縮と再拡張が観察でき、span は K=0 と同規模を保つ。
+      distanceUpkeep: 0.0015,
+      distanceUpdateInterval: 60,
+      distanceMode: 'origin',
+    },
     foodAmountMultiplier: 1.0,
     nutrientDecayPerTick: 0.0006,
     moistureRelaxPerTick: 0.0009,
     tempRelaxPerTick: 0.0009,
-    toxinDecayPerTick: 0.0015,
+    // M30: 毒の窪地バイオームが数日で無害化しないよう、原野だけ毒素の自然
+    // 分解を遅くする (0.0015 → 半減期約2日 だったのを約7日へ)。チャンクは
+    // 前線が触れた瞬間に生成されるので、到達時点では常に「湧きたて」の毒。
+    toxinDecayPerTick: 0.0004,
     infinite: true,
     // 無限ステージでは使わない (chunkTerrain が代わりを務める)。型を満たす
     // だけの no-op。
     generateTerrain: () => [],
-    chunkTerrain: (_coord, rng, _worldSeed): ChunkTerrainResult => {
-      const cells = WILDLAND_CHUNK_CELLS;
-      const obstaclePatches = rng.next() < 0.35
-        ? [{ x: rng.range(4, cells - 4), y: rng.range(4, cells - 4), radius: rng.range(2, 5) }]
-        : [];
-      const foodPatches = [{
-        x: rng.range(4, cells - 4), y: rng.range(4, cells - 4),
-        radius: rng.range(4, 6), amount: rng.range(0.9, 1.3),
-      }];
-      return { obstaclePatches, foodPatches };
-    },
+    // M30: バイオーム地形 (上の wildlandChunkTerrain)。M25〜M29 の一様地形
+    // (全チャンク必ず餌1パッチ) を置き換える。
+    chunkTerrain: wildlandChunkTerrain,
   },
 };

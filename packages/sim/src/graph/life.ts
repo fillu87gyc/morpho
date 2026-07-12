@@ -9,6 +9,7 @@ import type { ActivityFieldLike, BiomassFieldLike } from '../field/scalar-field.
 import type { EventBus } from '../events/bus.js';
 import type { SimParams } from './params.js';
 import { type NodeIndex, buildDensityGrid, clamp01, crowdingAt } from './index-utils.js';
+import { dormantSetOf, dormancyCellKeyAt } from './dormancy.js';
 
 // crowdingAt が 3x3 近傍探索だけで半径内を漏れなくカバーできる条件は
 // cellSize == radius (index-utils.ts 参照)。呼び出し側の半径 (4) と揃える。
@@ -29,15 +30,28 @@ export function updateActivity(
   state: SimState, env: Environment, actField: ActivityFieldLike,
   params: SimParams, idx: NodeIndex,
 ): void {
+  // M29: 休眠セル (成熟して前線から遠い領域) のエッジは deposit と状態更新の
+  // 両方をスキップする。dormant が undefined (既定 = 休眠無効) ならセルキー
+  // 計算ごと省くので、既存ステージの挙動・演算は bit 一致で不変。
+  const dormant = dormantSetOf(state, params);
+  const cw = params.dormancyCellWorld;
+
+  // M30: 距離のコスト勾配。母体からの距離キャッシュ (flux.ts が低頻度で記録。
+  // distanceMode='hops' なら hop 数、'origin' なら原点からのユークリッド距離)
+  // を引き、遠いエッジほど fatigue の増分を増やし回復を減らす。式はどちらの
+  // モードでも同一 (係数 distanceUpkeep をモードに応じて再スケールする)。
+  // 既定 (distanceUpkeep=0) では hops が undefined になり従来と同一の式を通る
+  // = bit 一致で不変。
+  const hops = params.distanceUpkeep > 0 ? state.sourceHops : undefined;
+
   // 自身の activity を場に書き込む (伝播の源泉)
   for (const e of state.edges) {
     if (e.activity < 0.1) continue;
     const a = idx.byId.get(e.from), b = idx.byId.get(e.to);
     if (!a || !b) continue;
-    actField.deposit(
-      { x: (a.pos.x + b.pos.x) / 2, y: (a.pos.y + b.pos.y) / 2 },
-      e.activity * params.activityDeposit, 3,
-    );
+    const mx = (a.pos.x + b.pos.x) / 2, my = (a.pos.y + b.pos.y) / 2;
+    if (dormant && dormant.has(dormancyCellKeyAt(mx, my, cw))) continue;
+    actField.deposit({ x: mx, y: my }, e.activity * params.activityDeposit, 3);
   }
   // 拡散 (spread/decay) は 2 tick に 1 回だけ回し、係数を2倍にして
   // 「2tickぶん」を1回でまとめる近似にする。deposit (書き込み) は
@@ -56,6 +70,10 @@ export function updateActivity(
     const a = idx.byId.get(e.from), b = idx.byId.get(e.to);
     if (!a || !b) continue;
     const mid: Vec2 = { x: (a.pos.x + b.pos.x) / 2, y: (a.pos.y + b.pos.y) / 2 };
+    // M29: 休眠エッジは activity/fatigue/stress を凍結する (環境サンプリング
+    // より前に抜けるのが重要 — sampleGrowthContext は evict 済みチャンクを
+    // 再実体化させてしまう)。
+    if (dormant && dormant.has(dormancyCellKeyAt(mid.x, mid.y, cw))) continue;
     const ctx = env.sampleGrowthContext(mid);
     const fluxN = Math.min(1, e.flux / params.fluxNormalize);
     const youth = Math.max(0, 1 - (state.tick - e.bornAt) / 100);
@@ -79,7 +97,19 @@ export function updateActivity(
     // 高温側 (最適+許容域を超えた分) でのみ疲労が増しやすくなる。
     const heatExcess = Math.max(0, ctx.temperature - (params.tempOptimal + params.tempTolerance));
     const fatigueMult = 1 + heatExcess * 2;
-    e.fatigue += e.activity * params.fatigueGrow * fatigueMult - fluxN * params.fatigueRecover;
+    if (hops) {
+      // M30: エッジの距離 = 両端点の hop の小さい方 (source 寄りの端で測る)。
+      // キャッシュ更新後に生まれた新ノードはエントリを持たないので、親側の
+      // 端点の値で代用する (両方無ければ 0 = 猶予。次回更新で正しい値になる)。
+      const ha = hops.get(e.from), hb = hops.get(e.to);
+      const h = ha === undefined ? (hb ?? 0) : hb === undefined ? ha : ha < hb ? ha : hb;
+      // 効果は連続的: 母体近傍 (h ≈ 0) では f ≈ 1 で実質ゼロ、遠征先では
+      // 消耗が f 倍・回復が 1/f 倍になり、疲労の収支が距離とともに悪化する。
+      const f = 1 + params.distanceUpkeep * h;
+      e.fatigue += e.activity * params.fatigueGrow * fatigueMult * f - (fluxN * params.fatigueRecover) / f;
+    } else {
+      e.fatigue += e.activity * params.fatigueGrow * fatigueMult - fluxN * params.fatigueRecover;
+    }
     if (e.fatigue < 0) e.fatigue = 0;
     if (e.fatigue > 3) e.fatigue = 3;
 
@@ -98,9 +128,14 @@ export function updateActivity(
 export function updateBiomass(
   state: SimState, bioField: BiomassFieldLike, params: SimParams, idx: NodeIndex,
 ): void {
+  // M29: 休眠エッジは膜の滲ませ (depositSegment) をスキップする。休眠領域の
+  // biomass は evict されるか、拡散・減衰だけでゆっくり落ち着いていく。
+  const dormant = dormantSetOf(state, params);
+  const cw = params.dormancyCellWorld;
   for (const e of state.edges) {
     const a = idx.byId.get(e.from), b = idx.byId.get(e.to);
     if (!a || !b) continue;
+    if (dormant && dormant.has(dormancyCellKeyAt((a.pos.x + b.pos.x) / 2, (a.pos.y + b.pos.y) / 2, cw))) continue;
     // activity と太さの両方が乗ることで、活きた幹は厚く、瀕死の細枝は薄く。
     const amount = params.biomassDeposit * (0.25 + e.activity) * (0.5 + Math.min(2, e.radius));
     const r = params.biomassRadius + Math.min(1.8, e.radius * 0.6);
@@ -114,8 +149,16 @@ export function updateBiomass(
 
 // ── Radius: activity * flux で太る、fatigue で細る ─
 
-export function updateRadius(state: SimState, params: SimParams, bus: EventBus): void {
+export function updateRadius(state: SimState, params: SimParams, bus: EventBus, idx: NodeIndex): void {
+  // M29: 休眠エッジは radius も凍結する (中点セルの判定に位置が要るため、
+  // M29 で idx を引数に足した — 休眠無効時は一切参照しない)。
+  const dormant = dormantSetOf(state, params);
+  const cw = params.dormancyCellWorld;
   for (const e of state.edges) {
+    if (dormant) {
+      const a = idx.byId.get(e.from), b = idx.byId.get(e.to);
+      if (a && b && dormant.has(dormancyCellKeyAt((a.pos.x + b.pos.x) / 2, (a.pos.y + b.pos.y) / 2, cw))) continue;
+    }
     const youth = Math.max(0, 1 - (state.tick - e.bornAt) / 80);
     const grow = e.activity * (Math.min(1, e.flux / 5) + youth * 0.3) * params.alpha;
     const shrink = (1 + e.fatigue) * params.beta * e.radius;

@@ -23,6 +23,24 @@ export interface ChunkedScalarFieldOptions {
   cellWorldSize?: number;
 }
 
+// M28: 生成済みチャンク1枚ぶんの集計。描画の概念は持ち込まず、数値の
+// 集計だけを返す (絵にするのは web 側の責務 — ROADMAP.md アーキテクチャ方針)。
+export interface FieldChunkSummary {
+  cx: number;
+  cy: number;
+  /** チャンク内全セルの値の総和。 */
+  total: number;
+  /** threshold を超える (>) セルの数。 */
+  cellsAbove: number;
+}
+
+// M28: 全世界統計 (summarizeChunks の全チャンク合算)。
+export interface FieldWorldStats {
+  total: number;
+  cellsAbove: number;
+  chunkCount: number;
+}
+
 export class ChunkedScalarField {
   private grid: ChunkedFieldGrid;
   readonly chunkCells: number;
@@ -88,9 +106,72 @@ export class ChunkedScalarField {
     for (const { cx, cy, data } of out) this.grid.setChunkData(cx, cy, data);
   }
 
-  /** 現在メモリ上に存在するチャンク数 (描画/デバッグ用)。 */
+  /** 現在メモリ上に実体があるチャンク数 (evict 済みは含まない)。 */
   generatedChunkCount(): number {
     return this.grid.chunkCount();
+  }
+
+  /** M29: evict 済み (要約値だけ保持) のチャンク数。 */
+  evictedChunkCount(): number {
+    return this.grid.evictedChunkCount();
+  }
+
+  /** M29: 触れたことのあるチャンク数 (実体 + evict 済み)。探索統計用。 */
+  touchedChunkCount(): number {
+    return this.grid.chunkCount() + this.grid.evictedChunkCount();
+  }
+
+  // M29: 休眠判定 (graph/dormancy.ts) が呼ぶ evict 対応 (ActivityFieldLike の
+  // optional メソッド)。実体チャンクを平均値へ圧縮して解放し、diffuse の走査
+  // 対象から外す。再訪時は平均で塗り戻される (決定的な近似)。
+  materializedChunkCenters(): Vec2[] {
+    return this.grid.generatedChunks().map((c) => this.grid.chunkCenterWorld(c));
+  }
+
+  evictChunkAt(worldX: number, worldY: number): void {
+    this.grid.evictChunkAt(worldX, worldY);
+  }
+
+  // M28: 生成済みチャンクごとの要約 (総和 + threshold 超過セル数)。
+  // peekChunk (副作用なし) で読むだけなので、呼んでもチャンク集合は一切
+  // 変わらない = 決定論を乱さない。走査は生成済みチャンクのみで、呼び出し
+  // 時にだけ行う (毎tickの固定費にはしない — 呼ぶ頻度は呼び出し側の責務)。
+  summarizeChunks(threshold = 0): FieldChunkSummary[] {
+    const out: FieldChunkSummary[] = [];
+    for (const { cx, cy } of this.grid.generatedChunks()) {
+      const data = this.grid.peekChunk(cx, cy);
+      if (!data) continue;
+      let total = 0, cellsAbove = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i] ?? 0;
+        total += v;
+        if (v > threshold) cellsAbove++;
+      }
+      out.push({ cx, cy, total, cellsAbove });
+    }
+    // M29: evict 済みチャンクも要約値 (平均) から近似で数える — 世界統計
+    // (HUD の総面積/総量、M28) が evict でいきなり痩せないようにするため。
+    // cellsAbove は「平均が threshold 超なら全セル / でなければ 0」の粗い
+    // 近似 (evict 済み領域はそもそも一様に塗り戻される前提と整合する)。
+    const cellCount = this.chunkCells * this.chunkCells;
+    for (const { cx, cy } of this.grid.evictedChunks()) {
+      const mean = this.grid.evictedMean(cx, cy) ?? 0;
+      out.push({ cx, cy, total: mean * cellCount, cellsAbove: mean > threshold ? cellCount : 0 });
+    }
+    return out;
+  }
+
+  // M28: 全世界の総和と閾値超過セル数 (summarizeChunks の合算)。「窓の中
+  // しか数えない HUD」(ROADMAP.md V2) を世界全体の数字に置き換えるための、
+  // チャンク横断の軽い集計。
+  summarizeWorld(threshold = 0): FieldWorldStats {
+    let total = 0, cellsAbove = 0, chunkCount = 0;
+    for (const s of this.summarizeChunks(threshold)) {
+      total += s.total;
+      cellsAbove += s.cellsAbove;
+      chunkCount++;
+    }
+    return { total, cellsAbove, chunkCount };
   }
 
   protected depositSegmentInternal(a: Vec2, b: Vec2, amount: number, radius: number): void {

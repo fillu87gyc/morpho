@@ -1,0 +1,32 @@
+# M29-B 実プレイ検証 (2026-07-10): vite preview + headless Chromium、原野を ×24 で 5.5 分観察。
+# ハーネス: scratchpad/playtest-m29.mjs (?debug、HUD を15秒おきにサンプリング)。
+# 公称 ×24 = 10 日/分 (dayMs 既定 144s)。before (M29 前、同ディレクトリ
+# browser-hud-samples.txt) は Day 6 で tick 63.6ms・実効 ×3.7、Day 16 で
+# エッジ 6,908 本・実効 45〜60 秒/日 (≈1.0〜1.3 日/分) だった。
+# after: 5.5 分で Day 49 到達。pace は Day 2 → Day 49 まで 6.6〜10.8 日/分を
+# 維持 (公称の 66〜108%)、tick は 9.4〜22.0ms で頭打ち。エッジは Day 49 で
+# 1,521 本。console エラーなし。
+t=15s {"day":"2","area":"2,947","mass":"3.77","links":"110","reach":"55","chunks":"12","perf":"FPS 52 | draw 3.70ms | tick 9.50ms | speed x23.2 / x24 | pace 9.66 日/分 | dormant 1 cells / evict 3","sliderMin":"0.40"}
+t=30s {"day":"5","area":"6,382","mass":"4.83","links":"205","reach":"114","chunks":"16","perf":"FPS 51 | draw 6.20ms | tick 9.39ms | speed x24.7 / x24 | pace 10.30 日/分 | dormant 13 cells / evict 2","sliderMin":"0.40"}
+t=45s {"day":"7","area":"13,272","mass":"3.58","links":"271","reach":"160","chunks":"23","perf":"FPS 57 | draw 4.80ms | tick 9.99ms | speed x24.4 / x24 | pace 10.15 日/分 | dormant 28 cells / evict 8","sliderMin":"0.27"}
+t=60s {"day":"9","area":"18,801","mass":"6.67","links":"528","reach":"183","chunks":"31","perf":"FPS 58 | draw 2.70ms | tick 16.26ms | speed x16.8 / x24 | pace 6.98 日/分 | dormant 45 cells / evict 12","sliderMin":"0.23"}
+t=75s {"day":"11","area":"19,040","mass":"6.51","links":"541","reach":"229","chunks":"36","perf":"FPS 60 | draw 3.80ms | tick 11.38ms | speed x23.1 / x24 | pace 9.64 日/分 | dormant 58 cells / evict 19","sliderMin":"0.20"}
+t=90s {"day":"14","area":"22,008","mass":"5.53","links":"565","reach":"254","chunks":"44","perf":"FPS 60 | draw 3.50ms | tick 10.60ms | speed x25.2 / x24 | pace 10.51 日/分 | dormant 78 cells / evict 26","sliderMin":"0.18"}
+t=105s {"day":"17","area":"32,428","mass":"7.58","links":"719","reach":"263","chunks":"49","perf":"FPS 61 | draw 4.80ms | tick 12.78ms | speed x24.3 / x24 | pace 10.15 日/分 | dormant 87 cells / evict 30","sliderMin":"0.18"}
+t=120s {"day":"19","area":"31,268","mass":"8.23","links":"851","reach":"292","chunks":"53","perf":"FPS 59 | draw 2.50ms | tick 18.29ms | speed x20.8 / x24 | pace 8.67 日/分 | dormant 95 cells / evict 28","sliderMin":"0.18"}
+t=135s {"day":"21","area":"26,743","mass":"6.92","links":"902","reach":"328","chunks":"57","perf":"FPS 61 | draw 2.60ms | tick 12.59ms | speed x24.2 / x24 | pace 10.10 日/分 | dormant 127 cells / evict 36","sliderMin":"0.18"}
+t=150s {"day":"24","area":"33,019","mass":"9.14","links":"1,055","reach":"367","chunks":"61","perf":"FPS 61 | draw 2.60ms | tick 17.07ms | speed x18.2 / x24 | pace 7.59 日/分 | dormant 134 cells / evict 37","sliderMin":"0.16"}
+t=165s {"day":"26","area":"42,163","mass":"9.62","links":"1,017","reach":"392","chunks":"64","perf":"FPS 60 | draw 4.30ms | tick 12.60ms | speed x22.2 / x24 | pace 9.25 日/分 | dormant 139 cells / evict 46","sliderMin":"0.16"}
+t=180s {"day":"28","area":"40,835","mass":"9.37","links":"1,220","reach":"392","chunks":"67","perf":"FPS 60 | draw 3.30ms | tick 15.25ms | speed x18.7 / x24 | pace 7.78 日/分 | dormant 151 cells / evict 46","sliderMin":"0.16"}
+t=195s {"day":"30","area":"39,429","mass":"7.64","links":"1,051","reach":"392","chunks":"71","perf":"FPS 61 | draw 3.90ms | tick 11.61ms | speed x24.6 / x24 | pace 10.24 日/分 | dormant 159 cells / evict 51","sliderMin":"0.16"}
+t=210s {"day":"32","area":"37,675","mass":"8.75","links":"1,126","reach":"392","chunks":"71","perf":"FPS 60 | draw 4.80ms | tick 12.86ms | speed x22.2 / x24 | pace 9.26 日/分 | dormant 150 cells / evict 54","sliderMin":"0.16"}
+t=225s {"day":"35","area":"43,635","mass":"10.96","links":"1,162","reach":"392","chunks":"71","perf":"FPS 60 | draw 9.50ms | tick 12.68ms | speed x18.8 / x24 | pace 7.82 日/分 | dormant 158 cells / evict 52","sliderMin":"0.16"}
+t=240s {"day":"36","area":"42,097","mass":"9.28","links":"1,144","reach":"392","chunks":"74","perf":"FPS 58 | draw 2.60ms | tick 13.36ms | speed x21.9 / x24 | pace 9.12 日/分 | dormant 166 cells / evict 52","sliderMin":"0.16"}
+t=255s {"day":"39","area":"49,997","mass":"9.92","links":"1,139","reach":"416","chunks":"78","perf":"FPS 61 | draw 4.30ms | tick 10.85ms | speed x26.0 / x24 | pace 10.81 日/分 | dormant 182 cells / evict 59","sliderMin":"0.16"}
+t=270s {"day":"41","area":"56,996","mass":"14.18","links":"1,363","reach":"446","chunks":"83","perf":"FPS 61 | draw 2.60ms | tick 16.78ms | speed x15.9 / x24 | pace 6.63 日/分 | dormant 181 cells / evict 61","sliderMin":"0.13"}
+t=285s {"day":"43","area":"61,674","mass":"11.67","links":"1,242","reach":"448","chunks":"83","perf":"FPS 60 | draw 4.00ms | tick 13.10ms | speed x21.3 / x24 | pace 8.87 日/分 | dormant 197 cells / evict 64","sliderMin":"0.13"}
+t=300s {"day":"45","area":"66,363","mass":"13.31","links":"1,419","reach":"482","chunks":"88","perf":"FPS 61 | draw 2.50ms | tick 13.26ms | speed x23.4 / x24 | pace 9.76 日/分 | dormant 211 cells / evict 69","sliderMin":"0.13"}
+t=315s {"day":"47","area":"63,536","mass":"12.75","links":"1,398","reach":"510","chunks":"93","perf":"FPS 59 | draw 2.50ms | tick 21.97ms | speed x18.2 / x24 | pace 7.59 日/分 | dormant 225 cells / evict 70","sliderMin":"0.12"}
+t=330s {"day":"49","area":"74,124","mass":"14.02","links":"1,521","reach":"536","chunks":"96","perf":"FPS 61 | draw 2.60ms | tick 13.11ms | speed x21.2 / x24 | pace 8.84 日/分 | dormant 241 cells / evict 74","sliderMin":"0.12"}
+zoomed out {"day":"49","area":"72,748","mass":"13.69","links":"1,561","reach":"536","chunks":"96","perf":"FPS 60 | draw 2.60ms | ov 0.60ms | tick 14.51ms | speed x21.1 / x24 | pace 8.79 日/分 | dormant 233 cells / evict 75","sliderMin":"0.12"}
+console errors: []

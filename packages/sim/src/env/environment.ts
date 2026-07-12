@@ -27,6 +27,13 @@ export interface GrowthContext {
 export interface Environment {
   worldSize: number;
   sampleGrowthContext(pos: Vec2): GrowthContext;
+  // M29 (任意): チャンク evict に対応する実装 (ChunkedGridEnvironment) だけが
+  // 持つ。休眠判定 (graph/dormancy.ts) が存在チェックのうえで呼ぶ — 密な
+  // GridEnvironment は実装しないので、休眠を有効にしても何も起きない。
+  /** 実体化済みチャンクの中心ワールド座標一覧。 */
+  materializedChunkCenters?(): Vec2[];
+  /** 指定ワールド座標を含むチャンクを要約値へ圧縮して解放する。 */
+  evictChunkAt?(worldX: number, worldY: number): void;
 }
 
 export interface GridEnvironmentInit {

@@ -1,0 +1,24 @@
+{"seed":1234,"feed":false}
+ {"day":1,"nodes":21,"edges":17,"reach":29,"area":749,"mass":0.69}
+ {"day":2,"nodes":34,"edges":30,"reach":44,"area":988,"mass":0.79}
+ {"day":3,"nodes":59,"edges":50,"reach":68,"area":1840,"mass":1.4}
+{"seed":1234,"feed":true}
+ {"day":1,"nodes":42,"edges":39,"reach":15,"area":543,"mass":0.85}
+ {"day":2,"nodes":63,"edges":63,"reach":15,"area":609,"mass":0.93}
+ {"day":3,"nodes":116,"edges":111,"reach":49,"area":1308,"mass":1.68}
+{"seed":42,"feed":false}
+ {"day":1,"nodes":10,"edges":9,"reach":9,"area":272,"mass":0.34}
+ {"day":2,"nodes":15,"edges":15,"reach":10,"area":300,"mass":0.41}
+ {"day":3,"nodes":22,"edges":19,"reach":33,"area":591,"mass":0.61}
+{"seed":42,"feed":true}
+ {"day":1,"nodes":29,"edges":31,"reach":8,"area":389,"mass":0.56}
+ {"day":2,"nodes":33,"edges":34,"reach":10,"area":425,"mass":0.61}
+ {"day":3,"nodes":61,"edges":64,"reach":16,"area":634,"mass":0.98}
+{"seed":7,"feed":false}
+ {"day":1,"nodes":12,"edges":10,"reach":14,"area":308,"mass":0.28}
+ {"day":2,"nodes":19,"edges":17,"reach":20,"area":484,"mass":0.48}
+ {"day":3,"nodes":35,"edges":30,"reach":36,"area":892,"mass":0.86}
+{"seed":7,"feed":true}
+ {"day":1,"nodes":40,"edges":40,"reach":15,"area":398,"mass":0.6}
+ {"day":2,"nodes":43,"edges":41,"reach":15,"area":591,"mass":0.91}
+ {"day":3,"nodes":56,"edges":56,"reach":15,"area":613,"mass":0.94}

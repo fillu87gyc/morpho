@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { allChallenges, dateKey, DailyChallengeTracker, isChallengeExpired } from '../src/challenges.js';
+import {
+  allChallenges, dateKey, DailyChallengeTracker, isChallengeExpired,
+  WildDailyChallengeTracker, WILD_DAILY_CHUNK_TARGET,
+} from '../src/challenges.js';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -133,5 +136,60 @@ describe('DailyChallengeTracker (M11: 種別ごとの常時挑戦)', () => {
       const t = new DailyChallengeTracker();
       t.complete('fastest', 1, 1);
     }).not.toThrow();
+  });
+});
+
+// M32: 原野専用の反復チャレンジ。日ごとにベースラインをリセットし、
+// 同じ日の中で「新チャンク到達数」がどれだけ進んだかだけを見る。
+describe('WildDailyChallengeTracker (M32: 原野の期限のない反復チャレンジ)', () => {
+  it('初回呼び出しはその時点の exploredChunks がベースラインになり進捗0', () => {
+    const t = new WildDailyChallengeTracker();
+    const s = t.update({ day: 0, exploredChunks: 9 });
+    expect(s.progress).toBe(0);
+    expect(s.done).toBe(false);
+    expect(s.justCompleted).toBe(false);
+  });
+
+  it('同じ日のうちに目標数のチャンクへ到達すると完了する', () => {
+    const t = new WildDailyChallengeTracker();
+    t.update({ day: 0, exploredChunks: 9 });
+    const s = t.update({ day: 0, exploredChunks: 9 + WILD_DAILY_CHUNK_TARGET });
+    expect(s.progress).toBe(1);
+    expect(s.done).toBe(true);
+    expect(s.justCompleted).toBe(true);
+  });
+
+  it('目標到達後、同じ日にもう一度呼んでも justCompleted は再発しない', () => {
+    const t = new WildDailyChallengeTracker();
+    t.update({ day: 0, exploredChunks: 9 });
+    t.update({ day: 0, exploredChunks: 9 + WILD_DAILY_CHUNK_TARGET });
+    const s = t.update({ day: 0, exploredChunks: 9 + WILD_DAILY_CHUNK_TARGET + 1 });
+    expect(s.done).toBe(true);
+    expect(s.justCompleted).toBe(false);
+  });
+
+  it('日が変わるとベースラインを取り直し、前日の到達分はカウントされない', () => {
+    const t = new WildDailyChallengeTracker();
+    t.update({ day: 0, exploredChunks: 9 });
+    t.update({ day: 0, exploredChunks: 9 + WILD_DAILY_CHUNK_TARGET }); // Day0 で達成済み
+    const s = t.update({ day: 1, exploredChunks: 9 + WILD_DAILY_CHUNK_TARGET }); // 増分ゼロで日が変わった
+    expect(s.progress).toBe(0);
+    expect(s.done).toBe(false);
+  });
+
+  it('開始直後 (増分0) には自動達成しない (M32 受け入れ基準)', () => {
+    const t = new WildDailyChallengeTracker();
+    const s = t.update({ day: 0, exploredChunks: 9 });
+    expect(s.done).toBe(false);
+  });
+
+  it('進捗は目標の割合に比例し、[0,1] にクランプされる', () => {
+    const t = new WildDailyChallengeTracker();
+    t.update({ day: 0, exploredChunks: 9 });
+    const gained = Math.floor(WILD_DAILY_CHUNK_TARGET / 2);
+    const s = t.update({ day: 0, exploredChunks: 9 + gained });
+    expect(s.progress).toBeCloseTo(gained / WILD_DAILY_CHUNK_TARGET, 5);
+    const over = t.update({ day: 0, exploredChunks: 9 + WILD_DAILY_CHUNK_TARGET * 10 });
+    expect(over.progress).toBe(1);
   });
 });

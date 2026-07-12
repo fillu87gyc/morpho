@@ -7,11 +7,20 @@
 // する (プレイヤーが置く石・水は追従しない割り切り — 地形の骨格が見えれば
 // World View の読図には十分で、毎フレーム env を舐めるコストを避ける)。
 
+// M28-B: 「原野」ではミニマップを「訪問済み世界の全体図 (ワールドマップ)」に
+// 切り替える (drawWildland)。チャンク要約を大局レイヤーと同じ色 (overview-
+// layer.ts) で低頻度 (overview の tick が進んだときだけ) に焼き、毎フレームは
+// 貼るだけ。枠は2つ — 現在の窓 (詳細 sim が生きている範囲) と、カメラが今
+// 見ている範囲。タップは toWorldWildland() で窓ローカル座標へ逆変換して
+// カメラのパン (俯瞰でその領域を見る) に使う。
+
 import type { ColonyMarker } from './colony-networks.js';
 import type { WorldView } from './camera.js';
-import type { GridEnvironment } from '@morpho/sim';
+import type { GridEnvironment, Vec2 } from '@morpho/sim';
 import type { StageId } from './stages.js';
 import { extractCoastline } from './coastline.js';
+import type { WorldOverview } from './world-overview.js';
+import { chunkTileColor, biomassGlowAlpha, OVERVIEW_VOID_COLOR, OVERVIEW_BIOMASS_GLOW } from './overview-layer.js';
 
 // 同一ネットワークに統合されたコロニーは同じ色になる。
 const NETWORK_COLORS = ['#8fd0ff', '#ffd27a', '#9dffa0', '#ff9dc7', '#c9a2ff', '#ffffff'];
@@ -123,5 +132,119 @@ export class Minimap {
   // クリック位置 (canvas 内 px) をワールド座標に変換する。
   toWorld(px: number, py: number): { x: number; y: number } {
     return { x: (px / this.canvas.width) * this.worldSize, y: (py / this.canvas.height) * this.worldSize };
+  }
+
+  // ── M28-B: 原野のワールドマップ ─────────────────────────
+
+  // 訪問済み世界の全体図のオフスクリーンと、実座標 → マップ px の写像。
+  private wildCanvas: HTMLCanvasElement | null = null;
+  private wildTick = -1;
+  private wildMap: { originX: number; originY: number; worldPerPx: number } | null = null;
+
+  // 原野用の描画。windowOrigin は「今の」窓原点 (FastSnapshot.windowOrigin)、
+  // view はカメラ (窓ローカル座標)。俯瞰タイルは overview.tick が進んだとき
+  // だけ焼き直す (約1秒間隔、それも盤面が動いたときのみ)。
+  drawWildland(overview: WorldOverview, windowOrigin: Vec2, view: WorldView): void {
+    const { ctx, canvas } = this;
+    const w = canvas.width, h = canvas.height;
+    this.bakeWildland(overview, w, h);
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = `rgb(${OVERVIEW_VOID_COLOR[0]}, ${OVERVIEW_VOID_COLOR[1]}, ${OVERVIEW_VOID_COLOR[2]})`;
+    ctx.fillRect(0, 0, w, h);
+    if (this.wildCanvas) ctx.drawImage(this.wildCanvas, 0, 0);
+
+    const m = this.wildMap;
+    if (m) {
+      // カメラが今見ている範囲 (窓ローカル → 実座標)。
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        (view.worldLeft + windowOrigin.x - m.originX) / m.worldPerPx,
+        (view.worldTop + windowOrigin.y - m.originY) / m.worldPerPx,
+        view.worldSpan / m.worldPerPx,
+        view.worldSpan / m.worldPerPx,
+      );
+      // 現在の窓 (詳細シミュレーションが生きている範囲) を示す枠。
+      ctx.strokeStyle = 'rgba(255, 230, 150, 0.85)';
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(
+        (windowOrigin.x - m.originX) / m.worldPerPx,
+        (windowOrigin.y - m.originY) / m.worldPerPx,
+        this.worldSize / m.worldPerPx,
+        this.worldSize / m.worldPerPx,
+      );
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+  }
+
+  // クリック位置 (canvas 内 px) を窓ローカル座標へ逆変換する (原野のみ)。
+  // まだ一度も焼いていなければ null。
+  toWorldWildland(px: number, py: number, windowOrigin: Vec2): { x: number; y: number } | null {
+    const m = this.wildMap;
+    if (!m) return null;
+    return {
+      x: m.originX + px * m.worldPerPx - windowOrigin.x,
+      y: m.originY + py * m.worldPerPx - windowOrigin.y,
+    };
+  }
+
+  private bakeWildland(overview: WorldOverview, w: number, h: number): void {
+    if (this.wildTick === overview.tick && this.wildCanvas) return;
+    this.wildTick = overview.tick;
+    if (!this.wildCanvas) {
+      this.wildCanvas = document.createElement('canvas');
+      this.wildCanvas.width = w;
+      this.wildCanvas.height = h;
+    }
+    const tctx = this.wildCanvas.getContext('2d');
+    if (!tctx) return;
+    tctx.clearRect(0, 0, w, h);
+    const chunks = overview.chunks;
+    if (chunks.length === 0) { this.wildMap = null; return; }
+
+    const cs = overview.chunkWorldSize;
+    let minCx = Infinity, minCy = Infinity, maxCx = -Infinity, maxCy = -Infinity;
+    for (const c of chunks) {
+      if (c.cx < minCx) minCx = c.cx;
+      if (c.cy < minCy) minCy = c.cy;
+      if (c.cx > maxCx) maxCx = c.cx;
+      if (c.cy > maxCy) maxCy = c.cy;
+    }
+    // 全体図の写野: 訪問済みチャンク + 半チャンクの余白を正方形に収める。
+    const pad = cs * 0.5;
+    const extentW = (maxCx - minCx + 1) * cs + pad * 2;
+    const extentH = (maxCy - minCy + 1) * cs + pad * 2;
+    const size = Math.max(extentW, extentH);
+    const centerX = (minCx * cs + (maxCx + 1) * cs) / 2;
+    const centerY = (minCy * cs + (maxCy + 1) * cs) / 2;
+    const worldPerPx = size / Math.min(w, h);
+    const originX = centerX - (w * worldPerPx) / 2;
+    const originY = centerY - (h * worldPerPx) / 2;
+    this.wildMap = { originX, originY, worldPerPx };
+
+    const cellPx = cs / worldPerPx;
+    for (const c of chunks) {
+      const [r, g, b] = chunkTileColor(c);
+      tctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+      const x = (c.cx * cs - originX) / worldPerPx;
+      const y = (c.cy * cs - originY) / worldPerPx;
+      tctx.fillRect(x, y, cellPx + 0.5, cellPx + 0.5);
+    }
+    // バイオマスの光 (大局レイヤーと同じ金色) を重ねる。
+    tctx.save();
+    tctx.globalCompositeOperation = 'lighter';
+    for (const c of chunks) {
+      const a = biomassGlowAlpha(c.biomass);
+      if (a <= 0.02) continue;
+      tctx.fillStyle = `rgba(${OVERVIEW_BIOMASS_GLOW[0]}, ${OVERVIEW_BIOMASS_GLOW[1]}, ${OVERVIEW_BIOMASS_GLOW[2]}, ${(a * 0.8).toFixed(3)})`;
+      const x = (c.cx * cs - originX) / worldPerPx;
+      const y = (c.cy * cs - originY) / worldPerPx;
+      tctx.fillRect(x, y, cellPx + 0.5, cellPx + 0.5);
+    }
+    tctx.restore();
   }
 }

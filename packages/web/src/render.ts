@@ -31,6 +31,34 @@ import { extractTerrainBlobs, SMALL_BLOB_MAX_CELLS } from './terrain-blobs.js';
 import { extractCoastline } from './coastline.js';
 import { traceChains, smoothChain, computeDegree, type Chain } from './vein-curves.js';
 import { scatterDecorations, type DecorPlacement } from './ecology-scatter.js';
+import { OverviewTileCache, OVERVIEW_VOID_COLOR, OVERVIEW_BIOMASS_GLOW } from './overview-layer.js';
+import type { WorldOverview } from './world-overview.js';
+import { MACRO_TOOLS, type MacroEffectView, type MacroToolId } from './macro-tools.js';
+
+// M28-B: 「原野」の大局レイヤー (zoom < 1 の俯瞰描画) に必要な素材。
+// main.ts が毎フレーム組み立てて draw() に渡す (有界6ステージでは undefined
+// のままで、描画経路は従来と1バイトも変わらない)。windowOrigin は「今の」
+// 窓原点 (FastSnapshot.windowOrigin) — overview.windowOrigin (集計時点の値)
+// では窓の再センタリング直後に最大1秒ずれる。
+export interface WildlandOverviewInput {
+  overview: WorldOverview;
+  windowOrigin: Vec2;
+  // M31: 働いている大局介入 (効果範囲 + 残り日数、窓ローカル座標)。
+  // 「買った環境」が働いているのが俯瞰で見える (クリッカーの建物に相当)。
+  macroEffects?: readonly MacroEffectView[];
+}
+
+// M31: 大局介入の効果範囲の色 (半透明の円/帯 + 残り日数ラベル)。
+const MACRO_EFFECT_COLORS: Record<MacroToolId, [number, number, number]> = {
+  rain: [110, 175, 255],     // 雨の青
+  corridor: [150, 220, 110], // 栄養の緑
+  geoheat: [255, 150, 80],   // 熱の橙
+  geocool: [150, 220, 255],  // 冷気の淡青
+};
+
+// M28-B: 詳細描画 ⇄ 俯瞰のクロスフェード帯。zoom がこの値まで下がりきると
+// 完全な俯瞰 (タイル + 骨格線のみ)、1.0 に近づくほど従来の詳細描画が濃くなる。
+const OVERVIEW_FADE_END_ZOOM = 0.7;
 
 export interface RenderOptions {
   worldSize: number;
@@ -263,6 +291,16 @@ export class CanvasRenderer {
   // は見た目に影響しない。
   private lastTopologyRebuildMs = -Infinity;
 
+  // M28-B: 「原野」の俯瞰用キャッシュ。タイルは overview が更新された (≈1秒
+  // 間隔) ときだけ焼き直し、骨格線の Path2D は state 参照が変わったときだけ
+  // 組み直す (座標はワールド座標のまま持ち、カメラは describe 時の変換で吸収)。
+  private overviewTiles = new OverviewTileCache();
+  private cachedSkeletonState: SimState | null = null;
+  private cachedSkeletonPath: Path2D | null = null;
+  // M28-B: 俯瞰レイヤー (void 塗り + タイル + 骨格線) に使った時間 (ms)。
+  // perf 予算 (3ms/frame) の実測用に公開する (?debug の drawMs の内訳)。
+  lastOverviewMs = 0;
+
   // M8 P3 drawNodes: グロー (radial gradient) をノードごとに毎フレーム
   // 生成する代わりに、色ごとに1枚だけ焼いたスプライトを drawImage で貼る。
   private sourceGlowSprite: HTMLCanvasElement;
@@ -310,7 +348,7 @@ export class CanvasRenderer {
 
   // M14: nightFactor [0,1] は演出用の昼夜トーン (洞窟は常に暗いので無効)。
   // 省略時 (サムネイル撮影など) は 0 = 昼間のまま。
-  draw(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], view: WorldView, hoverPx?: { x: number; y: number; radius: number; tool: string }, nightFactor = 0): void {
+  draw(state: SimState, env: GridEnvironment, bio: BiomassField, stageId: StageId, landmarks: Vec2[], view: WorldView, hoverPx?: { x: number; y: number; radius: number; tool: string }, nightFactor = 0, wildland?: WildlandOverviewInput): void {
     const { ctx } = this;
     const cssW = this.canvas.width / this.dpr;
     const cssH = this.canvas.height / this.dpr;
@@ -332,59 +370,133 @@ export class CanvasRenderer {
     const offX = left - view.worldLeft * scale;
     const offY = top - view.worldTop * scale;
 
-    // 1.5 M21: 地面タイルテクスチャ (アセット未ロードなら何もせず上の
-    //     単色グラデーションがそのまま地面として見える = フォールバック)。
-    this.drawTerrainTexture(ctx, stageId, scale, offX, offY, left, top, side);
-    // 1.6 M21: 木漏れ日のまだら (ワールド座標に固定した明るい斑点)。
-    this.drawDappledLight(ctx, view, scale, offX, offY);
+    // M28-B: 「原野」で窓 (worldSize) より広い範囲が映っている = 俯瞰。
+    // ハイブリッド + クロスフェード方式: 窓の中は従来の詳細描画のまま、外側は
+    // チャンクタイル + バイオマスの光。ネットワークは zoom が
+    // OVERVIEW_FADE_END_ZOOM へ下がるにつれ曲線脈 (M23) から1本の骨格線
+    // Path2D へ滑らかに引き継ぐ。有界6ステージは wildland が undefined なので
+    // この分岐に一切入らない。
+    const worldSize = this.opts.worldSize;
+    const overviewActive = wildland !== undefined && view.worldSpan > worldSize + 1e-6;
+    const zoom = worldSize / view.worldSpan;
+    // クロスフェード係数: zoom 1.0 → 0 (従来の絵)、OVERVIEW_FADE_END_ZOOM 以下 → 1 (完全な俯瞰)。
+    const fade = overviewActive ? Math.min(1, Math.max(0, (1 - zoom) / (1 - OVERVIEW_FADE_END_ZOOM))) : 0;
 
-    // 2. 場系を焼いて貼る。view (カメラのズーム/パン) に応じて
-    //    fieldCanvas (常に世界全体を焼いた1枚) から必要な矩形だけを
-    //    切り出して拡大する。zoom=1 のときは全体をそのまま貼るのと同じ。
+    // 2. 場系を焼く (差分描画。俯瞰でも窓の中身として使うので常に焼く)。
     const { spritesReady, waterReady, foodReady } = this.paintFieldLayer(env, bio, stageId);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    const fieldScale = this.opts.fieldSize / this.opts.worldSize;
-    ctx.drawImage(
-      this.fieldCanvas,
-      view.worldLeft * fieldScale, view.worldTop * fieldScale,
-      view.worldSpan * fieldScale, view.worldSpan * fieldScale,
-      left, top, side, side,
-    );
 
-    // 2.4 M22: 水場の再設計 (「水色の丸」の代わりに湖岸線のある水域)。
-    //     アセット未ロードの間は paintFieldLayer が従来通りの水色を
-    //     焼くので、ここでは何も描かない。
-    if (waterReady) {
-      this.drawWaterBodies(ctx, env, stageId, scale, offX, offY);
+    if (!overviewActive) {
+      this.lastOverviewMs = 0;
+      // ── 従来経路 (zoom >= 1、既存6ステージはこちらだけ) ──────────
+      // 1.5 M21: 地面タイルテクスチャ (アセット未ロードなら何もせず上の
+      //     単色グラデーションがそのまま地面として見える = フォールバック)。
+      this.drawTerrainTexture(ctx, stageId, scale, offX, offY, left, top, side);
+      // 1.6 M21: 木漏れ日のまだら (ワールド座標に固定した明るい斑点)。
+      this.drawDappledLight(ctx, view, scale, offX, offY);
+
+      // 2. 場系を貼る。view (カメラのズーム/パン) に応じて fieldCanvas
+      //    (常に世界全体を焼いた1枚) から必要な矩形だけを切り出して拡大する。
+      //    zoom=1 のときは全体をそのまま貼るのと同じ。
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      const fieldScale = this.opts.fieldSize / this.opts.worldSize;
+      ctx.drawImage(
+        this.fieldCanvas,
+        view.worldLeft * fieldScale, view.worldTop * fieldScale,
+        view.worldSpan * fieldScale, view.worldSpan * fieldScale,
+        left, top, side, side,
+      );
+
+      // 2.4 M22: 水場の再設計 (「水色の丸」の代わりに湖岸線のある水域)。
+      //     アセット未ロードの間は paintFieldLayer が従来通りの水色を
+      //     焼くので、ここでは何も描かない。
+      if (waterReady) {
+        this.drawWaterBodies(ctx, env, stageId, scale, offX, offY);
+      }
+
+      // 2.5 M21: 岩場のスプライト化 (ぼかし塊の代わりに rock-cluster/
+      //     small-stone を配置)。アセット未ロードの間は paintFieldLayer が
+      //     従来通りの岩色を焼くので、ここでは何も描かない。
+      if (spritesReady) {
+        this.drawRockSprites(ctx, env, scale, offX, offY);
+      }
+
+      // 2.6 M24: 生態感の小物 (キノコ/苔の茂み/朽木) をステージ地形から
+      //     決定的に散らす。アセット未ロードならスキップ (何も描かない=現状維持)。
+      if (spritesReady) {
+        this.drawEcologyDecor(ctx, env, stageId, scale, offX, offY);
+      }
+
+      // 2.7 M24: エサのオーブ化 (緑のぼかし光→光る果実)。
+      if (foodReady) {
+        this.drawFoodOrbs(ctx, env, scale, offX, offY);
+      }
+
+      // 3. ステージの装飾アイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
+      this.drawLandmarks(ctx, landmarks, stageId, scale, offX, offY);
+
+      // 4. 脈管網
+      this.drawEdges(ctx, state, scale, offX, offY);
+
+      // 5. source / sink
+      this.drawNodes(ctx, state, scale, offX, offY);
+    } else {
+      // ── M28-B: 俯瞰経路 (原野かつ zoom < 1) ────────────────────
+      const ovT0 = performance.now();
+      // 2.1 未訪問領域の暗さ (fade に応じて足元の bg を沈める) と、
+      //     訪問済みチャンクのタイル + バイオマスの光。タイルはオフスクリーン
+      //     キャッシュ (overview 更新時のみ焼き直し) を drawImage で貼るだけ。
+      ctx.fillStyle = `rgba(${OVERVIEW_VOID_COLOR[0]}, ${OVERVIEW_VOID_COLOR[1]}, ${OVERVIEW_VOID_COLOR[2]}, ${(fade * 0.95).toFixed(3)})`;
+      ctx.fillRect(0, 0, cssW, cssH);
+      this.overviewTiles.sync(wildland.overview);
+      this.overviewTiles.draw(ctx, wildland.windowOrigin, scale, offX, offY, fade);
+      this.lastOverviewMs = performance.now() - ovT0;
+
+      // 2.2 窓の詳細描画 (M20〜M24 の資産) は窓領域 [0, worldSize] だけに
+      //     クリップして生かす — 窓の外の詳細は見えないのが仕様 (ROADMAP.md M28)。
+      const winX = offX, winY = offY, winSize = worldSize * scale;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(winX, winY, winSize, winSize);
+      ctx.clip();
+      // 窓の中は void 塗りの影響を受けないよう bg から塗り直す。
+      ctx.fillStyle = bg;
+      ctx.fillRect(winX, winY, winSize, winSize);
+      this.drawTerrainTexture(ctx, stageId, scale, offX, offY, left, top, side);
+      // 木漏れ日の走査は窓 ∩ view に絞る (view 全域だと俯瞰では数万セルになる)。
+      const clampedView: WorldView = {
+        worldLeft: Math.max(0, view.worldLeft),
+        worldTop: Math.max(0, view.worldTop),
+        worldSpan: Math.min(worldSize, view.worldSpan),
+      };
+      this.drawDappledLight(ctx, clampedView, scale, offX, offY);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(this.fieldCanvas, 0, 0, this.opts.fieldSize, this.opts.fieldSize, winX, winY, winSize, winSize);
+      if (waterReady) this.drawWaterBodies(ctx, env, stageId, scale, offX, offY);
+      if (spritesReady) this.drawRockSprites(ctx, env, scale, offX, offY);
+      if (spritesReady) this.drawEcologyDecor(ctx, env, stageId, scale, offX, offY);
+      if (foodReady) this.drawFoodOrbs(ctx, env, scale, offX, offY);
+      this.drawLandmarks(ctx, landmarks, stageId, scale, offX, offY);
+      ctx.restore();
+
+      // 2.3 ネットワーク: fade < 1 の間は従来の曲線脈 + ノードを薄れさせ
+      //     ながら残し (zoom=1 を跨ぐ瞬間の違和感を消す)、fade に応じて
+      //     全エッジ1本の骨格線 Path2D へ引き継ぐ。
+      if (fade < 1) {
+        ctx.save();
+        ctx.globalAlpha = 1 - fade;
+        this.drawEdges(ctx, state, scale, offX, offY);
+        this.drawNodes(ctx, state, scale, offX, offY);
+        ctx.restore();
+      }
+      const skT0 = performance.now();
+      this.drawOverviewSkeleton(ctx, state, scale, offX, offY, fade);
+      this.lastOverviewMs += performance.now() - skT0;
+
+      // 2.4 M31: 働いている大局介入の効果範囲 (半透明の円/帯) と残り日数。
+      this.drawMacroEffects(ctx, wildland.macroEffects, scale, offX, offY, fade);
     }
-
-    // 2.5 M21: 岩場のスプライト化 (ぼかし塊の代わりに rock-cluster/
-    //     small-stone を配置)。アセット未ロードの間は paintFieldLayer が
-    //     従来通りの岩色を焼くので、ここでは何も描かない。
-    if (spritesReady) {
-      this.drawRockSprites(ctx, env, scale, offX, offY);
-    }
-
-    // 2.6 M24: 生態感の小物 (キノコ/苔の茂み/朽木) をステージ地形から
-    //     決定的に散らす。アセット未ロードならスキップ (何も描かない=現状維持)。
-    if (spritesReady) {
-      this.drawEcologyDecor(ctx, env, stageId, scale, offX, offY);
-    }
-
-    // 2.7 M24: エサのオーブ化 (緑のぼかし光→光る果実)。
-    if (foodReady) {
-      this.drawFoodOrbs(ctx, env, scale, offX, offY);
-    }
-
-    // 3. ステージの装飾アイコン (廃墟の柱 / 鍾乳石 / サボテン / 葦)
-    this.drawLandmarks(ctx, landmarks, stageId, scale, offX, offY);
-
-    // 4. 脈管網
-    this.drawEdges(ctx, state, scale, offX, offY);
-
-    // 5. source / sink
-    this.drawNodes(ctx, state, scale, offX, offY);
 
     // 6. 昼夜のトーン (洞窟は元々暗いので変調しない)
     // M16.5: 旧実装は不透明の暗紺を単純に上塗りしていた (=「暗くする」)。
@@ -1093,6 +1205,103 @@ export class CanvasRenderer {
       this.drawHubStars(ctx, state, scale, offX, offY);
       this.drawGrowthFronts(ctx, scale, offX, offY);
     }
+  }
+
+  // M28-B: 俯瞰の「網の骨格」。M23 の曲線描画 (チェーン分解 + Catmull-Rom) は
+  // 使わず、全エッジを素朴な直線で1本の Path2D にまとめて stroke する
+  // (エッジ数千本でも stroke 1回で済む)。パスはワールド座標のまま state 参照
+  // ごとにキャッシュし、カメラの移動/ズームは描画時の変換で吸収する。
+  private syncOverviewSkeleton(state: SimState): Path2D {
+    if (state === this.cachedSkeletonState && this.cachedSkeletonPath) return this.cachedSkeletonPath;
+    this.cachedSkeletonState = state;
+    const pos = new Map<NodeId, Vec2>();
+    for (const n of state.nodes) pos.set(n.id, n.pos);
+    const path = new Path2D();
+    for (const e of state.edges) {
+      const a = pos.get(e.from);
+      const b = pos.get(e.to);
+      if (!a || !b) continue;
+      path.moveTo(a.x, a.y);
+      path.lineTo(b.x, b.y);
+    }
+    this.cachedSkeletonPath = path;
+    return path;
+  }
+
+  // M31: 働いている大局介入の可視化 (俯瞰のみ)。効果範囲を半透明の円/帯で
+  // 示し、中央に「名前 あとN日」を出す — 「買った環境」が働いているのが
+  // 一目で分かる (クリッカーの建物に相当する満足感、ROADMAP.md M31)。
+  private drawMacroEffects(ctx: CanvasRenderingContext2D, effects: readonly MacroEffectView[] | undefined, scale: number, offX: number, offY: number, alpha: number): void {
+    if (!effects || effects.length === 0 || alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    for (const e of effects) {
+      const [r, g, b] = MACRO_EFFECT_COLORS[e.kind];
+      const x = offX + e.center.x * scale;
+      const y = offY + e.center.y * scale;
+      let labelX = x, labelY = y;
+      if (e.kind === 'corridor' && e.dir && e.lengthWorld) {
+        // 帯: 起点から方向へ、半幅 radius の丸端ストローク1本。
+        const ex = offX + (e.center.x + e.dir.x * e.lengthWorld) * scale;
+        const ey = offY + (e.center.y + e.dir.y * e.lengthWorld) * scale;
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.18)`;
+        ctx.lineWidth = e.radius * 2 * scale;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.setLineDash([6, 6]);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.7)`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        labelX = (x + ex) / 2;
+        labelY = (y + ey) / 2;
+      } else {
+        // 円: 効果半径の淡い塗り + 破線の輪郭。
+        const pr = e.radius * scale;
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.12)`;
+        ctx.beginPath();
+        ctx.arc(x, y, pr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.setLineDash([6, 6]);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.7)`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(x, y, pr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      const label = `${MACRO_TOOLS[e.kind].label} あと${e.remainingDays}日`;
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // 読めるように細い縁取りを敷く。
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.lineWidth = 3;
+      ctx.strokeText(label, labelX, labelY);
+      ctx.fillStyle = `rgba(${Math.min(255, r + 60)}, ${Math.min(255, g + 60)}, ${Math.min(255, b + 60)}, 0.95)`;
+      ctx.fillText(label, labelX, labelY);
+    }
+    ctx.restore();
+  }
+
+  private drawOverviewSkeleton(ctx: CanvasRenderingContext2D, state: SimState, scale: number, offX: number, offY: number, alpha: number): void {
+    if (alpha <= 0 || state.edges.length === 0) return;
+    const path = this.syncOverviewSkeleton(state);
+    ctx.save();
+    ctx.translate(offX, offY);
+    ctx.scale(scale, scale);
+    ctx.strokeStyle = `rgba(${OVERVIEW_BIOMASS_GLOW[0]}, ${OVERVIEW_BIOMASS_GLOW[1]}, ${OVERVIEW_BIOMASS_GLOW[2]}, ${(0.6 * alpha).toFixed(3)})`;
+    // 画面上で常に細い線 (~0.9px) になるようワールド単位へ換算する。
+    ctx.lineWidth = 0.9 / scale;
+    ctx.lineCap = 'round';
+    ctx.stroke(path);
+    ctx.restore();
   }
 
   // M23: 次数3以上の分岐点 (ハブ) を、ベタ円ではなく「中心の粒 + 放射状の

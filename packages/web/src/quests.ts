@@ -15,6 +15,12 @@ export interface QuestInput {
   // 大陸以外のステージでも計算はされるが、クエストカードの表示は
   // stage.id === 'continent' のときだけ (UI 側でガードする)。
   landCoverage?: number;
+  // M32: 原野専用。母体 (WILDLAND_CENTER) からの到達距離 (world unit) と、
+  // 発見済みバイオーム数 [1,5]。他ステージでも計算はされるが (reachDistance は
+  // 全ステージで計算する派生値、biomesDiscovered は原野以外では常に 0)、
+  // クエストカードの表示は stage.id === 'wildland' のときだけ (UI 側でガードする)。
+  reachDistance?: number;
+  biomesDiscovered?: number;
 }
 
 export interface QuestStatus {
@@ -69,7 +75,28 @@ const QUEST_DEFS: QuestDef[] = [
     description: '水域を避けながら、陸地の隅々までネットワークを行き渡らせよう',
     progress: (i) => i.landCoverage ?? 0,
   },
+  // M32: 原野専用。「拠点をすべてつなぐ (connect-all)」「大陸の85%を探索する
+  // (explore-70)」は原野では意味を持たない (前者は開始直後から100%、後者は
+  // 0%固定 — ROADMAP.md V9)。無限世界ならではの節目 (到達距離・発見バイオーム数)
+  // に置き換えたメインクエストを、原野のときだけ UI 側で表示する。
+  {
+    id: 'wild-reach',
+    title: '母体から500先へ到達しよう',
+    description: '個体を伸ばし続けて、原野の果てまで踏み出そう',
+    progress: (i) => (i.reachDistance ?? 0) / WILD_REACH_TARGET,
+  },
+  {
+    id: 'wild-biomes',
+    title: '3つのバイオームに根を張ろう',
+    description: '母体の森を出て、違う土地の恵みを味わおう',
+    progress: (i) => (i.biomesDiscovered ?? 0) / WILD_BIOMES_TARGET,
+  },
 ];
+
+// biomes.ts の DISTANCE_FULL (変異幅boostの飽和点) と同じ値を採用し、
+// 「遠くまで行くほど良いことがある」を1つの数字で束ねる。
+export const WILD_REACH_TARGET = 500;
+export const WILD_BIOMES_TARGET = 3;
 
 export function computeQuests(input: QuestInput): QuestStatus[] {
   return QUEST_DEFS.map((q) => {
